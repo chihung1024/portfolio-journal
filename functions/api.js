@@ -1,21 +1,19 @@
 /**
- * API Handler for Portfolio Journal (Cloudflare Edition)
- * This backend supports the new TailwindCSS UI.
+ * Cloudflare Pages API for Portfolio Journal
+ * This backend mirrors the logic from the original Firebase project.
  */
 
-// Simple router
+// --- Main API Router ---
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
 
-    // Ensure DB binding exists
     if (!env.DB) {
-        return jsonResponse({ error: "Database D1 binding not found. Please check Pages project settings." }, 500);
+        return jsonResponse({ error: "Database (D1) binding not found. Please check Pages project settings." }, 500);
     }
 
     try {
-        // Route for transactions
         if (path.startsWith('/transactions')) {
             if (request.method === 'GET') return await getTransactions(env.DB);
             if (request.method === 'POST') return await addTransaction(env.DB, await request.json());
@@ -24,15 +22,12 @@ export async function onRequest(context) {
                 return await deleteTransaction(env.DB, id);
             }
         }
-        // Route for portfolio calculation
         if (path.startsWith('/portfolio')) {
             if (request.method === 'GET') return await getPortfolio(env.DB);
         }
-        // Route for DB initialization
         if (path.startsWith('/initialize-database')) {
             if (request.method === 'POST') return await initializeDatabase(env.DB);
         }
-
         return jsonResponse({ error: 'Not Found' }, 404);
     } catch (e) {
         console.error('Request Error:', e);
@@ -40,102 +35,155 @@ export async function onRequest(context) {
     }
 }
 
-// --- Database Functions ---
+// --- API Endpoint Functions ---
 
 async function getTransactions(db) {
     const { results } = await db.prepare("SELECT * FROM transactions ORDER BY date DESC").all();
-    return jsonResponse(results);
+    return jsonResponse(results || []);
 }
 
 async function addTransaction(db, tx) {
-    if (!tx.ticker || !tx.shares || !tx.price || !tx.date) {
-        return jsonResponse({ error: 'Missing required fields' }, 400);
+    if (!tx.symbol || !tx.type || isNaN(tx.quantity) || isNaN(tx.price) || !tx.date || !tx.currency) {
+        return jsonResponse({ error: 'Missing or invalid required fields' }, 400);
     }
-    await db.prepare('INSERT INTO transactions (ticker, shares, price, date) VALUES (?, ?, ?, ?)')
-        .bind(tx.ticker.toUpperCase(), tx.shares, tx.price, tx.date)
+    await db.prepare('INSERT INTO transactions (symbol, type, quantity, price, date, currency) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(tx.symbol.toUpperCase(), tx.type, tx.quantity, tx.price, tx.date, tx.currency)
         .run();
     return jsonResponse({ success: true }, 201);
 }
 
 async function deleteTransaction(db, id) {
-    if (!id) return jsonResponse({ error: 'Invalid ID' }, 400);
+    if (!id || isNaN(parseInt(id))) return jsonResponse({ error: 'Invalid ID' }, 400);
     await db.prepare('DELETE FROM transactions WHERE id = ?').bind(id).run();
     return jsonResponse({ success: true });
+}
+
+async function initializeDatabase(db) {
+    const batch = [
+        db.prepare(`DROP TABLE IF EXISTS transactions;`),
+        db.prepare(`DROP TABLE IF EXISTS prices;`),
+        db.prepare(`DROP TABLE IF EXISTS dividends;`),
+        db.prepare(`CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, type TEXT NOT NULL, quantity REAL NOT NULL, price REAL NOT NULL, date TEXT NOT NULL, currency TEXT NOT NULL);`),
+        db.prepare(`CREATE TABLE prices (ticker TEXT PRIMARY KEY, price REAL NOT NULL, last_updated TEXT NOT NULL);`),
+        db.prepare(`CREATE TABLE dividends (ticker TEXT PRIMARY KEY, exDate TEXT NOT NULL, amount REAL NOT NULL, UNIQUE(ticker, exDate));`),
+        db.prepare(`INSERT INTO transactions (symbol, type, quantity, price, date, currency) VALUES ('AAPL', 'buy', 10, 150.25, '2023-01-15', 'USD'), ('TSLA', 'buy', 5, 250.00, '2023-03-10', 'USD'), ('2330.TW', 'buy', 1000, 500, '2023-05-20', 'TWD');`),
+        db.prepare(`INSERT INTO prices (ticker, price, last_updated) VALUES ('AAPL', 175.00, '2023-10-27'), ('TSLA', 220.00, '2023-10-27'), ('2330.TW', 550, '2023-10-27'), ('TWD=X', 32.5, '2023-10-27');`),
+        db.prepare(`INSERT INTO dividends (ticker, exDate, amount) VALUES ('AAPL', '2023-08-11', 0.24);`)
+    ];
+    await db.batch(batch);
+    return jsonResponse({ success: true, message: 'Database initialized.' });
 }
 
 async function getPortfolio(db) {
     const [txData, priceData, dividendData] = await db.batch([
         db.prepare("SELECT * FROM transactions ORDER BY date ASC"),
         db.prepare("SELECT * FROM prices"),
-        db.prepare("SELECT * FROM dividends ORDER BY exDate ASC")
+        db.prepare("SELECT * FROM dividends")
     ]);
 
-    const transactions = txData.results;
-    const prices = new Map(priceData.results.map(p => [p.ticker, p.price]));
-    const dividends = dividendData.results;
+    const market = {
+        prices: new Map(priceData.results.map(p => [p.ticker, p.price])),
+        dividends: dividendData.results || [],
+        fx: new Map(priceData.results.filter(p => p.ticker.endsWith('=X')).map(p => [p.ticker, p.price]))
+    };
 
-    const portfolio = {};
-
-    for (const tx of transactions) {
-        if (!portfolio[tx.ticker]) {
-            portfolio[tx.ticker] = { totalShares: 0, totalCost: 0, totalDividends: 0 };
-        }
-        portfolio[tx.ticker].totalShares += tx.shares;
-        portfolio[tx.ticker].totalCost += tx.shares * tx.price;
-    }
-
-    for (const div of dividends) {
-        if (portfolio[div.ticker]) {
-            let sharesOnDate = 0;
-            for (const tx of transactions) {
-                if (tx.ticker === div.ticker && new Date(tx.date) < new Date(div.exDate)) {
-                    sharesOnDate += tx.shares;
-                }
-            }
-            if (sharesOnDate > 0) {
-                portfolio[div.ticker].totalDividends += sharesOnDate * div.amount;
-            }
-        }
-    }
-
-    for (const ticker in portfolio) {
-        const stock = portfolio[ticker];
-        if (stock.totalShares < 1e-6) {
-            delete portfolio[ticker];
-            continue;
-        }
-        stock.averageCost = stock.totalCost / stock.totalShares;
-        stock.marketValue = stock.totalShares * (prices.get(ticker) || 0);
-        stock.unrealizedPnl = stock.marketValue - stock.totalCost;
-        stock.totalReturn = stock.unrealizedPnl + stock.totalDividends;
-    }
-
+    const portfolio = calculateCoreMetrics(txData.results || [], market);
     return jsonResponse(portfolio);
 }
 
-async function initializeDatabase(db) {
-    try {
-        await db.batch([
-            db.prepare(`DROP TABLE IF EXISTS transactions;`),
-            db.prepare(`DROP TABLE IF EXISTS prices;`),
-            db.prepare(`DROP TABLE IF EXISTS dividends;`),
-            db.prepare(`CREATE TABLE transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, shares REAL NOT NULL, price REAL NOT NULL, date TEXT NOT NULL);`),
-            db.prepare(`CREATE TABLE prices (ticker TEXT PRIMARY KEY, price REAL NOT NULL, last_updated TEXT NOT NULL);`),
-            db.prepare(`CREATE TABLE dividends (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, exDate TEXT NOT NULL, amount REAL NOT NULL, UNIQUE(ticker, exDate));`),
-            db.prepare(`INSERT INTO transactions (ticker, shares, price, date) VALUES ('AAPL', 10, 150.25, '2023-01-15'), ('TSLA', 5, 250.00, '2023-03-10');`),
-            db.prepare(`INSERT INTO prices (ticker, price, last_updated) VALUES ('AAPL', 175.00, '2023-10-27'), ('TSLA', 220.00, '2023-10-27');`),
-            db.prepare(`INSERT INTO dividends (ticker, exDate, amount) VALUES ('AAPL', '2023-08-11', 0.24);`)
-        ]);
-        return jsonResponse({ success: true, message: 'Database initialized.' });
-    } catch (e) {
-        console.error("D1 Init Error:", e);
-        return jsonResponse({ error: `Database command failed: ${e.cause ? e.cause.message : e.message}` }, 500);
+// --- Core Calculation Logic (adapted from Firebase project) ---
+
+function calculateCoreMetrics(transactions, market) {
+    const holdings = {};
+    let totalRealizedPL = 0;
+
+    const findFxRate = (currency, date) => {
+        if (currency === 'TWD') return 1;
+        // In a real scenario, you would look up historical rates. Here we use the latest for simplicity.
+        return market.fx.get('TWD=X') || 32.0;
+    };
+
+    for (const tx of transactions) {
+        const sym = tx.symbol.toUpperCase();
+        if (!holdings[sym]) {
+            holdings[sym] = { symbol: sym, currency: tx.currency, lots: [], realizedPL: 0 };
+        }
+
+        const fxRate = findFxRate(tx.currency, tx.date);
+        const costTWD = tx.price * tx.quantity * (tx.currency === 'TWD' ? 1 : fxRate);
+
+        if (tx.type === 'buy') {
+            holdings[sym].lots.push({ quantity: tx.quantity, priceTWD: costTWD / tx.quantity, priceOriginal: tx.price });
+        } else { // sell
+            let sellQty = tx.quantity;
+            const saleProceedsTWD = costTWD;
+            let costOfGoodsSoldTWD = 0;
+
+            while (sellQty > 0 && holdings[sym].lots.length > 0) {
+                const lot = holdings[sym].lots[0];
+                const qtyToSell = Math.min(sellQty, lot.quantity);
+                costOfGoodsSoldTWD += qtyToSell * lot.priceTWD;
+                lot.quantity -= qtyToSell;
+                if (lot.quantity < 1e-9) {
+                    holdings[sym].lots.shift();
+                }
+                sellQty -= qtyToSell;
+            }
+            const realized = saleProceedsTWD - costOfGoodsSoldTWD;
+            totalRealizedPL += realized;
+            holdings[sym].realizedPL += realized;
+        }
     }
+
+    // Calculate current holdings stats
+    const finalHoldings = {};
+    let totalMarketValueTWD = 0;
+    let totalUnrealizedPLTWD = 0;
+    let totalInvestedCostTWD = 0;
+
+    for (const sym in holdings) {
+        const h = holdings[sym];
+        const totalShares = h.lots.reduce((sum, lot) => sum + lot.quantity, 0);
+
+        if (totalShares < 1e-9) continue; // Skip if fully sold
+
+        const totalCostTWD = h.lots.reduce((sum, lot) => sum + lot.quantity * lot.priceTWD, 0);
+        const avgCostOriginal = h.lots.reduce((sum, lot) => sum + lot.quantity * lot.priceOriginal, 0) / totalShares;
+        
+        const currentPrice = market.prices.get(sym) || 0;
+        const fxRate = findFxRate(h.currency, new Date());
+        const marketValueTWD = totalShares * currentPrice * (h.currency === 'TWD' ? 1 : fxRate);
+        const unrealizedPLTWD = marketValueTWD - totalCostTWD;
+
+        finalHoldings[sym] = {
+            symbol: sym,
+            quantity: totalShares,
+            currency: h.currency,
+            avgCostOriginal: avgCostOriginal,
+            totalCostTWD: totalCostTWD,
+            marketValueTWD: marketValueTWD,
+            unrealizedPLTWD: unrealizedPLTWD,
+            returnRate: totalCostTWD > 0 ? (unrealizedPLTWD / totalCostTWD) * 100 : 0,
+        };
+        totalMarketValueTWD += marketValueTWD;
+        totalUnrealizedPLTWD += unrealizedPLTWD;
+        totalInvestedCostTWD += totalCostTWD;
+    }
+
+    const overallReturnRate = totalInvestedCostTWD > 0 ? ((totalUnrealizedPLTWD + totalRealizedPL) / totalInvestedCostTWD) * 100 : 0;
+
+    return {
+        holdings: finalHoldings,
+        totalMarketValueTWD,
+        totalUnrealizedPLTWD,
+        totalRealizedPL,
+        overallReturnRate
+    };
 }
 
-// Helper for consistent JSON responses
+// --- Helper Functions ---
 function jsonResponse(data, status = 200) {
-    return new Response(JSON.stringify(data), {
+    return new Response(JSON.stringify(data, null, 2), {
         status: status,
         headers: { 'Content-Type': 'application/json' },
     });
