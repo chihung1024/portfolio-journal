@@ -129,7 +129,7 @@
 
     
 <script type="module">
-    // --- FINAL SCRIPT - With Benchmark Setting (FULL UNOMITTED CODE) ---
+    // --- FINAL SCRIPT - With Charts Enabled (FULL UNOMITTED CODE) ---
 
     // --- Global Variables & Constants ---
     const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev";
@@ -171,24 +171,26 @@
         if (!userId) return;
         document.getElementById('loading-overlay').style.display = 'flex';
         try {
-            const [transactionsData, snapshotData, splitsData, settingsData] = await Promise.all([
+            const [transactionsData, snapshotData, splitsData, settingsData, historyData] = await Promise.all([
                 authedFetch(`${API_BASE_URL}/api/transactions`),
                 authedFetch(`${API_BASE_URL}/api/portfolio/snapshot`),
                 authedFetch(`${API_BASE_URL}/api/splits`),
-                authedFetch(`${API_BASE_URL}/api/settings`)
+                authedFetch(`${API_BASE_URL}/api/settings`),
+                authedFetch(`${API_BASE_URL}/api/portfolio/history`)
             ]);
 
             transactions = (transactionsData || []).map(t => ({...t, date: new Date(t.date)}));
             userSplits = (splitsData || []).map(s => ({...s, date: new Date(s.date)}));
+            const benchmarkSymbol = settingsData?.benchmarkSymbol || 'SPY';
 
-            document.getElementById('benchmark-symbol-input').value = settingsData?.benchmarkSymbol || 'SPY';
+            document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
             renderTransactionsTable();
             renderSplitsTable();
             updateDashboard(snapshotData || {});
             renderHoldingsTable(snapshotData ? JSON.parse(snapshotData.holdings || '{}') : {});
-            updateAssetChart({});
-            updateTwrChart({}, {}, settingsData?.benchmarkSymbol || 'SPY');
+            updateAssetChart(historyData || []);
+            updateTwrChart({}, {}, benchmarkSymbol);
 
         } catch (error) {
             showNotification('error', `讀取資料失敗: ${error.message}`);
@@ -505,11 +507,23 @@
         unrealizedEl.textContent = formatNumber(unrealizedPL, 0);
         unrealizedEl.className = `text-3xl font-bold mt-2 ${unrealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
         document.getElementById('realized-pl').textContent = formatNumber(snapshot.totalRealizedPL || 0, 0);
-        document.getElementById('total-return').textContent = `${(snapshot.overallReturnRate || 0).toFixed(2)}%`;
+        const totalReturnEl = document.getElementById('total-return');
+        totalReturnEl.textContent = `${(snapshot.overallReturnRate || 0).toFixed(2)}%`;
+        totalReturnEl.className = `text-3xl font-bold mt-2 ${(snapshot.overallReturnRate || 0) >= 0 ? 'text-red-600' : 'text-green-600'}`;
         document.getElementById('xirr-value').textContent = `${((snapshot.xirr || 0) * 100).toFixed(2)}%`;
     }
-    function updateAssetChart(portfolioHistory = {}) { if(chart) chart.updateSeries([{ data: [] }]); }
-    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
+    function updateAssetChart(portfolioHistory = []) {
+        if (!chart) return;
+        const chartData = portfolioHistory.map(h => [new Date(h.date).getTime(), h.portfolioValue]);
+        chart.updateSeries([{
+            name: '總資產',
+            data: chartData
+        }]);
+    }
+    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { 
+        if(!twrChart) return;
+        twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); 
+    }
     function openModal(isEdit = false, transaction = null) {
         const form = document.getElementById('transaction-form');
         form.reset();
