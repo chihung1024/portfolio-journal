@@ -125,7 +125,7 @@
     </div>
 
 <script type="module">
-    // --- FINAL SCRIPT - With Delete Functionality (FULL CODE) ---
+    // --- FINAL SCRIPT - With Delete Functionality (FULL UNOMITTED CODE) ---
 
     // --- Global Variables & Constants ---
     const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev"; // 確認這是您的正確網址
@@ -149,11 +149,13 @@
             headers['Authorization'] = `Bearer ${token}`;
         }
         const response = await fetch(url, { ...options, headers });
+
         const contentType = response.headers.get("content-type");
         let data;
         if (contentType && contentType.indexOf("application/json") !== -1) {
             data = await response.json();
         }
+
         if (!response.ok) {
             throw new Error(data.error || `Request failed with status ${response.status}`);
         }
@@ -320,8 +322,18 @@
     }
 
     // --- All Other Original UI and Helper Functions Below ---
-    function initializeChart() { /* ... unchanged ... */ }
-    function initializeTwrChart() { /* ... unchanged ... */ }
+    function initializeChart() {
+        const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
+        chart = new ApexCharts(document.querySelector("#asset-chart"), options);
+        chart.render();
+    }
+
+    function initializeTwrChart() {
+        const options = { chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, colors: ['#4f46e5', '#f59e0b'] };
+        twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
+        twrChart.render();
+    }
+
     function renderHoldingsTable(holdingsData = {}) {
         const tableBody = document.getElementById('holdings-table-body');
         tableBody.innerHTML = '';
@@ -346,6 +358,7 @@
             tableBody.appendChild(row);
         });
     }
+
     function renderTransactionsTable() {
         const tableBody = document.getElementById('transactions-table-body');
         tableBody.innerHTML = '';
@@ -373,7 +386,12 @@
         document.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDelete));
         document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', handleEdit));
     }
-    function renderSplitsTable() { /* same as before */ }
+
+    function renderSplitsTable() {
+        const tableBody = document.getElementById('splits-table-body');
+        tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">拆股功能待開發。</td></tr>`;
+    }
+
     function updateDashboard(snapshot = {}) {
         const holdings = snapshot.holdings ? Object.values(JSON.parse(snapshot.holdings)) : [];
         const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValueTWD, 0);
@@ -386,23 +404,71 @@
         document.getElementById('total-return').textContent = `${(snapshot.overallReturnRate || 0).toFixed(2)}%`;
         document.getElementById('xirr-value').textContent = `${((snapshot.xirr || 0) * 100).toFixed(2)}%`;
     }
-    function updateAssetChart(portfolioHistory = {}) { /* same as before */ }
-    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { /* same as before */ }
+
+    function updateAssetChart(portfolioHistory = {}) { chart.updateSeries([{ data: [] }]); }
+    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
     function handleSplitFormSubmit(e) { e.preventDefault(); showNotification('info', '此功能待開發'); }
     function handleEdit() { showNotification('info', '此功能待開發'); }
     function handleUpdateBenchmark() { showNotification('info', '此功能待開發'); }
-    function openModal(isEdit = false, transaction = null) { /* same as before */ }
+    function openModal(isEdit = false, transaction = null) {
+        document.getElementById('transaction-form').reset(); 
+        document.getElementById('transaction-id').value = '';
+        document.getElementById('modal-title').textContent = '新增交易紀錄'; 
+        document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+        toggleOptionalFields();
+        document.getElementById('transaction-modal').classList.remove('hidden');
+    }
     function openSplitModal() { showNotification('info', '此功能待開發'); }
     function closeModal() { document.getElementById('transaction-modal').classList.add('hidden'); }
     function closeSplitModal() { document.getElementById('split-modal').classList.add('hidden'); }
     function hideConfirm() { confirmCallback = null; document.getElementById('confirm-modal').classList.add('hidden'); }
-    function toggleOptionalFields() { /* same as before */ }
-    function isTwStock(symbol) { /* same as before */ }
-    function formatNumber(value, decimals = 2) { /* same as before */ }
-    function showNotification(type, message) { /* same as before */ }
-    function showConfirm(message, callback) { /* same as before */ }
-    function showLoadingError(title, message) { /* same as before */ }
-    function switchTab(tabName) { /* same as before */ }
+    function toggleOptionalFields() {
+        const currency = document.getElementById('currency').value;
+        const exchangeRateField = document.getElementById('exchange-rate-field');
+        if (currency === 'USD') { exchangeRateField.style.display = 'block'; } else { exchangeRateField.style.display = 'none'; }
+    }
+    function isTwStock(symbol) {
+        if (!symbol) return false;
+        return symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO');
+    }
+    function formatNumber(value, decimals = 2) { 
+        const num = Number(value); if (isNaN(num)) return '0.00'; 
+        return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); 
+    }
+    function showNotification(type, message) { 
+        const area = document.getElementById('notification-area'); 
+        const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : (type === 'warning' ? 'bg-yellow-500' : 'bg-red-500')); 
+        const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle'); 
+        const notification = document.createElement('div'); 
+        notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`; 
+        notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`; 
+        area.appendChild(notification); 
+        lucide.createIcons({nodes: [notification.querySelector('i')]});
+        setTimeout(() => { notification.style.transition = 'opacity 0.5s ease'; notification.style.opacity = '0'; setTimeout(() => notification.remove(), 500); }, 5000); 
+    }
+    function showConfirm(message, callback) { 
+        document.getElementById('confirm-message').textContent = message; 
+        confirmCallback = callback; 
+        document.getElementById('confirm-modal').classList.remove('hidden'); 
+    }
+    function showLoadingError(title, message) {
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = loadingOverlay.querySelector('p');
+        const loadingSpinner = loadingOverlay.querySelector('svg');
+        if (loadingSpinner) loadingSpinner.style.display = 'none';
+        loadingText.innerHTML = `<span class="font-bold text-red-600">${title}</span><br>${message}`;
+    }
+    function switchTab(tabName) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.getElementById(`${tabName}-tab`).classList.remove('hidden');
+        document.querySelectorAll('.tab-item').forEach(el => {
+            el.classList.remove('border-indigo-500', 'text-indigo-600');
+            el.classList.add('border-transparent', 'text-gray-500');
+        });
+        const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
+        activeTab.classList.add('border-indigo-500', 'text-indigo-600');
+        activeTab.classList.remove('border-transparent', 'text-gray-500');
+    }
 </script>
 </body>
 </html>
