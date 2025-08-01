@@ -125,10 +125,10 @@
     </div>
 
 <script type="module">
-    // --- FINAL SCRIPT - With Delete Functionality (FULL UNOMITTED CODE) ---
+    // --- FINAL SCRIPT - With Edit Functionality (FULL UNOMITTED CODE) ---
 
     // --- Global Variables & Constants ---
-    const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev"; // 確認這是您的正確網址
+    const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev";
     let userId, userEmail;
     let transactions = [], userSplits = [], chart, twrChart, confirmCallback = null;
 
@@ -157,7 +157,7 @@
         }
 
         if (!response.ok) {
-            throw new Error(data.error || `Request failed with status ${response.status}`);
+            throw new Error(data ? data.error : `Request failed with status ${response.status}`);
         }
         return data;
     }
@@ -205,11 +205,7 @@
         const password = document.getElementById('password').value;
         if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
         try {
-            const response = await fetch(`${API_BASE_URL}/api/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-            if(!response.ok) {
-                const data = await response.json();
-                throw new Error(data.error);
-            }
+            await fetch(`${API_BASE_URL}/api/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
             showNotification('success', '註冊成功！請現在登入。');
         } catch (error) { showNotification('error', `註冊失敗: ${error.message}`); }
     }
@@ -272,8 +268,6 @@
     }
 
     // --- Form Submit Handlers ---
-
-    // --- MODIFIED: Form Submit Handler to support both Create and Update ---
     async function handleFormSubmit(e) {
         e.preventDefault();
         const btn = document.getElementById('save-btn');
@@ -290,9 +284,8 @@
             totalCost: document.getElementById('total-cost').value ? parseFloat(document.getElementById('total-cost').value) : null,
             exchangeRate: document.getElementById('exchange-rate').value ? parseFloat(document.getElementById('exchange-rate').value) : null,
         };
-
         if (!transactionData.date || !transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-            showNotification('error', '請填寫所有必要欄位。');
+            showNotification('error', '請填寫所有必要欄位（日期、代碼、股數、價格）。');
             return;
         }
 
@@ -304,7 +297,7 @@
             btn.textContent = '計算中...';
             await authedFetch(url, { method: method, body: JSON.stringify(transactionData) });
             closeModal();
-            showNotification('success', `交易已成功${isEditing ? '更新' : '儲存'}！`);
+            showNotification('success', `交易已成功${isEditing ? '更新' : '新增'}！`);
             await loadInitialData();
         } catch (error) {
             showNotification('error', `操作失敗: ${error.message}`);
@@ -331,19 +324,29 @@
         });
     }
 
+    function handleEdit(event) {
+        const transactionId = event.target.dataset.id;
+        const transactionToEdit = transactions.find(t => t.id === transactionId);
+        if (transactionToEdit) {
+            openModal(true, transactionToEdit);
+        }
+    }
+
     // --- All Other Original UI and Helper Functions Below ---
     function initializeChart() {
         const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
-        chart = new ApexCharts(document.querySelector("#asset-chart"), options);
-        chart.render();
+        if (!chart) {
+            chart = new ApexCharts(document.querySelector("#asset-chart"), options);
+            chart.render();
+        }
     }
-
     function initializeTwrChart() {
         const options = { chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, colors: ['#4f46e5', '#f59e0b'] };
-        twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
-        twrChart.render();
+        if (!twrChart) {
+            twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
+            twrChart.render();
+        }
     }
-
     function renderHoldingsTable(holdingsData = {}) {
         const tableBody = document.getElementById('holdings-table-body');
         tableBody.innerHTML = '';
@@ -368,7 +371,6 @@
             tableBody.appendChild(row);
         });
     }
-
     function renderTransactionsTable() {
         const tableBody = document.getElementById('transactions-table-body');
         tableBody.innerHTML = '';
@@ -389,19 +391,17 @@
                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${typeColor[t.type]}">${typeText[t.type]}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, decimals)}</td>
                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td>
-                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.totalCost || (t.price*t.quantity), 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.totalCost || (t.price*t.quantity), 2)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
             tableBody.appendChild(row);
         };
         document.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDelete));
         document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', handleEdit));
     }
-
     function renderSplitsTable() {
         const tableBody = document.getElementById('splits-table-body');
         tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">拆股功能待開發。</td></tr>`;
     }
-
     function updateDashboard(snapshot = {}) {
         const holdings = snapshot.holdings ? Object.values(JSON.parse(snapshot.holdings)) : [];
         const totalMarketValue = holdings.reduce((sum, h) => sum + h.marketValueTWD, 0);
@@ -414,31 +414,16 @@
         document.getElementById('total-return').textContent = `${(snapshot.overallReturnRate || 0).toFixed(2)}%`;
         document.getElementById('xirr-value').textContent = `${((snapshot.xirr || 0) * 100).toFixed(2)}%`;
     }
-
-    function updateAssetChart(portfolioHistory = {}) { chart.updateSeries([{ data: [] }]); }
-    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
+    function updateAssetChart(portfolioHistory = {}) { if(chart) chart.updateSeries([{ data: [] }]); }
+    function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
     function handleSplitFormSubmit(e) { e.preventDefault(); showNotification('info', '此功能待開發'); }
-
-    // --- NEW: handleEdit function ---
-    function handleEdit(event) {
-        const transactionId = event.target.dataset.id;
-        const transactionToEdit = transactions.find(t => t.id === transactionId);
-        if (transactionToEdit) {
-            openModal(true, transactionToEdit);
-        }
-    }
-
     function handleUpdateBenchmark() { showNotification('info', '此功能待開發'); }
-
-    // --- MODIFIED: openModal to pre-fill data for editing ---
     function openModal(isEdit = false, transaction = null) {
-        document.getElementById('transaction-form').reset();
-        const modalTitle = document.getElementById('modal-title');
-        const transactionIdInput = document.getElementById('transaction-id');
-
+        const form = document.getElementById('transaction-form');
+        form.reset();
         if (isEdit && transaction) {
-            modalTitle.textContent = '編輯交易紀錄';
-            transactionIdInput.value = transaction.id;
+            document.getElementById('modal-title').textContent = '編輯交易紀錄';
+            document.getElementById('transaction-id').value = transaction.id;
             document.getElementById('transaction-date').value = new Date(transaction.date).toISOString().split('T')[0];
             document.getElementById('stock-symbol').value = transaction.symbol;
             document.querySelector(`input[name="transaction-type"][value="${transaction.type}"]`).checked = true;
@@ -448,14 +433,13 @@
             document.getElementById('total-cost').value = transaction.totalCost || '';
             document.getElementById('exchange-rate').value = transaction.exchangeRate || '';
         } else {
-            modalTitle.textContent = '新增交易紀錄';
-            transactionIdInput.value = '';
+            document.getElementById('modal-title').textContent = '新增交易紀錄';
+            document.getElementById('transaction-id').value = '';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
         document.getElementById('transaction-modal').classList.remove('hidden');
     }
-
     function openSplitModal() { showNotification('info', '此功能待開發'); }
     function closeModal() { document.getElementById('transaction-modal').classList.add('hidden'); }
     function closeSplitModal() { document.getElementById('split-modal').classList.add('hidden'); }
