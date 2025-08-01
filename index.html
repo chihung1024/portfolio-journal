@@ -272,9 +272,14 @@
     }
 
     // --- Form Submit Handlers ---
+
+    // --- MODIFIED: Form Submit Handler to support both Create and Update ---
     async function handleFormSubmit(e) {
         e.preventDefault();
         const btn = document.getElementById('save-btn');
+        const transactionId = document.getElementById('transaction-id').value;
+        const isEditing = !!transactionId;
+
         const transactionData = {
             date: document.getElementById('transaction-date').value,
             symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -285,19 +290,24 @@
             totalCost: document.getElementById('total-cost').value ? parseFloat(document.getElementById('total-cost').value) : null,
             exchangeRate: document.getElementById('exchange-rate').value ? parseFloat(document.getElementById('exchange-rate').value) : null,
         };
+
         if (!transactionData.date || !transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-            showNotification('error', '請填寫所有必要欄位（日期、代碼、股數、價格）。');
+            showNotification('error', '請填寫所有必要欄位。');
             return;
         }
+
+        const url = isEditing ? `${API_BASE_URL}/api/transactions/${transactionId}` : `${API_BASE_URL}/api/transactions`;
+        const method = isEditing ? 'PUT' : 'POST';
+
         try {
             btn.disabled = true;
             btn.textContent = '計算中...';
-            await authedFetch(`${API_BASE_URL}/api/transactions`, { method: 'POST', body: JSON.stringify(transactionData) });
+            await authedFetch(url, { method: method, body: JSON.stringify(transactionData) });
             closeModal();
-            showNotification('success', '交易已成功儲存！正在刷新數據...');
+            showNotification('success', `交易已成功${isEditing ? '更新' : '儲存'}！`);
             await loadInitialData();
         } catch (error) {
-            showNotification('error', `儲存失敗: ${error.message}`);
+            showNotification('error', `操作失敗: ${error.message}`);
         } finally {
             btn.disabled = false;
             btn.textContent = '儲存';
@@ -408,16 +418,44 @@
     function updateAssetChart(portfolioHistory = {}) { chart.updateSeries([{ data: [] }]); }
     function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
     function handleSplitFormSubmit(e) { e.preventDefault(); showNotification('info', '此功能待開發'); }
-    function handleEdit() { showNotification('info', '此功能待開發'); }
+
+    // --- NEW: handleEdit function ---
+    function handleEdit(event) {
+        const transactionId = event.target.dataset.id;
+        const transactionToEdit = transactions.find(t => t.id === transactionId);
+        if (transactionToEdit) {
+            openModal(true, transactionToEdit);
+        }
+    }
+
     function handleUpdateBenchmark() { showNotification('info', '此功能待開發'); }
+
+    // --- MODIFIED: openModal to pre-fill data for editing ---
     function openModal(isEdit = false, transaction = null) {
-        document.getElementById('transaction-form').reset(); 
-        document.getElementById('transaction-id').value = '';
-        document.getElementById('modal-title').textContent = '新增交易紀錄'; 
-        document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+        document.getElementById('transaction-form').reset();
+        const modalTitle = document.getElementById('modal-title');
+        const transactionIdInput = document.getElementById('transaction-id');
+
+        if (isEdit && transaction) {
+            modalTitle.textContent = '編輯交易紀錄';
+            transactionIdInput.value = transaction.id;
+            document.getElementById('transaction-date').value = new Date(transaction.date).toISOString().split('T')[0];
+            document.getElementById('stock-symbol').value = transaction.symbol;
+            document.querySelector(`input[name="transaction-type"][value="${transaction.type}"]`).checked = true;
+            document.getElementById('quantity').value = transaction.quantity;
+            document.getElementById('price').value = transaction.price;
+            document.getElementById('currency').value = transaction.currency;
+            document.getElementById('total-cost').value = transaction.totalCost || '';
+            document.getElementById('exchange-rate').value = transaction.exchangeRate || '';
+        } else {
+            modalTitle.textContent = '新增交易紀錄';
+            transactionIdInput.value = '';
+            document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+        }
         toggleOptionalFields();
         document.getElementById('transaction-modal').classList.remove('hidden');
     }
+
     function openSplitModal() { showNotification('info', '此功能待開發'); }
     function closeModal() { document.getElementById('transaction-modal').classList.add('hidden'); }
     function closeSplitModal() { document.getElementById('split-modal').classList.add('hidden'); }
