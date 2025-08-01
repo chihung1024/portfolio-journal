@@ -125,7 +125,7 @@
     </div>
 
 <script type="module">
-    // --- FINAL SCRIPT - With Edit Functionality (FULL UNOMITTED CODE) ---
+    // --- FINAL SCRIPT - With Split Functionality (FULL UNOMITTED CODE) ---
 
     // --- Global Variables & Constants ---
     const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev";
@@ -149,7 +149,7 @@
             headers['Authorization'] = `Bearer ${token}`;
         }
         const response = await fetch(url, { ...options, headers });
-
+        
         const contentType = response.headers.get("content-type");
         let data;
         if (contentType && contentType.indexOf("application/json") !== -1) {
@@ -167,16 +167,23 @@
         if (!userId) return;
         document.getElementById('loading-overlay').style.display = 'flex';
         try {
-            const [transactionsData, snapshotData] = await Promise.all([
+            const [transactionsData, snapshotData, splitsData] = await Promise.all([
                 authedFetch(`${API_BASE_URL}/api/transactions`),
-                authedFetch(`${API_BASE_URL}/api/portfolio/snapshot`)
+                authedFetch(`${API_BASE_URL}/api/portfolio/snapshot`),
+                authedFetch(`${API_BASE_URL}/api/splits`)
             ]);
-
+            
             transactions = (transactionsData || []).map(t => ({...t, date: new Date(t.date)}));
+            userSplits = (splitsData || []).map(s => ({...s, date: new Date(s.date)}));
 
             renderTransactionsTable();
+            renderSplitsTable();
             updateDashboard(snapshotData || {});
             renderHoldingsTable(snapshotData ? JSON.parse(snapshotData.holdings || '{}') : {});
+            
+            // In future steps, we will load and render chart data as well
+            updateAssetChart({});
+            updateTwrChart({}, {}, '...');
 
         } catch (error) {
             showNotification('error', `讀取資料失敗: ${error.message}`);
@@ -205,7 +212,11 @@
         const password = document.getElementById('password').value;
         if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
         try {
-            await fetch(`${API_BASE_URL}/api/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+            const response = await fetch(`${API_BASE_URL}/api/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+            if(!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error);
+            }
             showNotification('success', '註冊成功！請現在登入。');
         } catch (error) { showNotification('error', `註冊失敗: ${error.message}`); }
     }
@@ -253,7 +264,7 @@
         document.getElementById('cancel-btn').addEventListener('click', closeModal);
         document.getElementById('modal-backdrop-trans').addEventListener('click', closeModal);
         document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
-        document.getElementById('manage-splits-btn').addEventListener('click', openSplitModal);
+        document.getElementById('manage-splits-btn').addEventListener('click', () => switchTab('splits'));
         document.getElementById('cancel-split-btn').addEventListener('click', closeSplitModal);
         document.getElementById('modal-backdrop-split').addEventListener('click', closeSplitModal);
         document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
@@ -306,7 +317,7 @@
             btn.textContent = '儲存';
         }
     }
-
+    
     async function handleDelete(event) {
         const transactionId = event.target.dataset.id;
         if (!transactionId) return;
@@ -323,7 +334,7 @@
             }
         });
     }
-
+    
     function handleEdit(event) {
         const transactionId = event.target.dataset.id;
         const transactionToEdit = transactions.find(t => t.id === transactionId);
@@ -332,6 +343,46 @@
         }
     }
 
+    async function handleSplitFormSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById('save-split-btn');
+        const splitData = {
+            date: document.getElementById('split-date').value,
+            symbol: document.getElementById('split-symbol').value.toUpperCase().trim(),
+            ratio: parseFloat(document.getElementById('split-ratio').value)
+        };
+        if (!splitData.date || !splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
+            showNotification('error', '請填寫所有欄位並確保比例大於0。');
+            return;
+        }
+        try {
+            btn.disabled = true; btn.textContent = '儲存中...';
+            await authedFetch(`${API_BASE_URL}/api/splits`, { method: 'POST', body: JSON.stringify(splitData) });
+            closeSplitModal();
+            showNotification('success', '拆股事件已儲存！正在刷新數據...');
+            await loadInitialData();
+        } catch (error) {
+            showNotification('error', `儲存失敗: ${error.message}`);
+        } finally {
+            btn.disabled = false; btn.textContent = '儲存';
+        }
+    }
+
+    async function handleDeleteSplit(event) {
+        const splitId = event.target.dataset.id;
+        if (!splitId) return;
+        showConfirm('您確定要刪除這個拆股事件嗎？', async () => {
+            try {
+                showNotification('info', '正在刪除並重新計算...');
+                await authedFetch(`${API_BASE_URL}/api/splits/${splitId}`, { method: 'DELETE' });
+                showNotification('success', '拆股事件已刪除！');
+                await loadInitialData();
+            } catch (error) {
+                showNotification('error', `刪除失敗: ${error.message}`);
+            }
+        });
+    }
+    
     // --- All Other Original UI and Helper Functions Below ---
     function initializeChart() {
         const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
@@ -400,7 +451,23 @@
     }
     function renderSplitsTable() {
         const tableBody = document.getElementById('splits-table-body');
-        tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">拆股功能待開發。</td></tr>`;
+        tableBody.innerHTML = '';
+        if (userSplits.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
+            return;
+        }
+        userSplits.sort((a, b) => new Date(b.date) - new Date(a.date));
+        for (const s of userSplits) {
+            const row = document.createElement('tr');
+            row.className = "hover:bg-gray-50";
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap">${new Date(s.date).toISOString().split('T')[0]}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-medium">${s.symbol.toUpperCase()}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${s.ratio}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${s.id}" class="delete-split-btn text-red-600 hover:text-red-900">刪除</button></td>`;
+            tableBody.appendChild(row);
+        }
+        document.querySelectorAll('.delete-split-btn').forEach(btn => btn.addEventListener('click', handleDeleteSplit));
     }
     function updateDashboard(snapshot = {}) {
         const holdings = snapshot.holdings ? Object.values(JSON.parse(snapshot.holdings)) : [];
@@ -416,7 +483,6 @@
     }
     function updateAssetChart(portfolioHistory = {}) { if(chart) chart.updateSeries([{ data: [] }]); }
     function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
-    function handleSplitFormSubmit(e) { e.preventDefault(); showNotification('info', '此功能待開發'); }
     function handleUpdateBenchmark() { showNotification('info', '此功能待開發'); }
     function openModal(isEdit = false, transaction = null) {
         const form = document.getElementById('transaction-form');
@@ -440,7 +506,11 @@
         toggleOptionalFields();
         document.getElementById('transaction-modal').classList.remove('hidden');
     }
-    function openSplitModal() { showNotification('info', '此功能待開發'); }
+    function openSplitModal() {
+        document.getElementById('split-form').reset();
+        document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+        document.getElementById('split-modal').classList.remove('hidden');
+    }
     function closeModal() { document.getElementById('transaction-modal').classList.add('hidden'); }
     function closeSplitModal() { document.getElementById('split-modal').classList.add('hidden'); }
     function hideConfirm() { confirmCallback = null; document.getElementById('confirm-modal').classList.add('hidden'); }
@@ -485,11 +555,24 @@
         document.getElementById(`${tabName}-tab`).classList.remove('hidden');
         document.querySelectorAll('.tab-item').forEach(el => {
             el.classList.remove('border-indigo-500', 'text-indigo-600');
-            el.classList.add('border-transparent', 'text-gray-500');
+            el.classList.add('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
         });
         const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
         activeTab.classList.add('border-indigo-500', 'text-indigo-600');
         activeTab.classList.remove('border-transparent', 'text-gray-500');
+
+        const manageSplitsBtn = document.getElementById('manage-splits-btn');
+        const addTransactionBtn = document.getElementById('add-transaction-btn');
+        if (tabName === 'splits') {
+            manageSplitsBtn.innerHTML = '<span>新增拆股</span>';
+            manageSplitsBtn.onclick = openSplitModal;
+            addTransactionBtn.style.display = 'none';
+        } else {
+            manageSplitsBtn.innerHTML = '<i data-lucide="git-merge" class="h-5 w-5"></i><span>管理拆股</span>';
+            manageSplitsBtn.onclick = () => switchTab('splits');
+            addTransactionBtn.style.display = 'flex';
+            lucide.createIcons({nodes: [manageSplitsBtn.querySelector('i')]});
+        }
     }
 </script>
 </body>
