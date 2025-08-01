@@ -176,12 +176,15 @@
                 if (!confirm('Are you sure you want to initialize the database? This will create tables and add sample data.')) return;
                 try {
                     const response = await fetch(`${API_BASE_URL}/initialize-database`, { method: 'POST' });
-                    if (!response.ok) throw new Error('Failed to initialize database.');
+                    const result = await response.json();
+                    if (!response.ok) {
+                        throw new Error(result.error || 'An unknown error occurred during initialization.');
+                    }
                     alert('Database initialized successfully!');
                     loadInitialData();
                 } catch (error) {
                     console.error('Error initializing database:', error);
-                    alert('Error initializing database.');
+                    alert(`Error initializing database: ${error.message}`);
                 }
             });
 
