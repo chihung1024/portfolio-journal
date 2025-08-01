@@ -1,173 +1,231 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
-    <title>Portfolio Journal</title>
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Journal (Cloudflare Edition)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background-color: #f0f2f5; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
+    </style>
 </head>
-<body>
-    <div class="container">
-        <h1 class="mt-5">Trading Journal</h1>
-        <p class="lead">Powered by Cloudflare, D1, and GitHub Actions.</p>
-
-        <!-- Portfolio Summary -->
-        <div class="card mt-4">
-            <div class="card-header">
-                Portfolio Summary
-                <button id="refresh-portfolio-btn" class="btn btn-primary btn-sm float-right">Refresh</button>
-            </div>
-            <div class="card-body">
-                <div id="portfolio-summary"><p>Loading portfolio...</p></div>
+<body class="text-gray-800">
+    <div id="notification-area" class="fixed top-5 right-5 z-50"></div>
+    <header class="bg-white shadow-md sticky top-0 z-20">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <i data-lucide="line-chart" class="text-indigo-600 h-8 w-8"></i>
+                <h1 class="text-2xl font-bold text-gray-800">Portfolio Journal</h1>
             </div>
         </div>
+    </header>
 
-        <!-- Add Transaction -->
-        <div class="card mt-4">
-            <div class="card-header">
-                Add Transaction
-            </div>
-            <div class="card-body">
-                <form id="add-transaction-form">
-                    <div class="form-row">
-                        <div class="col"><input type="text" class="form-control" id="ticker" placeholder="Ticker" required></div>
-                        <div class="col"><input type="number" class="form-control" id="shares" placeholder="Shares" required></div>
-                        <div class="col"><input type="number" step="0.01" class="form-control" id="price" placeholder="Price" required></div>
-                        <div class="col"><input type="date" class="form-control" id="date" required></div>
-                        <div class="col"><button type="submit" class="btn btn-success">Add</button></div>
-                    </div>
-                </form>
-            </div>
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-40">
+            <div class="flex flex-col items-center"><svg class="animate-spin h-10 w-10 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><p class="mt-4 text-lg font-medium text-gray-700">Loading data...</p></div>
         </div>
 
-        <!-- Transactions List -->
-        <div class="card mt-4">
-            <div class="card-header">Transactions</div>
-            <div class="card-body">
-                <ul id="transactions-list" class="list-group"></ul>
-            </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="card p-5"><h3 class="text-sm font-medium text-gray-500">Total Assets</h3><p id="total-assets" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+            <div class="card p-5"><h3 class="text-sm font-medium text-gray-500">Unrealized P/L</h3><p id="unrealized-pl" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+            <div class="card p-5"><h3 class="text-sm font-medium text-gray-500">Total Dividends</h3><p id="total-dividends" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+            <div class="card p-5"><h3 class="text-sm font-medium text-gray-500">Total Return</h3><p id="total-return" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
         </div>
 
-        <!-- Initialization Button -->
-        <div class="card mt-4 bg-light">
-            <div class="card-body text-center">
-                <p class="mb-2">First time setup? This will create tables and add sample data.</p>
-                <button id="init-db-btn" class="btn btn-warning">Initialize Database</button>
+        <div class="card p-6 mb-8">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-gray-800">Transactions</h2>
+                <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>Add Transaction</span></button>
             </div>
+            <div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ticker</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Shares</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th></tr></thead><tbody id="transactions-table-body" class="bg-white divide-y divide-gray-200"></tbody></table></div>
         </div>
+        
+        <div class="card p-6 mb-8">
+             <h2 class="text-xl font-bold text-gray-800 mb-4">Portfolio</h2>
+             <div id="portfolio-view" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+        </div>
+
+    </main>
+
+    <!-- Transaction Modal -->
+    <div id="transaction-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 bg-black bg-opacity-50"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 id="modal-title" class="text-2xl font-bold mb-6 text-gray-800">Add Transaction</h3><form id="transaction-form"><input type="hidden" id="transaction-id"><div class="mb-4"><label for="transaction-date" class="block text-sm font-medium text-gray-700">Date</label><input type="date" id="transaction-date" class="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md" required></div><div class="mb-4"><label for="stock-symbol" class="block text-sm font-medium text-gray-700">Ticker</label><input type="text" id="stock-symbol" class="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md" required></div><div class="grid grid-cols-2 gap-4 mb-4"><div><label for="quantity" class="block text-sm font-medium text-gray-700">Shares</label><input type="number" step="any" id="quantity" class="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md" required></div><div><label for="price" class="block text-sm font-medium text-gray-700">Price</label><input type="number" step="any" id="price" class="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md" required></div></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">Cancel</button><button type="submit" id="save-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">Save</button></div></form></div></div></div>
+    
+    <!-- Initialization Button -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-center">
+        <button id="init-db-btn" class="btn bg-yellow-500 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-yellow-600">Initialize/Reset Database</button>
     </div>
 
-    <footer class="text-center mt-4 mb-4"><p>Data updated daily via yfinance.</p></footer>
-
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const API_BASE_URL = '/api';
+    // --- App Logic (Cloudflare Version) ---
+    document.addEventListener('DOMContentLoaded', () => {
+        lucide.createIcons();
+        setupEventListeners();
+        loadData();
+    });
 
-            const addTransactionForm = document.getElementById('add-transaction-form');
-            const transactionsList = document.getElementById('transactions-list');
-            const portfolioSummary = document.getElementById('portfolio-summary');
-            const refreshPortfolioBtn = document.getElementById('refresh-portfolio-btn');
-            const initDbBtn = document.getElementById('init-db-btn');
+    const API_URL = '/api';
 
-            const formatCurrency = (num) => num ? num.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '$0.00';
+    function setupEventListeners() {
+        document.getElementById('add-transaction-btn').addEventListener('click', () => openModal());
+        document.getElementById('cancel-btn').addEventListener('click', closeModal);
+        document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
+        document.getElementById('init-db-btn').addEventListener('click', initializeDatabase);
+    }
 
-            async function getTransactions() {
-                try {
-                    const response = await fetch(`${API_BASE_URL}/transactions`);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    const transactions = await response.json();
-                    transactionsList.innerHTML = '';
-                    transactions.forEach(tx => {
-                        const li = document.createElement('li');
-                        li.className = 'list-group-item';
-                        li.textContent = `${tx.ticker}: ${tx.shares} shares at ${formatCurrency(tx.price)} on ${new Date(tx.date).toLocaleDateString()}`;
-                        transactionsList.appendChild(li);
-                    });
-                } catch (error) {
-                    console.error('Error fetching transactions:', error);
-                    transactionsList.innerHTML = '<li class="list-group-item text-danger">Failed to load transactions.</li>';
-                }
-            }
+    async function loadData() {
+        document.getElementById('loading-overlay').style.display = 'flex';
+        try {
+            const [transactions, portfolio] = await Promise.all([
+                fetch(`${API_URL}/transactions`).then(res => res.json()),
+                fetch(`${API_URL}/portfolio`).then(res => res.json())
+            ]);
+            renderTransactions(transactions);
+            renderPortfolio(portfolio);
+            updateDashboard(portfolio);
+        } catch (error) {
+            showNotification('error', `Failed to load data: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+    }
 
-            async function getPortfolio() {
-                portfolioSummary.innerHTML = '<p>Refreshing portfolio...</p>';
-                try {
-                    const response = await fetch(`${API_BASE_URL}/portfolio`);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    const portfolio = await response.json();
-
-                    portfolioSummary.innerHTML = '';
-                    if (Object.keys(portfolio).length === 0) {
-                        portfolioSummary.innerHTML = '<p>No portfolio data available. Add transactions to get started.</p>';
-                        return;
-                    }
-
-                    for (const ticker in portfolio) {
-                        const stock = portfolio[ticker];
-                        const p = document.createElement('p');
-                        const pnlClass = stock.totalReturn >= 0 ? 'text-success' : 'text-danger';
-                        p.innerHTML = `
-                            <b>${ticker}:</b> ${stock.totalShares.toFixed(2)} shares, 
-                            Avg Cost: ${formatCurrency(stock.averageCost)}, 
-                            Market Value: ${formatCurrency(stock.marketValue)}, 
-                            Dividends: ${formatCurrency(stock.totalDividends)}, 
-                            <span class="${pnlClass}">Total Return: ${formatCurrency(stock.totalReturn)}</span>
-                        `;
-                        portfolioSummary.appendChild(p);
-                    }
-                } catch (error) {
-                    console.error('Error fetching portfolio:', error);
-                    portfolioSummary.innerHTML = '<p class="text-danger">Failed to load portfolio data.</p>';
-                }
-            }
-
-            addTransactionForm.addEventListener('submit', async function (e) {
-                e.preventDefault();
-                const transaction = {
-                    ticker: document.getElementById('ticker').value.toUpperCase(),
-                    shares: parseFloat(document.getElementById('shares').value),
-                    price: parseFloat(document.getElementById('price').value),
-                    date: document.getElementById('date').value,
-                };
-
-                try {
-                    const response = await fetch(`${API_BASE_URL}/transactions`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(transaction),
-                    });
-                    if (!response.ok) throw new Error((await response.json()).error || 'Failed to add transaction');
-                    addTransactionForm.reset();
-                    loadInitialData();
-                } catch (error) {
-                    console.error('Error adding transaction:', error);
-                    alert(`Error: ${error.message}`);
-                }
-            });
-            
-            initDbBtn.addEventListener('click', async () => {
-                if (!confirm('Are you sure you want to initialize the database? This will create tables and add sample data.')) return;
-                try {
-                    const response = await fetch(`${API_BASE_URL}/initialize-database`, { method: 'POST' });
-                    const result = await response.json();
-                    if (!response.ok) {
-                        throw new Error(result.error || 'An unknown error occurred during initialization.');
-                    }
-                    alert('Database initialized successfully!');
-                    loadInitialData();
-                } catch (error) {
-                    console.error('Error initializing database:', error);
-                    alert(`Error initializing database: ${error.message}`);
-                }
-            });
-
-            refreshPortfolioBtn.addEventListener('click', getPortfolio);
-
-            function loadInitialData() {
-                getTransactions();
-                getPortfolio();
-            }
-
-            loadInitialData();
+    function renderTransactions(transactions) {
+        const tableBody = document.getElementById('transactions-table-body');
+        tableBody.innerHTML = '';
+        if (!transactions || transactions.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="5" class="text-center py-10 text-gray-500">No transactions yet.</td></tr>`;
+            return;
+        }
+        transactions.forEach(t => {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="px-6 py-4">${new Date(t.date).toLocaleDateString()}</td>
+                <td class="px-6 py-4 font-medium">${t.ticker}</td>
+                <td class="px-6 py-4">${t.shares}</td>
+                <td class="px-6 py-4">${formatCurrency(t.price)}</td>
+                <td class="px-6 py-4 text-center">
+                    <button onclick="handleDelete('${t.id}')" class="text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                </td>`;
+            tableBody.appendChild(row);
         });
+        lucide.createIcons();
+    }
+
+    function renderPortfolio(portfolio) {
+        const portfolioView = document.getElementById('portfolio-view');
+        portfolioView.innerHTML = '';
+        if (!portfolio || Object.keys(portfolio).length === 0) {
+            portfolioView.innerHTML = `<p class="text-gray-500">No portfolio data to display.</p>`;
+            return;
+        }
+        for (const ticker in portfolio) {
+            const stock = portfolio[ticker];
+            const card = document.createElement('div');
+            card.className = 'card p-4';
+            const returnClass = stock.totalReturn >= 0 ? 'text-green-600' : 'text-red-600';
+            card.innerHTML = `
+                <h4 class="font-bold text-lg">${ticker}</h4>
+                <p>Shares: ${stock.totalShares.toFixed(2)}</p>
+                <p>Avg Cost: ${formatCurrency(stock.averageCost)}</p>
+                <p>Market Value: ${formatCurrency(stock.marketValue)}</p>
+                <p>Dividends: ${formatCurrency(stock.totalDividends)}</p>
+                <p class="font-bold ${returnClass}">Total Return: ${formatCurrency(stock.totalReturn)}</p>
+            `;
+            portfolioView.appendChild(card);
+        }
+    }
+
+    function updateDashboard(portfolio) {
+        let totalAssets = 0, totalUnrealized = 0, totalDividends = 0, totalReturn = 0;
+        for (const ticker in portfolio) {
+            const stock = portfolio[ticker];
+            totalAssets += stock.marketValue;
+            totalUnrealized += stock.unrealizedPnl;
+            totalDividends += stock.totalDividends;
+            totalReturn += stock.totalReturn;
+        }
+        document.getElementById('total-assets').textContent = formatCurrency(totalAssets);
+        document.getElementById('unrealized-pl').textContent = formatCurrency(totalUnrealized);
+        document.getElementById('total-dividends').textContent = formatCurrency(totalDividends);
+        document.getElementById('total-return').textContent = formatCurrency(totalReturn);
+    }
+
+    async function handleFormSubmit(e) {
+        e.preventDefault();
+        const transaction = {
+            ticker: document.getElementById('stock-symbol').value.toUpperCase(),
+            shares: parseFloat(document.getElementById('quantity').value),
+            price: parseFloat(document.getElementById('price').value),
+            date: document.getElementById('transaction-date').value,
+        };
+        try {
+            const response = await fetch(`${API_URL}/transactions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(transaction),
+            });
+            if (!response.ok) throw new Error((await response.json()).error);
+            closeModal();
+            loadData();
+            showNotification('success', 'Transaction saved!');
+        } catch (error) {
+            showNotification('error', `Save failed: ${error.message}`);
+        }
+    }
+
+    async function handleDelete(id) {
+        if (!confirm('Are you sure you want to delete this transaction?')) return;
+        try {
+            const response = await fetch(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error((await response.json()).error);
+            loadData();
+            showNotification('success', 'Transaction deleted!');
+        } catch (error) {
+            showNotification('error', `Delete failed: ${error.message}`);
+        }
+    }
+
+    async function initializeDatabase() {
+        if (!confirm('This will delete all existing data and create sample data. Are you sure?')) return;
+        try {
+            const response = await fetch(`${API_URL}/initialize-database`, { method: 'POST' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Unknown error');
+            showNotification('success', 'Database has been initialized!');
+            loadData();
+        } catch (error) {
+            showNotification('error', `Initialization failed: ${error.message}`);
+        }
+    }
+
+    function openModal() {
+        document.getElementById('transaction-form').reset();
+        document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+        document.getElementById('transaction-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+        document.getElementById('transaction-modal').classList.add('hidden');
+    }
+
+    function formatCurrency(value) {
+        return (value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    }
+
+    function showNotification(type, message) {
+        const area = document.getElementById('notification-area');
+        const color = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+        const icon = type === 'success' ? 'check-circle' : 'alert-circle';
+        const notification = document.createElement('div');
+        notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`;
+        notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`;
+        area.appendChild(notification);
+        lucide.createIcons({ nodes: [notification.querySelector('i')] });
+        setTimeout(() => { notification.remove(); }, 3000);
+    }
     </script>
 </body>
 </html>
