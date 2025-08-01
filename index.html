@@ -6,36 +6,18 @@
     <title>Portfolio Journal</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {
-            background-color: #f8f9fa;
-        }
-        .container {
-            max-width: 960px;
-        }
-        .table-responsive {
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        .card {
-            margin-bottom: 1.5rem;
-        }
-        .header {
-            margin-bottom: 2rem;
-        }
-        .footer {
-            margin-top: 2rem;
-            padding: 1rem;
-            text-align: center;
-            font-size: 0.9rem;
-            color: #6c757d;
-        }
+        body { background-color: #f8f9fa; }
+        .container { max-width: 960px; }
+        .card { margin-bottom: 1.5rem; }
+        .header { margin-bottom: 2rem; }
+        .footer { margin-top: 2rem; padding: 1rem; text-align: center; font-size: 0.9rem; color: #6c757d; }
     </style>
 </head>
 <body>
     <div class="container mt-5">
         <div class="header text-center">
             <h1>Portfolio Journal</h1>
-            <p class="lead">Track your investments with ease.</p>
+            <p class="lead">Powered by Cloudflare Pages, D1, and GitHub Actions.</p>
         </div>
 
         <!-- Portfolio Summary -->
@@ -45,40 +27,21 @@
                 <button id="refresh-portfolio-btn" class="btn btn-sm btn-primary float-end">Refresh</button>
             </div>
             <div class="card-body">
-                <div id="portfolio-summary" class="row">
-                    <!-- Portfolio data will be loaded here -->
-                    <p>Loading portfolio...</p>
-                </div>
+                <div id="portfolio-summary" class="row"><p>Loading portfolio...</p></div>
             </div>
         </div>
 
         <!-- Add Transaction -->
         <div class="card">
-            <div class="card-header">
-                Add New Transaction
-            </div>
+            <div class="card-header">Add New Transaction</div>
             <div class="card-body">
                 <form id="add-transaction-form">
                     <div class="row g-3 align-items-end">
-                        <div class="col-md">
-                            <label for="ticker" class="form-label">Ticker</label>
-                            <input type="text" class="form-control" id="ticker" placeholder="e.g., AAPL" required>
-                        </div>
-                        <div class="col-md">
-                            <label for="shares" class="form-label">Shares</label>
-                            <input type="number" class="form-control" id="shares" step="any" placeholder="e.g., 10" required>
-                        </div>
-                        <div class="col-md">
-                            <label for="price" class="form-label">Price</label>
-                            <input type="number" class="form-control" id="price" step="any" placeholder="e.g., 150.25" required>
-                        </div>
-                        <div class="col-md">
-                            <label for="date" class="form-label">Date</label>
-                            <input type="date" class="form-control" id="date" required>
-                        </div>
-                        <div class="col-auto">
-                            <button type="submit" class="btn btn-success">Add</button>
-                        </div>
+                        <div class="col-md"><label for="ticker" class="form-label">Ticker</label><input type="text" class="form-control" id="ticker" placeholder="e.g., AAPL" required></div>
+                        <div class="col-md"><label for="shares" class="form-label">Shares</label><input type="number" class="form-control" id="shares" step="any" placeholder="e.g., 10" required></div>
+                        <div class="col-md"><label for="price" class="form-label">Price</label><input type="number" class="form-control" id="price" step="any" placeholder="e.g., 150.25" required></div>
+                        <div class="col-md"><label for="date" class="form-label">Date</label><input type="date" class="form-control" id="date" required></div>
+                        <div class="col-auto"><button type="submit" class="btn btn-success">Add</button></div>
                     </div>
                 </form>
             </div>
@@ -86,23 +49,12 @@
 
         <!-- Transactions List -->
         <div class="card">
-            <div class="card-header">
-                All Transactions
-            </div>
+            <div class="card-header">All Transactions</div>
             <div class="card-body">
-                <div class="table-responsive">
+                <div class="table-responsive" style="max-height: 400px;">
                     <table class="table table-striped table-hover">
-                        <thead>
-                            <tr>
-                                <th>Ticker</th>
-                                <th>Shares</th>
-                                <th>Price</th>
-                                <th>Date</th>
-                            </tr>
-                        </thead>
-                        <tbody id="transactions-list">
-                            <!-- Transactions will be loaded here -->
-                        </tbody>
+                        <thead><tr><th>Ticker</th><th>Shares</th><th>Price</th><th>Date</th></tr></thead>
+                        <tbody id="transactions-list"></tbody>
                     </table>
                 </div>
             </div>
@@ -111,16 +63,13 @@
         <!-- Initialization Button -->
         <div class="card bg-light">
             <div class="card-body text-center">
-                <p class="mb-2">First time setup? Populate the database with sample data.</p>
+                <p class="mb-2">First time setup? This will create tables and add sample data.</p>
                 <button id="init-db-btn" class="btn btn-warning">Initialize Database</button>
             </div>
         </div>
-
     </div>
 
-    <footer class="footer">
-        <p>Powered by Cloudflare Pages and Workers.</p>
-    </footer>
+    <footer class="footer"><p>Data updated daily via yfinance.</p></footer>
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
@@ -132,25 +81,17 @@
             const refreshPortfolioBtn = document.getElementById('refresh-portfolio-btn');
             const initDbBtn = document.getElementById('init-db-btn');
 
-            // Helper to format numbers as currency
-            const formatCurrency = (num) => num.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+            const formatCurrency = (num) => num ? num.toLocaleString('en-US', { style: 'currency', currency: 'USD' }) : '$0.00';
 
-            // Fetch and display all transactions
             async function getTransactions() {
                 try {
                     const response = await fetch(`${API_BASE_URL}/transactions`);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     const transactions = await response.json();
-
                     transactionsList.innerHTML = '';
                     transactions.forEach(tx => {
                         const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${tx.ticker}</td>
-                            <td>${tx.shares}</td>
-                            <td>${formatCurrency(tx.price)}</td>
-                            <td>${new Date(tx.date).toLocaleDateString()}</td>
-                        `;
+                        row.innerHTML = `<td>${tx.ticker}</td><td>${tx.shares}</td><td>${formatCurrency(tx.price)}</td><td>${new Date(tx.date).toLocaleDateString()}</td>`;
                         transactionsList.appendChild(row);
                     });
                 } catch (error) {
@@ -159,7 +100,6 @@
                 }
             }
 
-            // Fetch and display portfolio summary
             async function getPortfolio() {
                 portfolioSummary.innerHTML = '<p>Refreshing portfolio...</p>';
                 try {
@@ -169,17 +109,14 @@
 
                     portfolioSummary.innerHTML = '';
                     if (Object.keys(portfolio).length === 0) {
-                        portfolioSummary.innerHTML = '<p>No portfolio data available. Add some transactions to get started.</p>';
+                        portfolioSummary.innerHTML = '<p>No portfolio data available. Add transactions to get started.</p>';
                         return;
                     }
 
                     for (const ticker in portfolio) {
                         const stock = portfolio[ticker];
-                        const pnl = stock.unrealizedPnl;
                         const totalReturn = stock.totalReturn;
-                        const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
                         const totalReturnClass = totalReturn >= 0 ? 'text-success' : 'text-danger';
-                        const pnlSign = pnl >= 0 ? '+' : '';
                         const totalReturnSign = totalReturn >= 0 ? '+' : '';
 
                         const stockCard = document.createElement('div');
@@ -194,7 +131,7 @@
                                         <strong>Market Value:</strong> ${formatCurrency(stock.marketValue)}
                                     </p>
                                     <p class="card-text mb-1">
-                                        <strong>Unrealized P/L:</strong> <span class="${pnlClass}">${pnlSign}${formatCurrency(pnl)}</span><br>
+                                        <strong>Unrealized P/L:</strong> <span class="${stock.unrealizedPnl >= 0 ? 'text-success' : 'text-danger'}">${stock.unrealizedPnl >= 0 ? '+' : ''}${formatCurrency(stock.unrealizedPnl)}</span><br>
                                         <strong>Dividends:</strong> <span class="text-success">+${formatCurrency(stock.totalDividends)}</span>
                                     </p>
                                     <hr>
@@ -202,8 +139,7 @@
                                         <strong>Total Return:</strong> <span class="${totalReturnClass}">${totalReturnSign}${formatCurrency(totalReturn)}</span>
                                     </p>
                                 </div>
-                            </div>
-                        `;
+                            </div>`;
                         portfolioSummary.appendChild(stockCard);
                     }
                 } catch (error) {
@@ -212,7 +148,6 @@
                 }
             }
 
-            // Handle form submission for new transactions
             addTransactionForm.addEventListener('submit', async function (e) {
                 e.preventDefault();
                 const transaction = {
@@ -228,29 +163,21 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(transaction),
                     });
-
-                    if (!response.ok) {
-                        const err = await response.json();
-                        throw new Error(err.error || 'Failed to add transaction');
-                    }
-                    
+                    if (!response.ok) throw new Error((await response.json()).error || 'Failed to add transaction');
                     addTransactionForm.reset();
-                    loadInitialData(); // Refresh both transactions and portfolio
+                    loadInitialData();
                 } catch (error) {
                     console.error('Error adding transaction:', error);
                     alert(`Error: ${error.message}`);
                 }
             });
             
-            // Handle Database Initialization
             initDbBtn.addEventListener('click', async () => {
-                if (!confirm('Are you sure you want to initialize the database? This will add sample data.')) {
-                    return;
-                }
+                if (!confirm('Are you sure you want to initialize the database? This will create tables and add sample data.')) return;
                 try {
                     const response = await fetch(`${API_BASE_URL}/initialize-database`, { method: 'POST' });
                     if (!response.ok) throw new Error('Failed to initialize database.');
-                    alert('Database initialized successfully with sample data!');
+                    alert('Database initialized successfully!');
                     loadInitialData();
                 } catch (error) {
                     console.error('Error initializing database:', error);
@@ -258,10 +185,8 @@
                 }
             });
 
-            // Refresh button
             refreshPortfolioBtn.addEventListener('click', getPortfolio);
 
-            // Initial data load
             function loadInitialData() {
                 getTransactions();
                 getPortfolio();
