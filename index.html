@@ -124,8 +124,12 @@
         <div id="confirm-modal" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-sm mx-4"><h3 id="confirm-title" class="text-lg font-semibold mb-4 text-gray-800">確認操作</h3><p id="confirm-message" class="text-gray-600 mb-6">您確定要執行此操作嗎？</p><div class="flex justify-end space-x-4"><button id="confirm-cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">取消</button><button id="confirm-ok-btn" class="btn bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-red-700">確定</button></div></div></div></div>
     </div>
 
+
+
+
+    
 <script type="module">
-    // --- FINAL SCRIPT - With Split Functionality (FULL UNOMITTED CODE) ---
+    // --- FINAL SCRIPT - With Benchmark Setting (FULL UNOMITTED CODE) ---
 
     // --- Global Variables & Constants ---
     const API_BASE_URL = "https://portfolio-api-handler.chired.workers.dev";
@@ -149,7 +153,7 @@
             headers['Authorization'] = `Bearer ${token}`;
         }
         const response = await fetch(url, { ...options, headers });
-        
+
         const contentType = response.headers.get("content-type");
         let data;
         if (contentType && contentType.indexOf("application/json") !== -1) {
@@ -167,23 +171,24 @@
         if (!userId) return;
         document.getElementById('loading-overlay').style.display = 'flex';
         try {
-            const [transactionsData, snapshotData, splitsData] = await Promise.all([
+            const [transactionsData, snapshotData, splitsData, settingsData] = await Promise.all([
                 authedFetch(`${API_BASE_URL}/api/transactions`),
                 authedFetch(`${API_BASE_URL}/api/portfolio/snapshot`),
-                authedFetch(`${API_BASE_URL}/api/splits`)
+                authedFetch(`${API_BASE_URL}/api/splits`),
+                authedFetch(`${API_BASE_URL}/api/settings`)
             ]);
-            
+
             transactions = (transactionsData || []).map(t => ({...t, date: new Date(t.date)}));
             userSplits = (splitsData || []).map(s => ({...s, date: new Date(s.date)}));
+
+            document.getElementById('benchmark-symbol-input').value = settingsData?.benchmarkSymbol || 'SPY';
 
             renderTransactionsTable();
             renderSplitsTable();
             updateDashboard(snapshotData || {});
             renderHoldingsTable(snapshotData ? JSON.parse(snapshotData.holdings || '{}') : {});
-            
-            // In future steps, we will load and render chart data as well
             updateAssetChart({});
-            updateTwrChart({}, {}, '...');
+            updateTwrChart({}, {}, settingsData?.benchmarkSymbol || 'SPY');
 
         } catch (error) {
             showNotification('error', `讀取資料失敗: ${error.message}`);
@@ -317,7 +322,7 @@
             btn.textContent = '儲存';
         }
     }
-    
+
     async function handleDelete(event) {
         const transactionId = event.target.dataset.id;
         if (!transactionId) return;
@@ -334,7 +339,7 @@
             }
         });
     }
-    
+
     function handleEdit(event) {
         const transactionId = event.target.dataset.id;
         const transactionToEdit = transactions.find(t => t.id === transactionId);
@@ -382,7 +387,29 @@
             }
         });
     }
-    
+
+    async function handleUpdateBenchmark() {
+        const btn = document.getElementById('update-benchmark-btn');
+        const newBenchmark = document.getElementById('benchmark-symbol-input').value.trim();
+        if (!newBenchmark) {
+            showNotification('error', '請輸入 Benchmark 的股票代碼。');
+            return;
+        }
+        try {
+            btn.disabled = true;
+            showNotification('info', `正在更新 Benchmark 為 ${newBenchmark}...`);
+            await authedFetch(`${API_BASE_URL}/api/settings`, {
+                method: 'PUT',
+                body: JSON.stringify({ benchmarkSymbol: newBenchmark })
+            });
+            showNotification('success', 'Benchmark 已成功儲存！');
+        } catch (error) {
+            showNotification('error', `更新失敗: ${error.message}`);
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
     // --- All Other Original UI and Helper Functions Below ---
     function initializeChart() {
         const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
@@ -483,7 +510,6 @@
     }
     function updateAssetChart(portfolioHistory = {}) { if(chart) chart.updateSeries([{ data: [] }]); }
     function updateTwrChart(twrHistory = {}, benchmarkHistory = {}, benchmarkSymbol = '...') { if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: [] }, { name: `Benchmark (${benchmarkSymbol})`, data: [] } ]); }
-    function handleUpdateBenchmark() { showNotification('info', '此功能待開發'); }
     function openModal(isEdit = false, transaction = null) {
         const form = document.getElementById('transaction-form');
         form.reset();
