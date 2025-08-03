@@ -321,23 +321,45 @@
             const saveBtn = document.getElementById('save-btn');
             saveBtn.disabled = true;
             saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
+        
             const txId = document.getElementById('transaction-id').value;
             const isEditing = !!txId;
-            const transactionData = { date: document.getElementById('transaction-date').value, symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(), type: document.querySelector('input[name="transaction-type"]:checked').value, quantity: parseFloat(document.getElementById('quantity').value), price: parseFloat(document.getElementById('price').value), currency: document.getElementById('currency').value, totalCost: parseFloat(document.getElementById('total-cost').value) || null, exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null };
+        
+            const transactionData = {
+                date: document.getElementById('transaction-date').value,
+                symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+                type: document.querySelector('input[name="transaction-type"]:checked').value,
+                quantity: parseFloat(document.getElementById('quantity').value),
+                price: parseFloat(document.getElementById('price').value),
+                currency: document.getElementById('currency').value,
+                totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+                exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+            };
+        
             if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
                 showNotification('error', '請填寫所有必填欄位。');
-                saveBtn.disabled = false; saveBtn.textContent = '儲存'; return;
+                saveBtn.disabled = false;
+                saveBtn.textContent = '儲存';
+                return;
             }
+        
             try {
+                // [核心修正] 根據是「新增」還是「編輯」，準備不同的 payload
                 const action = isEditing ? 'edit_transaction' : 'add_transaction';
-                await apiRequest(action, { txId, txData: transactionData });
+                const payload = isEditing ? { txId, txData: transactionData } : transactionData; // 新增時，直接傳送交易資料
+        
+                await apiRequest(action, payload);
+        
                 closeModal('transaction-modal');
                 await loadPortfolioData();
+                showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
+        
             } catch (error) {
                 console.error('Failed to save transaction:', error);
                 showNotification('error', `儲存交易失敗: ${error.message}`);
             } finally {
-                saveBtn.disabled = false; saveBtn.textContent = '儲存';
+                saveBtn.disabled = false;
+                saveBtn.textContent = '儲存';
             }
         }
 
