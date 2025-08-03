@@ -1,7 +1,7 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v1.3.1 - 真正完整最終版)
-// == 修正：補上所有被遺漏的核心計算與輔助函式，此版本可直接複製貼上使用。
+// == GCP Cloud Function 完整程式碼 (v1.5.1 - 真正完整、無省略最終版)
+// == 功能：包含讀取、新增、編輯、刪除、拆股、更新Benchmark等所有後端功能。
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -52,7 +52,6 @@ const d1Client = {
 };
 
 // --- 資料準備與抓取函式 ---
-
 async function fetchAndSaveMarketData(symbol) {
   try {
     console.log(`Fetching full history for ${symbol} from Yahoo Finance...`);
@@ -124,7 +123,6 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
 
 
 // --- 核心計算與輔助函式 (完整版) ---
-
 const toDate = v => v.toDate ? v.toDate() : new Date(v);
 const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
 
@@ -492,9 +490,7 @@ function calculateCoreMetrics(evts, market) {
     return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
 }
 
-
 // --- 主計算流程 ---
-
 async function performRecalculation(uid) {
     console.log(`--- [${uid}] Recalculation Process Start (v2.0 - GCP/D1) ---`);
     try {
@@ -537,21 +533,21 @@ async function performRecalculation(uid) {
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol,
         };
-
-        dbOps.push({ sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] });
-        dbOps.push({
-            sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
-            params: [
-                uid,
-                JSON.stringify(summaryData),
-                JSON.stringify(dailyPortfolioValues),
-                JSON.stringify(twrHistory),
-                JSON.stringify(benchmarkHistory),
-                new Date().toISOString()
-            ]
-        });
-
-        await d1Client.batch(dbOps);
+        await d1Client.batch([
+            { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid]},
+            { 
+                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
+                params: [
+                    uid,
+                    JSON.stringify(summaryData),
+                    JSON.stringify(dailyPortfolioValues),
+                    JSON.stringify(twrHistory),
+                    JSON.stringify(benchmarkHistory),
+                    new Date().toISOString()
+                ]
+            },
+            ...dbOps
+        ]);
         console.log(`--- [${uid}] Recalculation Process Done ---`);
     } catch (e) {
         console.error(`[${uid}] CRITICAL ERROR during calculation:`, e);
@@ -560,8 +556,7 @@ async function performRecalculation(uid) {
 }
 
 
-// --- 統一的 HTTP 觸發器 ---
-
+// --- 統一的 HTTP 觸發器 (完整功能版) ---
 exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
@@ -574,13 +569,12 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     const apiKey = req.headers['x-api-key'];
     if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
+
     const { action, uid, data } = req.body;
     if (!action || !uid) return res.status(400).send({ success: false, message: 'Bad Request: Missing action or uid.' });
+
     try {
         switch (action) {
-            case 'recalculate':
-                await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: `Recalculation successful for ${uid}` });
             case 'get_data': {
                 const [summaryResult, holdingsResult, transactionsResult, splitsResult] = await Promise.all([
                     d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
@@ -588,30 +582,18 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                     d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
                     d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
                 ]);
-
                 const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
                 const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
                 const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
                 const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-
                 return res.status(200).send({ 
                     success: true, 
-                    data: { 
-                        summary, 
-                        holdings: holdingsResult,
-                        transactions: transactionsResult,
-                        splits: splitsResult,
-                        history,
-                        twrHistory,
-                        benchmarkHistory
-                    } 
+                    data: { summary, holdings: holdingsResult, transactions: transactionsResult, splits: splitsResult, history, twrHistory, benchmarkHistory } 
                 });
             }
             case 'add_transaction': {
                 const txData = data;
-                if (!txData || !txData.symbol) {
-                    return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
-                }
+                if (!txData || !txData.symbol) return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
                 const newTxId = uuidv4();
                 await d1Client.query(
                     `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -620,11 +602,26 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: 'Transaction added and recalculation triggered.', txId: newTxId });
             }
+            case 'edit_transaction': {
+                const { txId, txData } = data;
+                if (!txId || !txData) return res.status(400).send({ success: false, message: 'Bad Request: Missing txId or txData.' });
+                await d1Client.query(
+                    `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
+                    [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
+                );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Transaction updated and recalculation triggered.' });
+            }
+            case 'delete_transaction': {
+                const { txId } = data;
+                if (!txId) return res.status(400).send({ success: false, message: 'Bad Request: Missing txId.' });
+                await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Transaction deleted and recalculation triggered.' });
+            }
             case 'add_split': {
                 const splitData = data;
-                if (!splitData || !splitData.symbol || !splitData.ratio) {
-                    return res.status(400).send({ success: false, message: 'Bad Request: Missing split data.' });
-                }
+                if (!splitData || !splitData.symbol || !splitData.ratio) return res.status(400).send({ success: false, message: 'Bad Request: Missing split data.' });
                 const newSplitId = uuidv4();
                 await d1Client.query(
                     `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`,
@@ -632,6 +629,24 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 );
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: 'Split event added and recalculation triggered.', splitId: newSplitId });
+            }
+            case 'delete_split': {
+                const { splitId } = data;
+                if (!splitId) return res.status(400).send({ success: false, message: 'Bad Request: Missing splitId.' });
+                await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Split event deleted and recalculation triggered.' });
+            }
+            case 'update_benchmark': {
+                const { benchmarkSymbol } = data;
+                if (!benchmarkSymbol) return res.status(400).send({ success: false, message: 'Bad Request: Missing benchmarkSymbol.' });
+                await getMarketDataFromDb([], benchmarkSymbol); 
+                await d1Client.query(
+                    'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
+                    [uid, 'benchmarkSymbol', benchmarkSymbol]
+                );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Benchmark updated and recalculation triggered.' });
             }
             default:
                 return res.status(400).send({ success: false, message: 'Unknown action' });
