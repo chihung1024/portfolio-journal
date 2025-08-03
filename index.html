@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>股票交易紀錄與資產分析系統</title>
+    <title>股票交易紀錄與資產分析 (TWR 最終版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
@@ -125,556 +125,373 @@
     </div>
 
     <script type="module">
+    // =========================================================================================
+    // == 前端 JavaScript 完整程式碼 (v1.3.1 - 真正完整最終版)
+    // =========================================================================================
 
-        // --- Global Variables ---
-        let db, auth;
-        let transactions = [];
-        let userSplits = [];
-        let chart, twrChart;
-        let userId;
-        let transactionsUnsubscribe = null;
-        let splitsUnsubscribe = null;
-        let historyUnsubscribe = null;
-        let holdingsUnsubscribe = null;
-        let confirmCallback = null;
-        const exchangeRateCache = new Map();
-        let dataLoaded = { transactions: false, holdings: false, splits: false };
+    const API = {
+      URL: 'https://portfolio-journal-api-951186116587.asia-east1.run.app', // <-- 請再次確認這是您自己的 Cloud Run 服務網址
+      KEY: 'QqcUhBV04KciA1xeDibpOmcLpAQWDt' // <-- 請再次確認這是您自己的 API KEY
+    };
 
-        // --- App Initialization ---
-        document.addEventListener('DOMContentLoaded', () => {
-            // 移除所有 Firebase 相關的登入/登出按鈕
-            document.getElementById('auth-container').style.display = 'none';
-            document.getElementById('logout-btn').style.display = 'none';
+    const currentUserId = "test-user-01"; // 固定的測試使用者ID
+    let transactions = [];
+    let userSplits = [];
+    let chart, twrChart;
+    let confirmCallback = null;
+
+    // --- 主流程 ---
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('auth-container').style.display = 'none';
+        document.getElementById('logout-btn').style.display = 'none';
+        document.getElementById('user-info').classList.remove('hidden');
+        document.getElementById('user-id').textContent = `測試使用者: ${currentUserId}`;
+        document.getElementById('auth-status').textContent = '已連線';
+
+        initializeChart();
+        initializeTwrChart();
+        setupEventListeners();
+        lucide.createIcons();
         
-            // 設定事件監聽器
-            setupEventListeners();
-            lucide.createIcons();
+        loadPortfolioData();
+    });
+
+    async function loadPortfolioData() {
+        document.getElementById('loading-overlay').style.display = 'flex';
+        showNotification('info', '正在從後端同步資料...');
         
-            // 網頁載入後，直接讀取資料
-            loadPortfolioData();
+        try {
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                body: JSON.stringify({ action: 'get_data', uid: currentUserId })
+            });
+
+            const result = await response.json();
+            if (!result.success) throw new Error(result.message);
+            
+            const portfolioData = result.data;
+            transactions = portfolioData.transactions || [];
+            userSplits = portfolioData.splits || [];
+            
+            const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+                obj[item.symbol] = item;
+                return obj;
+            }, {});
+            
+            renderHoldingsTable(holdingsObject);
+            renderTransactionsTable();
+            renderSplitsTable();
+            updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+            updateAssetChart(portfolioData.history || {});
+            const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+            updateTwrChart(portfolioData.twrHistory || {}, portfolioData.benchmarkHistory || {}, benchmarkSymbol);
+            document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+            
+            showNotification('success', '資料同步完成！');
+
+        } catch (error) {
+            console.error('Failed to load portfolio data:', error);
+            showNotification('error', `讀取資料失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+    }
+
+    // --- UI 渲染函式 ---
+    function renderHoldingsTable(currentHoldings) {
+        const tableBody = document.getElementById('holdings-table-body');
+        tableBody.innerHTML = '';
+        const holdingsArray = Object.values(currentHoldings);
+        if (holdingsArray.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</td></tr>`;
+            return;
+        }
+        holdingsArray.sort((a,b) => b.marketValueTWD - a.marketValueTWD).forEach(h => {
+            const row = document.createElement('tr');
+            row.className = "hover:bg-gray-50";
+            const decimals = isTwStock(h.symbol) ? 0 : 2;
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">${h.symbol}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.totalCostTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-semibold ${h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-semibold ${h.returnRate >= 0 ? 'text-red-600' : 'text-green-600'}">${(h.returnRate || 0).toFixed(2)}%</td>
+            `;
+            tableBody.appendChild(row);
         });
+    }
 
-        function initializeChart() {
-            const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
-            chart = new ApexCharts(document.querySelector("#asset-chart"), options);
-            chart.render();
+    function renderTransactionsTable() {
+        const tableBody = document.getElementById('transactions-table-body');
+        tableBody.innerHTML = '';
+        if (transactions.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有交易紀錄。</td></tr>`;
+            return;
         }
+        for (const t of transactions) {
+            const row = document.createElement('tr');
+            row.className = "hover:bg-gray-50";
+            const typeText = { buy: '買入', sell: '賣出' };
+            const typeColor = { buy: 'text-red-500', sell: 'text-green-500' };
+            const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * (t.exchangeRate || 1);
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap">${t.date.split('T')[0]}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-semibold ${typeColor[t.type]}">${typeText[t.type]}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td>
+                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                    <button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900" disabled title="刪除功能待開發">刪除</button>
+                </td>`;
+            tableBody.appendChild(row);
+        };
+    }
 
-        function initializeTwrChart() {
-            const options = {
-                chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
-                series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
-                xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } },
-                yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
-                dataLabels: { enabled: false },
-                stroke: { curve: 'smooth', width: 2 },
-                tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
-                colors: ['#4f46e5', '#f59e0b']
-            };
-            twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
-            twrChart.render();
+    function renderSplitsTable() {
+        const tableBody = document.getElementById('splits-table-body');
+        tableBody.innerHTML = '';
+        if (userSplits.length === 0) {
+            tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
+            return;
         }
+        for (const s of userSplits) {
+            const row = document.createElement('tr');
+            row.className = "hover:bg-gray-50";
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap">${s.date.split('T')[0]}</td>
+                <td class="px-6 py-4 whitespace-nowrap font-medium">${s.symbol.toUpperCase()}</td>
+                <td class="px-6 py-4 whitespace-nowrap">${s.ratio}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                    <button data-id="${s.id}" class="delete-split-btn text-red-600 hover:text-red-900" disabled title="刪除功能待開發">刪除</button>
+                </td>`;
+            tableBody.appendChild(row);
+        }
+    }
 
-        // --- Authentication & User Handling ---
+    function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr) {
+        const holdingsArray = Object.values(currentHoldings);
+        const totalMarketValue = holdingsArray.reduce((sum, h) => sum + (h.marketValueTWD || 0), 0);
+        const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
+        
+        document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
+        
+        const unrealizedEl = document.getElementById('unrealized-pl');
+        unrealizedEl.textContent = formatNumber(totalUnrealizedPL, 0);
+        unrealizedEl.className = `text-3xl font-bold mt-2 ${totalUnrealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
+        
+        const realizedEl = document.getElementById('realized-pl');
+        realizedEl.textContent = formatNumber(realizedPL, 0);
+        realizedEl.className = `text-3xl font-bold mt-2 ${realizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
 
-        async function loadPortfolioData() {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            showNotification('info', '正在從新的後端同步資料...');
+        const totalReturnEl = document.getElementById('total-return');
+        totalReturnEl.textContent = `${(overallReturn || 0).toFixed(2)}%`;
+        totalReturnEl.className = `text-3xl font-bold mt-2 ${overallReturn >= 0 ? 'text-red-600' : 'text-green-600'}`;
         
-            try {
-                const response = await fetch(API.URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
-                    body: JSON.stringify({ action: 'get_data', uid: currentUserId })
-                });
-        
-                const result = await response.json();
-                if (!result.success) throw new Error(result.message);
-        
-                // 使用從新後端讀取到的資料來更新畫面
-                const portfolioData = result.data;
-                const holdings = portfolioData.holdings || [];
-                const summary = portfolioData.summary || {};
-        
-                // 將 D1 的 holdings array 轉為舊格式的 object
-                const holdingsObject = holdings.reduce((obj, item) => {
-                    obj[item.symbol] = item;
-                    return obj;
-                }, {});
-        
-                renderHoldingsTable(holdingsObject);
-                updateDashboard(holdingsObject, summary.totalRealizedPL, summary.overallReturnRate, summary.xirr);
-        
-                showNotification('success', '新後端資料同步完成！');
-        
-            } catch (error) {
-                console.error('Failed to load portfolio data:', error);
-                showNotification('error', `讀取資料失敗: ${error.message}`);
-            } finally {
-                document.getElementById('loading-overlay').style.display = 'none';
-            }
-        }
+        const xirrEl = document.getElementById('xirr-value');
+        xirrEl.textContent = `${((xirr || 0) * 100).toFixed(2)}%`;
+        xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
+    }
 
-        async function handleRegister() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
-            try {
-                await createUserWithEmailAndPassword(auth, email, password);
-                showNotification('success', '註冊成功！已自動登入。');
-            } catch (error) {
-                console.error("註冊失敗:", error);
-                showNotification('error', `註冊失敗: ${error.message}`);
-            }
-        }
+    function updateAssetChart(portfolioHistory) {
+        if (!portfolioHistory || Object.keys(portfolioHistory).length === 0) { chart.updateSeries([{ data: [] }]); return; }
+        const chartData = Object.entries(portfolioHistory).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]);
+        chart.updateSeries([{ data: chartData }]);
+    }
+    
+    function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
+        const formatHistory = (history) => history ? Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]) : [];
+        twrChart.updateSeries([
+            { name: '投資組合', data: formatHistory(twrHistory) },
+            { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) }
+        ]);
+    }
 
-        async function handleLogin() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
-            try {
-                await signInWithEmailAndPassword(auth, email, password);
-                showNotification('success', '登入成功！');
-            } catch (error) {
-                console.error("登入失敗:", error);
-                showNotification('error', `登入失敗: ${error.message}`);
-            }
-        }
+    // --- 事件處理函式 ---
+    async function handleFormSubmit(e) {
+        e.preventDefault();
+        const saveBtn = document.getElementById('save-btn');
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...';
 
-        async function handleLogout() {
-            try {
-                await signOut(auth);
-                transactions = [];
-                userSplits = [];
-                showNotification('info', '您已成功登出。');
-            } catch (error) {
-                console.error("登出失敗:", error);
-                showNotification('error', `登出失敗: ${error.message}`);
-            }
-        }
-        
-        // --- Event Listeners Setup ---
-        function setupEventListeners() {
-            document.getElementById('add-transaction-btn').addEventListener('click', () => openModal());
-            document.getElementById('cancel-btn').addEventListener('click', closeModal);
-            document.getElementById('modal-backdrop-trans').addEventListener('click', closeModal);
-            document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
-            document.getElementById('manage-splits-btn').addEventListener('click', openSplitModal);
-            document.getElementById('cancel-split-btn').addEventListener('click', closeSplitModal);
-            document.getElementById('modal-backdrop-split').addEventListener('click', closeSplitModal);
-            document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
-            document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
-            document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-            document.getElementById('confirm-ok-btn').addEventListener('click', () => { if (confirmCallback) { confirmCallback(); } hideConfirm(); });
-            document.getElementById('currency').addEventListener('change', toggleOptionalFields);
-            document.getElementById('login-btn').addEventListener('click', handleLogin);
-            document.getElementById('register-btn').addEventListener('click', handleRegister);
-            document.getElementById('logout-btn').addEventListener('click', handleLogout);
-            document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
-        }
-
-        async function handleUpdateBenchmark() {
-            const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
-            if (!newBenchmark) {
-                showNotification('error', '請輸入 Benchmark 的股票代碼。');
-                return;
-            }
-            if (!userId) return;
-
-            showNotification('info', `正在更新 Benchmark 為 ${newBenchmark} 並觸發重算...`);
-            const benchmarkControlRef = doc(db, 'users', userId, 'controls', 'benchmark_control');
-            try {
-                await setDoc(benchmarkControlRef, { 
-                    symbol: newBenchmark,
-                    updatedAt: serverTimestamp()
-                });
-                showNotification('success', 'Benchmark 更新請求已送出！後端將在幾秒後開始處理。');
-            } catch (error) {
-                console.error("更新 Benchmark 失敗:", error);
-                showNotification('error', `更新 Benchmark 失敗: ${error.message}`);
-            }
-        }
-        
-        // --- Data Listeners (Firestore) ---
-
-        
-        function checkInitialLoad() {
-            const loadingOverlay = document.getElementById('loading-overlay');
-            if (loadingOverlay.style.display !== 'none' && dataLoaded.transactions && dataLoaded.splits && dataLoaded.holdings) {
-                 loadingOverlay.style.display = 'none';
-                 showNotification('success', '雲端資料同步完成！');
-            }
-        }
-        
-        // --- Rendering Functions ---
-        function renderHoldingsTable(currentHoldings) {
-            const tableBody = document.getElementById('holdings-table-body');
-            tableBody.innerHTML = '';
-            const holdingsArray = Object.values(currentHoldings);
-            if (holdingsArray.length === 0) {
-                tableBody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</td></tr>`;
-                return;
-            }
-            holdingsArray.sort((a,b) => b.marketValueTWD - a.marketValueTWD).forEach(h => {
-                const row = document.createElement('tr');
-                row.className = "hover:bg-gray-50";
-                const decimals = isTwStock(h.symbol) ? 0 : 2;
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">${h.symbol}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.totalCostTWD, 0)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-semibold ${h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-semibold ${h.returnRate >= 0 ? 'text-red-600' : 'text-green-600'}">${(h.returnRate || 0).toFixed(2)}%</td>
-                `;
-                tableBody.appendChild(row);
-            });
-        }
-
-        function renderTransactionsTable() {
-            const tableBody = document.getElementById('transactions-table-body');
-            tableBody.innerHTML = '';
-            if (transactions.length === 0) {
-                tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有交易紀錄。</td></tr>`;
-                return;
-            }
-            for (const t of [...transactions].reverse()) {
-                const row = document.createElement('tr');
-                row.className = "hover:bg-gray-50";
-                const typeText = { buy: '買入', sell: '賣出' };
-                const typeColor = { buy: 'text-red-500', sell: 'text-green-500' };
-                const totalAmountOriginal = t.totalCost || (t.quantity * t.price);
-                const transactionDate = t.date.toDate ? t.date.toDate().toISOString().split('T')[0] : t.date;
-                const decimals = isTwStock(t.symbol) ? 0 : 2;
-                let rateForDisplay = 'N/A';
-                let totalAmountTWD_HTML = '計算中...';
-                if (t.currency === 'TWD') {
-                    rateForDisplay = '1.0';
-                    totalAmountTWD_HTML = formatNumber(totalAmountOriginal, 0);
-                } else {
-                    const usedRate = t.exchangeRate || exchangeRateCache.get(transactionDate);
-                    if (usedRate) {
-                        rateForDisplay = t.exchangeRate ? `${formatNumber(usedRate, 4)} (手動)` : `${formatNumber(usedRate, 4)} (自動)`;
-                        totalAmountTWD_HTML = formatNumber(totalAmountOriginal * usedRate, 0);
-                    } else {
-                        totalAmountTWD_HTML = '<span class="text-xs text-orange-600">匯率資料不足</span>';
-                    }
-                }
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-semibold ${typeColor[t.type]}">${typeText[t.type]}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, decimals)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td>
-                    <td class="px-6 py-4 whitespace-nowrap">${totalAmountTWD_HTML} <span class="text-xs text-gray-500">@ ${rateForDisplay}</span></td>
-                    <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
-                tableBody.appendChild(row);
-            };
-            document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', handleEdit));
-            document.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', handleDelete));
-        }
-
-        function renderSplitsTable() {
-            const tableBody = document.getElementById('splits-table-body');
-            tableBody.innerHTML = '';
-            if (userSplits.length === 0) {
-                tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
-                return;
-            }
-            for (const s of [...userSplits].reverse()) {
-                const row = document.createElement('tr');
-                row.className = "hover:bg-gray-50";
-                const splitDate = s.date.toDate ? s.date.toDate().toISOString().split('T')[0] : s.date;
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap">${splitDate}</td>
-                    <td class="px-6 py-4 whitespace-nowrap font-medium">${s.symbol.toUpperCase()}</td>
-                    <td class="px-6 py-4 whitespace-nowrap">${s.ratio}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${s.id}" class="delete-split-btn text-red-600 hover:text-red-900">刪除</button></td>`;
-                tableBody.appendChild(row);
-            }
-            document.querySelectorAll('.delete-split-btn').forEach(btn => btn.addEventListener('click', handleDeleteSplit));
-        }
-
-        function updateDashboard(currentHoldings, currentRealizedPL, currentOverallReturn, currentXIRR) {
-            const holdingsArray = Object.values(currentHoldings);
-            const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
-            const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
-            
-            document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
-            
-            const unrealizedEl = document.getElementById('unrealized-pl');
-            unrealizedEl.textContent = formatNumber(totalUnrealizedPL, 0);
-            unrealizedEl.className = `text-3xl font-bold mt-2 ${totalUnrealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
-            
-            const realizedEl = document.getElementById('realized-pl');
-            realizedEl.textContent = formatNumber(currentRealizedPL, 0);
-            realizedEl.className = `text-3xl font-bold mt-2 ${currentRealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
-
-            const totalReturnEl = document.getElementById('total-return');
-            totalReturnEl.textContent = `${(currentOverallReturn || 0).toFixed(2)}%`;
-            totalReturnEl.className = `text-3xl font-bold mt-2 ${currentOverallReturn >= 0 ? 'text-red-600' : 'text-green-600'}`;
-            
-            const xirrEl = document.getElementById('xirr-value');
-            xirrEl.textContent = `${((currentXIRR || 0) * 100).toFixed(2)}%`;
-            xirrEl.className = `text-3xl font-bold mt-2 ${currentXIRR >= 0 ? 'text-red-600' : 'text-green-600'}`;
-        }
-
-        function updateAssetChart(portfolioHistory) {
-            if (!portfolioHistory || Object.keys(portfolioHistory).length === 0) {
-                chart.updateSeries([{ data: [] }]);
-                return;
-            }
-            const chartData = Object.entries(portfolioHistory)
-                .sort((a, b) => new Date(a[0]) - new Date(b[0]))
-                .map(([date, value]) => [new Date(date).getTime(), value]);
-            chart.updateSeries([{ data: chartData }]);
-        }
-        
-        function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
-            const formatHistory = (history) => history ? Object.entries(history)
-                .sort((a, b) => new Date(a[0]) - new Date(b[0]))
-                .map(([date, value]) => [new Date(date).getTime(), value]) : [];
-
-            twrChart.updateSeries([
-                { name: '投資組合', data: formatHistory(twrHistory) },
-                { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) }
-            ]);
-        }
-        
-        // --- Utility & Form Handling Functions ---
-        async function updateExchangeRateCache() {
-            const uniqueDates = [...new Set(transactions.map(t => t.date.toDate ? t.date.toDate().toISOString().split('T')[0] : t.date))];
-            const rateDocRef = doc(db, 'exchange_rates', 'TWD=X');
-            try {
-                const docSnap = await getDoc(rateDocRef);
-                if (docSnap.exists()) {
-                    const rates = docSnap.data().rates;
-                    for (const date of uniqueDates) {
-                        if (!exchangeRateCache.has(date)) {
-                            exchangeRateCache.set(date, findNearestAvailableRate(rates, date));
-                        }
-                    }
-                }
-            } catch (e) { console.error(`從 Firestore 讀取匯率失敗:`, e); }
-        }
-
-        function findNearestAvailableRate(history, targetDateStr) {
-            if (!history || !targetDateStr || Object.keys(history).length === 0) return null;
-            const targetDate = new Date(targetDateStr);
-            if (history[targetDateStr]) return history[targetDateStr];
-            for (let i = 1; i <= 7; i++) {
-                const d = new Date(targetDate);
-                d.setDate(d.getDate() - i);
-                const d_str = d.toISOString().split('T')[0];
-                if (history[d_str]) return history[d_str];
-            }
-            const sortedDates = Object.keys(history).sort();
-            let closestDate = null;
-            for (const dateStr of sortedDates) {
-                if (dateStr <= targetDateStr) { closestDate = dateStr; } else { break; }
-            }
-            return closestDate ? history[closestDate] : null;
-        }
-        
-        // FINAL BUG FIX: handleFormSubmit 的最終修正版
-        async function handleFormSubmit(e) {
-            e.preventDefault();
-        
-            const transactionData = {
-                date: document.getElementById('transaction-date').value,
-                symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
-                type: document.querySelector('input[name="transaction-type"]:checked').value,
-                quantity: parseFloat(document.getElementById('quantity').value),
-                price: parseFloat(document.getElementById('price').value),
-                currency: document.getElementById('currency').value,
-                totalCost: parseFloat(document.getElementById('total-cost').value) || null,
-                exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
-            };
-        
-            if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-                showNotification('error', '請填寫所有必填欄位。');
-                return;
-            }
-        
-            showNotification('info', '正在新增交易並觸發後端重新計算...');
-        
-            try {
-                const response = await fetch(API.URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
-                    body: JSON.stringify({ 
-                        action: 'add_transaction', 
-                        uid: currentUserId, 
-                        data: transactionData 
-                    })
-                });
-        
-                const result = await response.json();
-                if (!result.success) throw new Error(result.message);
-        
-                closeModal();
-                showNotification('success', '交易已新增！正在刷新頁面...');
-        
-                // 新增成功後，重新載入所有資料來更新畫面
-                await loadPortfolioData();
-        
-            } catch (error) {
-                console.error('Failed to add transaction:', error);
-                showNotification('error', `新增交易失敗: ${error.message}`);
-            }
-        }
-
-        async function handleSplitFormSubmit(e) {
-            e.preventDefault();
-            if (!userId) { showNotification('error', '請先登入！'); return; }
-            const splitData = {
-                date: new Date(document.getElementById('split-date').value),
-                symbol: document.getElementById('split-symbol').value.toUpperCase().trim(),
-                ratio: parseFloat(document.getElementById('split-ratio').value)
-            };
-            if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
-                showNotification('error', '請填寫所有欄位並確保比例大於0。');
-                return;
-            }
-            const splitsCol = collection(db, 'users', userId, 'splits');
-            try {
-                await addDoc(splitsCol, splitData);
-                closeSplitModal();
-                showNotification('success', '拆股事件已新增！');
-            } catch (error) {
-                console.error("儲存拆股事件失敗:", error);
-                showNotification('error', "儲存失敗，請稍後再試。");
-            }
-        }
-        
-        async function handleDelete(e) {
-            const id = e.target.dataset.id;
-            showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
-                try {
-                    await deleteDoc(doc(db, 'users', userId, 'transactions', id));
-                    showNotification('success', '交易紀錄已刪除。');
-                } catch (error) {
-                    console.error("刪除失敗:", error);
-                    showNotification('error', "刪除失敗，請稍後再試。");
-                }
-            });
-        }
-
-        async function handleDeleteSplit(e) {
-            const id = e.target.dataset.id;
-            showConfirm('確定要刪除這個拆股事件嗎？', async () => {
-                try {
-                    await deleteDoc(doc(db, 'users', userId, 'splits', id));
-                    showNotification('success', '拆股事件已刪除。');
-                } catch (error) {
-                    console.error("刪除拆股事件失敗:", error);
-                    showNotification('error', "刪除失敗，請稍後再試。");
-                }
-            });
-        }
-        
-        function handleEdit(e) { 
-            const id = e.target.dataset.id; 
-            const transaction = transactions.find(t => t.id === id); 
-            if (transaction) { 
-                const txDataForEdit = { ...transaction };
-                if (txDataForEdit.date && txDataForEdit.date.toDate) {
-                    txDataForEdit.date = txDataForEdit.date.toDate().toISOString().split('T')[0];
-                }
-                openModal(true, txDataForEdit); 
-            } 
-        }
-
-        function openModal(isEdit = false, transaction = null) {
-            const form = document.getElementById('transaction-form'); 
-            form.reset(); 
-            document.getElementById('transaction-id').value = '';
-            if (isEdit && transaction) {
-                document.getElementById('modal-title').textContent = '編輯交易紀錄'; 
-                document.getElementById('transaction-id').value = transaction.id; 
-                document.getElementById('transaction-date').value = transaction.date;
-                document.getElementById('stock-symbol').value = transaction.symbol; 
-                document.querySelector(`input[name="transaction-type"][value="${transaction.type}"]`).checked = true; 
-                document.getElementById('quantity').value = transaction.quantity; 
-                document.getElementById('price').value = transaction.price; 
-                document.getElementById('currency').value = transaction.currency || 'USD';
-                document.getElementById('exchange-rate').value = transaction.exchangeRate || '';
-                document.getElementById('total-cost').value = transaction.totalCost || '';
-            } else {
-                document.getElementById('modal-title').textContent = '新增交易紀錄'; 
-                document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
-                document.getElementById('currency').value = 'USD';
-            }
-            toggleOptionalFields();
-            document.getElementById('transaction-modal').classList.remove('hidden');
-        }
-
-        function openSplitModal() {
-            document.getElementById('split-form').reset();
-            document.getElementById('split-modal').classList.remove('hidden');
-        }
-
-        function closeModal() { document.getElementById('transaction-modal').classList.add('hidden'); }
-        function closeSplitModal() { document.getElementById('split-modal').classList.add('hidden'); }
-        function hideConfirm() { confirmCallback = null; document.getElementById('confirm-modal').classList.add('hidden'); }
-
-        function toggleOptionalFields() {
-            const currency = document.getElementById('currency').value;
-            const exchangeRateField = document.getElementById('exchange-rate-field');
-            if (currency === 'USD') {
-                exchangeRateField.style.display = 'block';
-            } else {
-                exchangeRateField.style.display = 'none';
-            }
-        }
-        
-        function isTwStock(symbol) {
-            if (!symbol) return false;
-            const upperSymbol = symbol.toUpperCase();
-            return upperSymbol.endsWith('.TW') || upperSymbol.endsWith('.TWO');
-        }
-        function formatNumber(value, decimals = 2) { const num = Number(value); if (isNaN(num)) return '0.00'; return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); }
-        function showNotification(type, message) { 
-            const area = document.getElementById('notification-area'); 
-            const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : 'bg-red-500'); 
-            const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle'); 
-            const notification = document.createElement('div'); 
-            notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`; 
-            notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`; 
-            area.appendChild(notification); 
-            lucide.createIcons({nodes: [notification.querySelector('i')]});
-            setTimeout(() => { notification.style.transition = 'opacity 0.5s ease'; notification.style.opacity = '0'; setTimeout(() => notification.remove(), 500); }, 5000); 
-        }
-        function showConfirm(message, callback) { document.getElementById('confirm-message').textContent = message; confirmCallback = callback; document.getElementById('confirm-modal').classList.remove('hidden'); }
-        function showLoadingError(title, message, link = null) {
-            const loadingSpinner = document.getElementById('loading-spinner-icon');
-            if (loadingSpinner) loadingSpinner.style.display = 'none';
-            const loadingText = document.getElementById('loading-text');
-            let linkHtml = link ? `<a href="${link}" target="_blank" class="mt-4 inline-block bg-blue-500 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">前往 Firebase 控制台</a>` : '';
-            loadingText.innerHTML = `<p class="text-red-600 font-bold text-xl">${title}</p><p class="mt-2 text-gray-600">${message}</p>${linkHtml}`;
-        }
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-            document.getElementById(`${tabName}-tab`).classList.remove('hidden');
-            document.querySelectorAll('.tab-item').forEach(el => {
-                el.classList.remove('border-indigo-500', 'text-indigo-600');
-                el.classList.add('border-transparent', 'text-gray-500');
-            });
-            const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
-            activeTab.classList.add('border-indigo-500', 'text-indigo-600');
-            activeTab.classList.remove('border-transparent', 'text-gray-500');
-        }
-
-        const API = {
-          URL: 'https://portfolio-journal-api-951186116587.asia-east1.run.app', // <-- 請替換成您自己的 Cloud Run 服務網址
-          KEY: 'QqcUhBV04KciA1xeDibpOmcLpAQWDt' // <-- 請替換成您自己的 API KEY
+        const transactionData = {
+            date: document.getElementById('transaction-date').value,
+            symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+            type: document.querySelector('input[name="transaction-type"]:checked').value,
+            quantity: parseFloat(document.getElementById('quantity').value),
+            price: parseFloat(document.getElementById('price').value),
+            currency: document.getElementById('currency').value,
+            totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+            exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
         };
         
-        // [重要] 我們暫時用一個固定的使用者ID來測試，未來可以替換成真正的登入系統
-        const currentUserId = "cchung";
+        if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
+            showNotification('error', '請填寫所有必填欄位。');
+            saveBtn.disabled = false;
+            saveBtn.textContent = '儲存';
+            return;
+        }
+        
+        try {
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                body: JSON.stringify({ action: 'add_transaction', uid: currentUserId, data: transactionData })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || '伺服器發生錯誤');
 
+            closeModal('transaction-modal');
+            await loadPortfolioData();
+        } catch (error) {
+            console.error('Failed to add transaction:', error);
+            showNotification('error', `新增交易失敗: ${error.message}`);
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '儲存';
+        }
+    }
+
+    async function handleSplitFormSubmit(e) {
+        e.preventDefault();
+        const saveBtn = document.getElementById('save-split-btn');
+        saveBtn.disabled = true;
+
+        const splitData = {
+            date: document.getElementById('split-date').value,
+            symbol: document.getElementById('split-symbol').value.toUpperCase().trim(),
+            ratio: parseFloat(document.getElementById('split-ratio').value)
+        };
+        if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
+            showNotification('error', '請填寫所有欄位並確保比例大於0。');
+            saveBtn.disabled = false;
+            return;
+        }
+        try {
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                body: JSON.stringify({ action: 'add_split', uid: currentUserId, data: splitData })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || '伺服器發生錯誤');
+            
+            closeModal('split-modal');
+            await loadPortfolioData();
+        } catch (error) {
+            console.error('Failed to add split event:', error);
+            showNotification('error', `新增拆股事件失敗: ${error.message}`);
+        } finally {
+            saveBtn.disabled = false;
+        }
+    }
+    
+    // --- 其他輔助與初始化函式 ---
+    function setupEventListeners() {
+        document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
+        document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+        document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
+        document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
+        document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
+        document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
+        document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
+        document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+    }
+
+    function initializeChart() {
+        const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
+        chart = new ApexCharts(document.querySelector("#asset-chart"), options);
+        chart.render();
+    }
+
+    function initializeTwrChart() {
+        const options = {
+            chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
+            series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
+            xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } },
+            yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+            dataLabels: { enabled: false },
+            stroke: { curve: 'smooth', width: 2 },
+            tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+            colors: ['#4f46e5', '#f59e0b']
+        };
+        twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
+        twrChart.render();
+    }
+
+    function openModal(modalId) { 
+        const formId = modalId.replace('-modal', '-form');
+        const form = document.getElementById(formId);
+        if (form) form.reset();
+        
+        if (modalId === 'transaction-modal') {
+             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+             document.getElementById('save-btn').textContent = '儲存';
+        }
+        if (modalId === 'split-modal') {
+             document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+             document.getElementById('save-split-btn').textContent = '儲存';
+        }
+        
+        document.getElementById(modalId).classList.remove('hidden');
+    }
+
+    function closeModal(modalId) { 
+        document.getElementById(modalId).classList.add('hidden');
+    }
+
+    function isTwStock(symbol) { 
+        return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; 
+    }
+
+    function formatNumber(value, decimals = 2) { 
+        const num = Number(value); 
+        if (isNaN(num)) return '0.00'; 
+        return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); 
+    }
+
+    function showNotification(type, message) { 
+        const area = document.getElementById('notification-area'); 
+        const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : 'bg-red-500'); 
+        const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle'); 
+        const notification = document.createElement('div'); 
+        notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`; 
+        notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`; 
+        area.appendChild(notification); 
+        lucide.createIcons({nodes: [notification.querySelector('i')]});
+        setTimeout(() => { 
+            notification.style.transition = 'opacity 0.5s ease'; 
+            notification.style.opacity = '0'; 
+            setTimeout(() => notification.remove(), 500); 
+        }, 5000); 
+    }
+
+    function switchTab(tabName) { 
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden')); 
+        document.getElementById(`${tabName}-tab`).classList.remove('hidden'); 
+        document.querySelectorAll('.tab-item').forEach(el => { 
+            el.classList.remove('border-indigo-500', 'text-indigo-600'); 
+            el.classList.add('border-transparent', 'text-gray-500'); 
+        }); 
+        const activeTab = document.querySelector(`[data-tab="${tabName}"]`); 
+        activeTab.classList.add('border-indigo-500', 'text-indigo-600'); 
+        activeTab.classList.remove('border-transparent', 'text-gray-500'); 
+    }
+
+    function toggleOptionalFields() {
+        const currency = document.getElementById('currency').value;
+        const exchangeRateField = document.getElementById('exchange-rate-field');
+        if (currency === 'USD') {
+            exchangeRateField.style.display = 'block';
+        } else {
+            exchangeRateField.style.display = 'none';
+        }
+    }
     </script>
+
 </body>
 </html>
