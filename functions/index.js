@@ -11,9 +11,9 @@
 const functions = require("firebase-functions");
 const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
+const { v4: uuidv4 } = require('uuid'); // 新增 UUID 套件來產生交易ID
 
 // --- 平台設定 ---
-// 這些值將會透過 GCP 的環境變數功能設定，無需在此修改
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
 const D1_API_KEY = process.env.D1_API_KEY;
 
@@ -547,8 +547,10 @@ function calculateCoreMetrics(evts, market) {
 // --- [第三部分：統一的 HTTP 觸發器] ---
 // 這是我們整個後端服務唯一的入口點。
 
+// --- [核心修改] 統一的 HTTP 觸發器 (更新版) ---
+// 在 switch 中新增了 'get_data' 和 'add_transaction' 兩個 case
 exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
-    // 跨域請求設定 (CORS) - 允許來自任何來源的請求，方便初期開發
+    // 跨域請求設定 (CORS)
     res.set('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
       res.set('Access-Control-Allow-Methods', 'POST');
@@ -558,34 +560,49 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
       return;
     }
 
-    if (req.method !== 'POST') {
-        return res.status(405).send('Method Not Allowed');
-    }
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
-    // 安全性驗證：檢查 API Key 是否正確
     const apiKey = req.headers['x-api-key'];
-    if (apiKey !== D1_API_KEY) {
-        console.warn("Unauthorized access attempt with invalid API key.");
-        return res.status(401).send('Unauthorized');
-    }
+    if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
 
-    // 從請求的 body 中取得要執行的動作和使用者 ID
-    const { action, uid } = req.body;
-    if (!action || !uid) {
-        return res.status(400).send({ success: false, message: 'Bad Request: Missing action or uid.' });
-    }
+    const { action, uid, data } = req.body;
+    if (!action || !uid) return res.status(400).send({ success: false, message: 'Bad Request: Missing action or uid.' });
 
     try {
         switch (action) {
             case 'recalculate':
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: `Recalculation successful for ${uid}` });
-            
-            // 未來可以在此處新增更多 action，例如：
-            // case 'fetchPrice':
-            //   const { symbol } = req.body;
-            //   const priceData = await fetchAndSaveMarketData(symbol);
-            //   return res.status(200).send({ success: true, data: priceData });
+
+            case 'get_data': {
+                const [summaryResult, holdingsResult] = await Promise.all([
+                    d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid]),
+                    d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid])
+                ]);
+
+                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data) : {};
+                const holdings = holdingsResult;
+
+                return res.status(200).send({ success: true, data: { summary, holdings } });
+            }
+
+            case 'add_transaction': {
+                const txData = data;
+                if (!txData || !txData.symbol) {
+                    return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
+                }
+                const newTxId = uuidv4();
+
+                await d1Client.query(
+                    `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                );
+
+                // 新增交易後，立即觸發一次重新計算
+                await performRecalculation(uid);
+                
+                return res.status(200).send({ success: true, message: 'Transaction added and recalculation triggered.', txId: newTxId });
+            }
 
             default:
                 return res.status(400).send({ success: false, message: 'Unknown action' });
@@ -594,4 +611,4 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
         console.error(`[${uid}] Handler failed for action '${action}':`, error);
         return res.status(500).send({ success: false, message: `An internal error occurred: ${error.message}` });
     }
-  });
+});
