@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>股票交易紀錄與資產分析系統 (TWR 最終版)</title>
+    <title>股票交易紀錄與資產分析系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
@@ -125,21 +125,6 @@
     </div>
 
     <script type="module">
-        // --- Firebase SDK ---
-        import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-        // FINAL BUG FIX: 引入 deleteField 以便能刪除 Firestore 文件中的欄位
-        import { getFirestore, collection, doc, addDoc, onSnapshot, updateDoc, deleteDoc, query, orderBy, getDoc, setDoc, serverTimestamp, deleteField } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
-        // --- Firebase Configuration ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyAlymQXtutAG8UY48-TehVU70jD9RmCiBE",
-            authDomain: "trading-journal-4922c.firebaseapp.com",
-            projectId: "trading-journal-4922c",
-            storageBucket: "trading-journal-4922c.appspot.com",
-            messagingSenderId: "50863752247",
-            appId: "1:50863752247:web:766eaa892d2c8d28bb6bb2"
-        };
 
         // --- Global Variables ---
         let db, auth;
@@ -157,28 +142,17 @@
 
         // --- App Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
-            initialize();
+            // 移除所有 Firebase 相關的登入/登出按鈕
+            document.getElementById('auth-container').style.display = 'none';
+            document.getElementById('logout-btn').style.display = 'none';
+        
+            // 設定事件監聽器
+            setupEventListeners();
+            lucide.createIcons();
+        
+            // 網頁載入後，直接讀取資料
+            loadPortfolioData();
         });
-
-        async function initialize() {
-            if (!firebaseConfig.projectId) {
-                showLoadingError("設定錯誤！", "您的 firebaseConfig 中缺少 projectId。");
-                return;
-            }
-            try {
-                const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-                auth = getAuth(app);
-                db = getFirestore(app);
-                setupEventListeners();
-                initializeChart();
-                initializeTwrChart();
-                lucide.createIcons();
-                handleAuthentication();
-            } catch (error) {
-                console.error("Firebase 初始化失敗:", error);
-                showLoadingError("Firebase 初始化失敗！", `請檢查 console log: ${error.message}`);
-            }
-        }
 
         function initializeChart() {
             const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
@@ -202,44 +176,45 @@
         }
 
         // --- Authentication & User Handling ---
-        function handleAuthentication() {
-            onAuthStateChanged(auth, (user) => {
-                const loadingOverlay = document.getElementById('loading-overlay');
-                const mainContent = document.querySelector('main');
-                const authContainer = document.getElementById('auth-container');
-                const userInfo = document.getElementById('user-info');
-                const logoutBtn = document.getElementById('logout-btn');
-                if (user) {
-                    userId = user.uid;
-                    document.getElementById('auth-status').textContent = '已連線';
-                    document.getElementById('user-id').textContent = `使用者: ${user.email}`;
-                    loadingOverlay.style.display = 'flex';
-                    authContainer.classList.add('hidden');
-                    mainContent.classList.remove('hidden');
-                    userInfo.classList.remove('hidden');
-                    logoutBtn.classList.remove('hidden');
-                    setupDataListeners();
-                } else {
-                    userId = null;
-                    if (transactionsUnsubscribe) transactionsUnsubscribe();
-                    if (splitsUnsubscribe) splitsUnsubscribe();
-                    if (historyUnsubscribe) historyUnsubscribe();
-                    if (holdingsUnsubscribe) holdingsUnsubscribe();
-                    loadingOverlay.style.display = 'none';
-                    authContainer.classList.remove('hidden');
-                    mainContent.classList.add('hidden');
-                    userInfo.classList.add('hidden');
-                    logoutBtn.classList.add('hidden');
-                    renderHoldingsTable({});
-                    renderTransactionsTable();
-                    renderSplitsTable();
-                    updateDashboard({}, 0, 0, 0);
-                    updateAssetChart({});
-                    updateTwrChart({}, {}, '');
-                }
-            });
-        }
+
+        async function loadPortfolioData() {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            showNotification('info', '正在從新的後端同步資料...');
         
+            try {
+                const response = await fetch(API.URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                    body: JSON.stringify({ action: 'get_data', uid: currentUserId })
+                });
+        
+                const result = await response.json();
+                if (!result.success) throw new Error(result.message);
+        
+                // 使用從新後端讀取到的資料來更新畫面
+                const portfolioData = result.data;
+                const holdings = portfolioData.holdings || [];
+                const summary = portfolioData.summary || {};
+        
+                // 將 D1 的 holdings array 轉為舊格式的 object
+                const holdingsObject = holdings.reduce((obj, item) => {
+                    obj[item.symbol] = item;
+                    return obj;
+                }, {});
+        
+                renderHoldingsTable(holdingsObject);
+                updateDashboard(holdingsObject, summary.totalRealizedPL, summary.overallReturnRate, summary.xirr);
+        
+                showNotification('success', '新後端資料同步完成！');
+        
+            } catch (error) {
+                console.error('Failed to load portfolio data:', error);
+                showNotification('error', `讀取資料失敗: ${error.message}`);
+            } finally {
+                document.getElementById('loading-overlay').style.display = 'none';
+            }
+        }
+
         async function handleRegister() {
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
@@ -321,65 +296,7 @@
         }
         
         // --- Data Listeners (Firestore) ---
-        function setupDataListeners() {
-            if (!userId) return;
-            if (transactionsUnsubscribe) transactionsUnsubscribe();
-            if (splitsUnsubscribe) splitsUnsubscribe();
-            if (historyUnsubscribe) historyUnsubscribe();
-            if (holdingsUnsubscribe) holdingsUnsubscribe();
-            
-            dataLoaded = { transactions: false, holdings: false, splits: false };
-            transactions = [];
-            userSplits = [];
 
-            const transactionsCol = collection(db, 'users', userId, 'transactions');
-            const tq = query(transactionsCol, orderBy("date", "asc"));
-            transactionsUnsubscribe = onSnapshot(tq, (snapshot) => {
-                transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                dataLoaded.transactions = true;
-                updateExchangeRateCache().then(() => renderTransactionsTable());
-                checkInitialLoad();
-            }, (error) => console.error("讀取交易紀錄失敗:", error));
-
-            const splitsCol = collection(db, 'users', userId, 'splits');
-            const sq = query(splitsCol, orderBy("date", "asc"));
-            splitsUnsubscribe = onSnapshot(sq, (snapshot) => {
-                userSplits = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                dataLoaded.splits = true;
-                renderSplitsTable();
-                checkInitialLoad();
-            }, (error) => console.error("讀取拆股事件失敗:", error));
-            
-            const holdingsDocRef = doc(db, 'users', userId, 'user_data', 'current_holdings');
-            holdingsUnsubscribe = onSnapshot(holdingsDocRef, (docSnap) => {
-                let currentHoldings = {}, currentRealizedPL = 0, currentOverallReturn = 0, currentXIRR = 0;
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    currentHoldings = data.holdings || {};
-                    currentRealizedPL = data.totalRealizedPL || 0;
-                    currentOverallReturn = data.overallReturnRate || 0;
-                    currentXIRR = data.xirr || 0;
-                    document.getElementById('benchmark-symbol-input').value = data.benchmarkSymbol || 'SPY';
-                }
-                dataLoaded.holdings = true;
-                renderHoldingsTable(currentHoldings);
-                updateDashboard(currentHoldings, currentRealizedPL, currentOverallReturn, currentXIRR);
-                checkInitialLoad();
-            }, (error) => console.error("讀取持股資料失敗:", error));
-
-            const historyDocRef = doc(db, 'users', userId, 'user_data', 'portfolio_history');
-            historyUnsubscribe = onSnapshot(historyDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    updateAssetChart(data.history);
-                    const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value || 'SPY';
-                    updateTwrChart(data.twrHistory, data.benchmarkHistory, benchmarkSymbol);
-                } else {
-                     updateAssetChart({});
-                     updateTwrChart({}, {}, 'SPY');
-                }
-            }, (error) => console.error("讀取資產歷史失敗:", error));
-        }
         
         function checkInitialLoad() {
             const loadingOverlay = document.getElementById('loading-overlay');
@@ -564,74 +481,48 @@
         // FINAL BUG FIX: handleFormSubmit 的最終修正版
         async function handleFormSubmit(e) {
             e.preventDefault();
-            if (!userId) { 
-                showNotification('error', '請先登入！'); 
-                return; 
-            }
-            
-            const id = document.getElementById('transaction-id').value;
-            const isEditing = !!id;
-
-            // 步驟 1: 建立一個只包含必填欄位的基礎物件
-            const payload = { 
-                date: new Date(document.getElementById('transaction-date').value),
-                symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(), 
-                type: document.querySelector('input[name="transaction-type"]:checked').value, 
-                quantity: parseFloat(document.getElementById('quantity').value), 
-                price: parseFloat(document.getElementById('price').value), 
-                currency: document.getElementById('currency').value 
+        
+            const transactionData = {
+                date: document.getElementById('transaction-date').value,
+                symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+                type: document.querySelector('input[name="transaction-type"]:checked').value,
+                quantity: parseFloat(document.getElementById('quantity').value),
+                price: parseFloat(document.getElementById('price').value),
+                currency: document.getElementById('currency').value,
+                totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+                exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
             };
-
-            // 步驟 2: 驗證必填欄位
-            if (!payload.symbol || isNaN(payload.quantity) || isNaN(payload.price)) {
+        
+            if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
                 showNotification('error', '請填寫所有必填欄位。');
                 return;
             }
-
-            // 步驟 3: 根據輸入情況，動態地處理可選欄位
-            
-            // 處理手動匯率
-            const exchangeRateInput = document.getElementById('exchange-rate').value.trim();
-            if (payload.currency === 'USD') {
-                if (exchangeRateInput) {
-                    const exchangeRate = parseFloat(exchangeRateInput);
-                    // 只有在輸入是有效數字時才加入
-                    if (!isNaN(exchangeRate) && exchangeRate > 0) {
-                        payload.exchangeRate = exchangeRate;
-                    }
-                } else if (isEditing) {
-                    // 如果是編輯模式且輸入框為空，則加入刪除指令
-                    payload.exchangeRate = deleteField();
-                }
-            }
-            
-            // 處理總成本
-            const totalCostInput = document.getElementById('total-cost').value.trim();
-            if (totalCostInput) {
-                const totalCost = parseFloat(totalCostInput);
-                // 只有在輸入是有效數字時才加入
-                if (!isNaN(totalCost) && totalCost > 0) {
-                    payload.totalCost = totalCost;
-                }
-            } else if (isEditing) {
-                // 如果是編輯模式且輸入框為空，則加入刪除指令
-                payload.totalCost = deleteField();
-            }
-            
-            // 步驟 4: 執行資料庫操作
-            const txCol = collection(db, 'users', userId, 'transactions');
+        
+            showNotification('info', '正在新增交易並觸發後端重新計算...');
+        
             try {
-                if (isEditing) {
-                    await updateDoc(doc(txCol, id), payload);
-                } else {
-                    await addDoc(txCol, payload);
-                }
+                const response = await fetch(API.URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                    body: JSON.stringify({ 
+                        action: 'add_transaction', 
+                        uid: currentUserId, 
+                        data: transactionData 
+                    })
+                });
+        
+                const result = await response.json();
+                if (!result.success) throw new Error(result.message);
+        
                 closeModal();
-                showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
-                showNotification('info', `後端正在為您即時更新資產數據...`);
+                showNotification('success', '交易已新增！正在刷新頁面...');
+        
+                // 新增成功後，重新載入所有資料來更新畫面
+                await loadPortfolioData();
+        
             } catch (error) {
-                console.error("儲存交易失敗:", error);
-                showNotification('error', "儲存失敗，請稍後再試。");
+                console.error('Failed to add transaction:', error);
+                showNotification('error', `新增交易失敗: ${error.message}`);
             }
         }
 
@@ -775,6 +666,14 @@
             activeTab.classList.add('border-indigo-500', 'text-indigo-600');
             activeTab.classList.remove('border-transparent', 'text-gray-500');
         }
+
+        const API = {
+          URL: 'https://portfolio-journal-api-951186116587.asia-east1.run.app', // <-- 請替換成您自己的 Cloud Run 服務網址
+          KEY: 'QqcUhBV04KciA1xeDibpOmcLpAQWDt' // <-- 請替換成您自己的 API KEY
+        };
+        
+        // [重要] 我們暫時用一個固定的使用者ID來測試，未來可以替換成真正的登入系統
+        const currentUserId = "cchung";
 
     </script>
 </body>
