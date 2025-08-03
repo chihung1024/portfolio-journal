@@ -1,7 +1,7 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v1.2 - 真正完整最終版)
-// == 修正：補上所有被遺漏的核心計算函式
+// == GCP Cloud Function 完整程式碼 (v1.3.1 - 真正完整最終版)
+// == 修正：補上所有被遺漏的核心計算與輔助函式，此版本可直接複製貼上使用。
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -51,7 +51,7 @@ const d1Client = {
   }
 };
 
-// --- [第一部分：資料準備與抓取函式] ---
+// --- 資料準備與抓取函式 ---
 
 async function fetchAndSaveMarketData(symbol) {
   try {
@@ -122,7 +122,8 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
   return marketData;
 }
 
-// --- [第二部分：核心計算函式 (從原始碼完整複製)] ---
+
+// --- 核心計算與輔助函式 (完整版) ---
 
 const toDate = v => v.toDate ? v.toDate() : new Date(v);
 const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
@@ -491,7 +492,8 @@ function calculateCoreMetrics(evts, market) {
     return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
 }
 
-// --- [第三部分：主計算流程] ---
+
+// --- 主計算流程 ---
 
 async function performRecalculation(uid) {
     console.log(`--- [${uid}] Recalculation Process Start (v2.0 - GCP/D1) ---`);
@@ -535,18 +537,19 @@ async function performRecalculation(uid) {
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol,
         };
+
         dbOps.push({ sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] });
         dbOps.push({
-            sql: `INSERT INTO portfolio_summary (uid, summary_data, lastUpdated) VALUES (?, ?, ?)`,
+            sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
             params: [
                 uid,
                 JSON.stringify(summaryData),
+                JSON.stringify(dailyPortfolioValues),
+                JSON.stringify(twrHistory),
+                JSON.stringify(benchmarkHistory),
                 new Date().toISOString()
             ]
         });
-        // This is a placeholder for the portfolio history, which can be large.
-        // In a real app, you might save this to a different table or Cloud Storage.
-        console.log(`[${uid}] Daily history points calculated: ${Object.keys(dailyPortfolioValues).length}`);
 
         await d1Client.batch(dbOps);
         console.log(`--- [${uid}] Recalculation Process Done ---`);
@@ -556,7 +559,8 @@ async function performRecalculation(uid) {
     }
 }
 
-// --- [第四部分：統一的 HTTP 觸發器] ---
+
+// --- 統一的 HTTP 觸發器 ---
 
 exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
@@ -578,13 +582,30 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: `Recalculation successful for ${uid}` });
             case 'get_data': {
-                const [summaryResult, holdingsResult] = await Promise.all([
-                    d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid]),
-                    d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid])
+                const [summaryResult, holdingsResult, transactionsResult, splitsResult] = await Promise.all([
+                    d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
+                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid]),
+                    d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                    d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
                 ]);
-                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data) : {};
-                const holdings = holdingsResult;
-                return res.status(200).send({ success: true, data: { summary, holdings } });
+
+                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
+                const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
+                const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
+                const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
+
+                return res.status(200).send({ 
+                    success: true, 
+                    data: { 
+                        summary, 
+                        holdings: holdingsResult,
+                        transactions: transactionsResult,
+                        splits: splitsResult,
+                        history,
+                        twrHistory,
+                        benchmarkHistory
+                    } 
+                });
             }
             case 'add_transaction': {
                 const txData = data;
@@ -598,6 +619,19 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 );
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: 'Transaction added and recalculation triggered.', txId: newTxId });
+            }
+            case 'add_split': {
+                const splitData = data;
+                if (!splitData || !splitData.symbol || !splitData.ratio) {
+                    return res.status(400).send({ success: false, message: 'Bad Request: Missing split data.' });
+                }
+                const newSplitId = uuidv4();
+                await d1Client.query(
+                    `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`,
+                    [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]
+                );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Split event added and recalculation triggered.', splitId: newSplitId });
             }
             default:
                 return res.status(400).send({ success: false, message: 'Unknown action' });
