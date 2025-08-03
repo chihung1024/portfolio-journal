@@ -547,8 +547,7 @@ function calculateCoreMetrics(evts, market) {
 // --- [第三部分：統一的 HTTP 觸發器] ---
 // 這是我們整個後端服務唯一的入口點。
 
-exports.unifiedPortfolioHandler = functions.runWith({ timeoutSeconds: 300, memory: "1GB" })
-  .https.onRequest(async (req, res) => {
+exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
     // 跨域請求設定 (CORS) - 允許來自任何來源的請求，方便初期開發
     res.set('Access-Control-Allow-Origin', '*');
     if (req.method === 'OPTIONS') {
