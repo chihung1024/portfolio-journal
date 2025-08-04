@@ -4,23 +4,16 @@ import requests
 import json
 from datetime import datetime
 import time
+import pandas as pd # <--- [修正] 加入這一行
 
 # =========================================================================================
-# == Python 每日更新腳本 完整程式碼 (v2.0 - D1/Cloud Run 遷移版)
-# == 功能：
-# == 1. 透過 D1 Worker API 從 D1 資料庫讀取所有需要更新的股票代碼。
-# == 2. 使用 yfinance 抓取最完整的歷史數據。
-# == 3. 透過 D1 Worker API 將數據完整覆蓋寫回 D1 資料庫。
-# == 4. (新功能) 主動觸發所有使用者的投資組合重新計算。
+# == Python 每日更新腳本 完整程式碼 (v2.1 - 修正版)
 # =========================================================================================
-
 
 # --- 從環境變數讀取設定 ---
-# 這些將在 GitHub Actions 的 Secrets 中設定
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
-# GCP 和 D1 Worker 使用相同的金鑰進行驗證
 GCP_API_KEY = D1_API_KEY 
 
 
@@ -161,7 +154,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print("Starting daily market data update script (v2.0)...")
+    print("Starting daily market data update script (v2.1)...")
     symbols, uids = get_all_symbols_and_users_from_d1()
     
     if symbols:
