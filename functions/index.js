@@ -44,81 +44,135 @@ const d1Client = {
 };
 
 // --- 資料準備與抓取函式 ---
-async function fetchAndSaveMarketData(symbol) {
+async function fetchAndSaveMarketData(symbol, startDate, endDate) {
   try {
-    console.log(`從 Yahoo Finance 抓取 ${symbol} 的完整歷史記錄...`);
+    const sDate = new Date(startDate);
+    const eDate = new Date(endDate);
+    
+    // 將日期格式化為 YYYY-MM-DD
+    const period1 = sDate.toISOString().split('T')[0];
+    const period2 = eDate.toISOString().split('T')[0];
+
+    console.log(`從 Yahoo Finance 抓取 ${symbol} 的歷史記錄，範圍: ${period1} 到 ${period2}...`);
+    
     const hist = await yahooFinance.historical(symbol, { 
-        period1: '2000-01-01', 
-        interval: '1d',
-        autoAdjust: false,
-        backAdjust: false
+        period1: period1, 
+        period2: period2,
+        interval: '1d'
     });
+
+    if (hist.length === 0) {
+        console.log(`${symbol} 在此範圍內沒有數據可更新。`);
+        return; // 沒有數據，直接返回
+    }
+
     const dbOps = [];
     const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
-    dbOps.push({ sql: `DELETE FROM ${tableName} WHERE symbol = ?`, params: [symbol] });
-    if (!symbol.includes("=")) {
-        dbOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
-    }
+
+    // **重要**：我們不再先刪除數據，而是直接插入。
+    // D1 的主鍵 (symbol, date) 會防止重複數據。
+    // 如果需要覆蓋，可以使用 INSERT OR REPLACE，但通常 INSERT 即可。
     for(const item of hist) {
         if(item.close) {
             dbOps.push({
-                sql: `INSERT INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
+                // 使用 INSERT OR IGNORE 忽略重複鍵值的錯誤
+                sql: `INSERT OR IGNORE INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
                 params: [symbol, item.date.toISOString().split("T")[0], item.close]
             });
         }
         if(item.dividends && item.dividends > 0) {
              dbOps.push({
-                sql: `INSERT INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
+                sql: `INSERT OR IGNORE INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
                 params: [symbol, item.date.toISOString().split("T")[0], item.dividends]
             });
         }
     }
-    await d1Client.batch(dbOps);
-    console.log(`成功抓取並寫入 ${symbol} 的完整歷史記錄。`);
-    const prices = hist.reduce((acc, cur) => { if (cur.close) acc[cur.date.toISOString().split("T")[0]] = cur.close; return acc; }, {});
-    const dividends = hist.reduce((acc, cur) => { if (cur.dividends > 0) acc[cur.date.toISOString().split("T")[0]] = cur.dividends; return acc; }, {});
-    return { prices, dividends, rates: prices };
+
+    if (dbOps.length > 0) {
+        await d1Client.batch(dbOps);
+        console.log(`成功寫入 ${symbol} 的 ${dbOps.length} 筆新數據。`);
+    }
+
   } catch (e) {
     console.log(`錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
-    return null;
+    // 維持不拋出錯誤，讓流程可以繼續
   }
 }
 
 async function getMarketDataFromDb(txs, benchmarkSymbol) {
-  const syms = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-  const currencies = [...new Set(txs.map(t => t.currency || "USD"))].filter(c => c !== "TWD");
-  const fxSyms = currencies.map(c => currencyToFx[c]).filter(Boolean);
-  const allRequiredSymbols = [...new Set([...syms, ...fxSyms, benchmarkSymbol.toUpperCase()])];
-  console.log(`資料檢查，標的：${allRequiredSymbols.join(', ')}`);
-  const marketData = {};
-  for (const s of allRequiredSymbols) {
-    if (!s) continue;
-    const isFx = s.includes("=");
-    const priceTable = isFx ? "exchange_rates" : "price_history";
-    const divTable = "dividend_history";
-    const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
-    if (priceData.length > 0) {
-      marketData[s] = {
-          prices: priceData.reduce((acc, row) => { acc[row.date] = row.price; return acc; }, {}),
-          dividends: {}
-      };
-      if (isFx) marketData[s].rates = marketData[s].prices;
-      if(!isFx) {
-          const divData = await d1Client.query(`SELECT date, dividend FROM ${divTable} WHERE symbol = ?`, [s]);
-          marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date] = row.dividend; return acc; }, {});
-      }
-    } else {
-      console.log(`在 D1 中找不到 ${s} 的資料。正在抓取...`);
-      const fetchedData = await fetchAndSaveMarketData(s);
-      if (fetchedData) {
-        marketData[s] = fetchedData;
-      } else {
-        throw new Error(`無法抓取 ${s} 的關鍵市場資料。中止計算。`);
-      }
+    const syms = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+    const currencies = [...new Set(txs.map(t => t.currency || "USD"))].filter(c => c !== "TWD");
+    const fxSyms = currencies.map(c => currencyToFx[c]).filter(Boolean);
+    const allRequiredSymbols = [...new Set([...syms, ...fxSyms, benchmarkSymbol.toUpperCase()])];
+
+    console.log(`資料檢查，標的：${allRequiredSymbols.join(', ')}`);
+    const marketData = {};
+    const today = new Date();
+
+    for (const s of allRequiredSymbols) {
+        if (!s) continue;
+        
+        const isFx = s.includes("=");
+        const priceTable = isFx ? "exchange_rates" : "price_history";
+        
+        // 1. 找出這個標的需要數據的最早日期
+        let requiredStartDate = new Date();
+        if (isFx || s === benchmarkSymbol.toUpperCase()) {
+            // 對於匯率和 Benchmark，找到所有交易的最早日期
+            const firstTxDateResult = await d1Client.query('SELECT MIN(date) as min_date FROM transactions');
+            if (firstTxDateResult[0] && firstTxDateResult[0].min_date) {
+                requiredStartDate = new Date(firstTxDateResult[0].min_date);
+                requiredStartDate.setMonth(requiredStartDate.getMonth() - 1); // 提前一個月
+            }
+        } else {
+            // 對於一般股票，找到它自己的最早交易日期
+            const firstTxDateResult = await d1Client.query('SELECT MIN(date) as min_date FROM transactions WHERE symbol = ?', [s]);
+            if (firstTxDateResult[0] && firstTxDateResult[0].min_date) {
+                requiredStartDate = new Date(firstTxDateResult[0].min_date);
+                requiredStartDate.setMonth(requiredStartDate.getMonth() - 1); // 提前一個月
+            }
+        }
+
+        // 2. 從 D1 抓取現有數據，並找到已有的最新日期
+        const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
+        let latestDateInDb = null;
+        if (priceData.length > 0) {
+            priceData.forEach(row => {
+                const currentDate = new Date(row.date);
+                if (!latestDateInDb || currentDate > latestDateInDb) {
+                    latestDateInDb = currentDate;
+                }
+            });
+        }
+        
+        // 3. 執行缺口分析與抓取
+        if (!latestDateInDb) {
+            // A. 完全沒有數據：從需要的最早日期抓到今天
+            console.log(`在 D1 中完全找不到 ${s} 的資料。進行首次抓取...`);
+            await fetchAndSaveMarketData(s, requiredStartDate, today);
+        } else if (latestDateInDb < today) {
+            // B. 數據不是最新的：從已有的最新日期+1天，抓到今天
+            console.log(`${s} 的數據不是最新的 (最新到 ${latestDateInDb.toISOString().split('T')[0]})。進行增量更新...`);
+            const fetchStartDate = new Date(latestDateInDb);
+            fetchStartDate.setDate(fetchStartDate.getDate() + 1);
+            await fetchAndSaveMarketData(s, fetchStartDate, today);
+        }
+
+        // 4. 重新從 D1 讀取完整數據（包含剛剛補上的）
+        const finalPriceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
+        marketData[s] = {
+            prices: finalPriceData.reduce((acc, row) => { acc[row.date] = row.price; return acc; }, {}),
+            dividends: {}
+        };
+        if (isFx) marketData[s].rates = marketData[s].prices;
+
+        if (!isFx) {
+            const divData = await d1Client.query(`SELECT date, dividend FROM dividend_history WHERE symbol = ?`, [s]);
+            marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date] = row.dividend; return acc; }, {});
+        }
     }
-  }
-  console.log("所有必要的市場資料都已存在並載入。");
-  return marketData;
+    console.log("所有必要的市場資料都已存在並載入。");
+    return marketData;
 }
 
 // --- 核心計算與輔助函式 ---
