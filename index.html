@@ -123,46 +123,61 @@
     
     <script type="module">
         // =========================================================================================
-        // == 前端 JavaScript 完整程式碼 (v1.5.4 - 最終完整、無省略、修正所有已知錯誤)
+        // == 前端 JavaScript 完整程式碼 (v1.5.4 - 整合 Firebase Auth)
         // =========================================================================================
 
+        // --- Firebase SDK ---
+        import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+        // --- 後端 API 設定 ---
         const API = {
           URL: 'https://portfolio-journal-api-951186116587.asia-east1.run.app', // <-- 請務必確認這是您自己的 Cloud Run 服務網址
           KEY: 'QqcUhBV04KciA1xeDibpOmcLpAQWDt' // <-- 請務必替換成您安全的、未曾分享過的新金鑰
         };
 
-        const currentUserId = "test-user-01";
+        // --- 全域變數 ---
+        let auth, userId;
         let transactions = [];
         let userSplits = [];
         let marketDataForFrontend = {};
         let chart, twrChart;
         let confirmCallback = null;
 
-        // --- 主流程 ---
+        // --- 主流程 & 初始化 ---
         document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('auth-container').style.display = 'none';
-            document.getElementById('logout-btn').style.display = 'none';
-            document.getElementById('user-info').classList.remove('hidden');
-            document.getElementById('user-id').textContent = `測試使用者: ${currentUserId}`;
-            document.getElementById('auth-status').textContent = '已連線';
-            document.querySelector('main').classList.remove('hidden');
-            initializeChart();
-            initializeTwrChart();
-            setupEventListeners();
-            lucide.createIcons();
-            loadPortfolioData();
+            initialize();
         });
 
+        async function initialize() {
+            const firebaseConfig = {
+                apiKey: "AIzaSyC-LqfaySnack-Attack-Build-A-Burger", // 替換成您的 Firebase 設定
+                authDomain: "burgers.firebaseapp.com",
+                projectId: "burgers-are-us",
+                storageBucket: "burgers.appspot.com",
+                messagingSenderId: "987654321",
+                appId: "1:987654321:web:123456789abcdef"
+            };
+
+            try {
+                const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+                auth = getAuth(app);
+                setupEventListeners();
+                initializeChart();
+                initializeTwrChart();
+                lucide.createIcons();
+                handleAuthentication();
+            } catch (error) {
+                console.error("Firebase 初始化失敗:", error);
+                showNotification('error', `Firebase 初始化失敗: ${error.message}`);
+            }
+        }
+
         async function loadPortfolioData() {
+            if (!userId) return;
             document.getElementById('loading-overlay').style.display = 'flex';
             try {
-                const response = await fetch(API.URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
-                    body: JSON.stringify({ action: 'get_data', uid: currentUserId })
-                });
-                const result = await response.json();
-                if (!response.ok) throw new Error(result.message || '伺服器發生錯誤');
+                const result = await apiRequest('get_data', {});
                 
                 const portfolioData = result.data;
                 transactions = portfolioData.transactions || [];
@@ -190,7 +205,144 @@
             }
         }
 
-        // --- UI 渲染函式 ---
+        // --- 使用者認證相關函式 ---
+        function handleAuthentication() {
+            onAuthStateChanged(auth, (user) => {
+                const loadingOverlay = document.getElementById('loading-overlay');
+                const mainContent = document.querySelector('main');
+                const authContainer = document.getElementById('auth-container');
+                const userInfo = document.getElementById('user-info');
+                const logoutBtn = document.getElementById('logout-btn');
+
+                if (user) {
+                    userId = user.uid;
+                    document.getElementById('auth-status').textContent = '已連線';
+                    document.getElementById('user-id').textContent = `使用者: ${user.email}`;
+                    authContainer.classList.add('hidden');
+                    mainContent.classList.remove('hidden');
+                    userInfo.classList.remove('hidden');
+                    logoutBtn.classList.remove('hidden');
+                    loadPortfolioData(); 
+                } else {
+                    userId = null;
+                    loadingOverlay.style.display = 'none';
+                    authContainer.classList.remove('hidden');
+                    mainContent.classList.add('hidden');
+                    userInfo.classList.add('hidden');
+                    logoutBtn.classList.add('hidden');
+                    renderHoldingsTable({});
+                    renderTransactionsTable([]);
+                    renderSplitsTable([]);
+                    updateDashboard({}, 0, 0, 0);
+                    updateAssetChart({});
+                    updateTwrChart({}, {}, '');
+                }
+            });
+        }
+
+        async function handleRegister() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                showNotification('success', '註冊成功！已自動登入。');
+            } catch (error) {
+                console.error("註冊失敗:", error);
+                showNotification('error', `註冊失敗: ${error.message}`);
+            }
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            if (!email || !password) { showNotification('error', '請輸入電子郵件和密碼。'); return; }
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                showNotification('success', '登入成功！');
+            } catch (error) {
+                console.error("登入失敗:", error);
+                showNotification('error', `登入失敗: ${error.message}`);
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                await signOut(auth);
+                transactions = [];
+                userSplits = [];
+                showNotification('info', '您已成功登出。');
+            } catch (error) {
+                console.error("登出失敗:", error);
+                showNotification('error', `登出失敗: ${error.message}`);
+            }
+        }
+
+        // --- 後端 API 請求 ---
+        async function apiRequest(action, data) {
+            if (!auth.currentUser) {
+                showNotification('error', '認證無效，請重新登入！');
+                throw new Error('User not authenticated');
+            }
+
+            const idToken = await auth.currentUser.getIdToken(true);
+            const payload = { action, uid: userId, data };
+
+            console.log("即將發送到後端的完整 Payload:", JSON.stringify(payload, null, 2));
+
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-KEY': API.KEY,
+                    'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            if (!response.ok) {
+                console.error("後端返回的錯誤詳情:", result);
+                if (response.status === 401 || response.status === 403) {
+                     showNotification('error', '認證已過期或無效，請重新登入。');
+                     handleLogout();
+                }
+                throw new Error(result.message || '伺服器發生錯誤');
+            }
+            return result;
+        }
+        
+        // --- 事件監聽器設定 ---
+        function setupEventListeners() {
+            // 認證按鈕
+            document.getElementById('login-btn').addEventListener('click', handleLogin);
+            document.getElementById('register-btn').addEventListener('click', handleRegister);
+            document.getElementById('logout-btn').addEventListener('click', handleLogout);
+
+            // 功能按鈕
+            document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
+            document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
+            document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+            document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
+            
+            document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
+                if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
+                if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
+            });
+            document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.classList.contains('delete-split-btn')) { handleDeleteSplit(e); } });
+            
+            document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
+            document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
+            document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
+            
+            document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+            document.getElementById('confirm-ok-btn').addEventListener('click', () => { if (confirmCallback) { confirmCallback(); } hideConfirm(); });
+            
+            document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+            document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
+        }
+
+        // --- 所有其他 UI、表單處理、輔助函式 (保持不變) ---
         function renderHoldingsTable(currentHoldings) {
             const tableBody = document.getElementById('holdings-table-body');
             tableBody.innerHTML = '';
@@ -219,10 +371,8 @@
                 const row = document.createElement('tr');
                 row.className = "hover:bg-gray-50";
                 const transactionDate = t.date.split('T')[0];
-                // [核心修正] 如果使用者手動輸入了匯率，就用它；否則，從市場數據中查找當天的匯率
                 const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
                 const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
-
                 row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td><td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
                 tableBody.appendChild(row);
             };
@@ -285,32 +435,6 @@
             const formatHistory = (history) => history ? Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]) : [];
             if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: formatHistory(twrHistory) }, { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) } ]);
         }
-
-        async function apiRequest(action, data) {
-            const payload = { action, uid: currentUserId, data };
-        
-            // --- [新增偵錯日誌] ---
-            // 在發送請求前，將我們要發送的完整資料印出來看看
-            console.log("即將發送到後端的完整 Payload:", JSON.stringify(payload, null, 2));
-            // --- [新增偵錯日誌] ---
-        
-            const response = await fetch(API.URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-KEY': API.KEY
-                },
-                body: JSON.stringify(payload)
-            });
-        
-            const result = await response.json();
-            if (!response.ok) {
-                // 將後端回傳的詳細錯誤訊息也印出來
-                console.error("後端返回的錯誤詳情:", result); 
-                throw new Error(result.message || '伺服器發生錯誤');
-            }
-            return result;
-        }
         
         function handleEdit(e) {
             const txId = e.target.dataset.id;
@@ -347,12 +471,11 @@
             e.preventDefault();
             const saveBtn = document.getElementById('save-btn');
             saveBtn.disabled = true;
-            saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" ...>...</svg> 儲存中...`;
+            saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
         
             const txId = document.getElementById('transaction-id').value;
             const isEditing = !!txId;
         
-            // 步驟 1: 建立只包含必填欄位的基礎物件
             const transactionData = {
                 date: document.getElementById('transaction-date').value,
                 symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -362,42 +485,29 @@
                 currency: document.getElementById('currency').value,
             };
         
-            // 步驟 2: 驗證
             if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
                 showNotification('error', '請填寫所有必填欄位。');
-                saveBtn.disabled = false;
-                saveBtn.textContent = '儲存';
-                return;
+                saveBtn.disabled = false; saveBtn.textContent = '儲存'; return;
             }
         
-            // 步驟 3: 動態處理選填欄位
             const totalCostInput = document.getElementById('total-cost').value;
-            if (totalCostInput) {
-                transactionData.totalCost = parseFloat(totalCostInput);
-            }
+            if (totalCostInput) transactionData.totalCost = parseFloat(totalCostInput);
         
             const exchangeRateInput = document.getElementById('exchange-rate').value;
-            if (exchangeRateInput) {
-                transactionData.exchangeRate = parseFloat(exchangeRateInput);
-            }
+            if (exchangeRateInput) transactionData.exchangeRate = parseFloat(exchangeRateInput);
         
             try {
                 const action = isEditing ? 'edit_transaction' : 'add_transaction';
-                // 對於編輯，我們需要將 txId 和 txData 包裝起來
                 const payload = isEditing ? { txId, txData: transactionData } : transactionData;
-        
                 await apiRequest(action, payload);
-        
                 closeModal('transaction-modal');
                 await loadPortfolioData();
                 showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
-        
             } catch (error) {
                 console.error('Failed to save transaction:', error);
                 showNotification('error', `儲存交易失敗: ${error.message}`);
             } finally {
-                saveBtn.disabled = false;
-                saveBtn.textContent = '儲存';
+                saveBtn.disabled = false; saveBtn.textContent = '儲存';
             }
         }
         
@@ -432,24 +542,7 @@
                 showNotification('error', `更新 Benchmark 失敗: ${error.message}`);
             }
         }
-        function setupEventListeners() {
-            document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
-            document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
-            document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
-            document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
-            document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
-                if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
-                if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
-            });
-            document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.classList.contains('delete-split-btn')) { handleDeleteSplit(e); } });
-            document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
-            document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
-            document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-            document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-            document.getElementById('confirm-ok-btn').addEventListener('click', () => { if (confirmCallback) { confirmCallback(); } hideConfirm(); });
-            document.getElementById('currency').addEventListener('change', toggleOptionalFields);
-            document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
-        }
+        
         function initializeChart() {
             const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
             chart = new ApexCharts(document.querySelector("#asset-chart"), options);
