@@ -1,7 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v1.5.1 - 真正完整、無省略最終版)
-// == 功能：包含讀取、新增、編輯、刪除、拆股、更新Benchmark等所有後端功能。
+// == GCP Cloud Function 完整程式碼 (v1.5.2 - 配息修正最終版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -16,15 +15,9 @@ const D1_API_KEY = process.env.D1_API_KEY;
 // --- D1 資料庫客戶端 ---
 const d1Client = {
   async query(sql, params = []) {
-    if (!D1_WORKER_URL || !D1_API_KEY) {
-      throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set.");
-    }
+    if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set."); }
     try {
-      const response = await axios.post(
-        `${D1_WORKER_URL}/query`,
-        { sql, params },
-        { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } }
-      );
+      const response = await axios.post(`${D1_WORKER_URL}/query`, { sql, params }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
       if (response.data && response.data.success) { return response.data.results; }
       throw new Error(response.data.error || "D1 query failed");
     } catch (error) {
@@ -33,15 +26,9 @@ const d1Client = {
     }
   },
   async batch(statements) {
-     if (!D1_WORKER_URL || !D1_API_KEY) {
-      throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set.");
-    }
+     if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set."); }
      try {
-      const response = await axios.post(
-        `${D1_WORKER_URL}/batch`,
-        { statements },
-        { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } }
-      );
+      const response = await axios.post(`${D1_WORKER_URL}/batch`, { statements }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
       if (response.data && response.data.success) { return response.data.results; }
       throw new Error(response.data.error || "D1 batch operation failed");
     } catch (error) {
@@ -55,7 +42,13 @@ const d1Client = {
 async function fetchAndSaveMarketData(symbol) {
   try {
     console.log(`Fetching full history for ${symbol} from Yahoo Finance...`);
-    const hist = await yahooFinance.historical(symbol, { period1: '2000-01-01', interval: '1d' });
+    // [修正] 新增 auto_adjust: false 和 back_adjust: false 來確保能抓取到最原始的配息資訊
+    const hist = await yahooFinance.historical(symbol, { 
+        period1: '2000-01-01', 
+        interval: '1d',
+        auto_adjust: false,
+        back_adjust: false
+    });
     const dbOps = [];
     const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
     dbOps.push({ sql: `DELETE FROM ${tableName} WHERE symbol = ?`, params: [symbol] });
