@@ -203,6 +203,14 @@
                 const row = document.createElement('tr');
                 row.className = "hover:bg-gray-50";
                 const decimals = isTwStock(h.symbol) ? 0 : 2;
+
+                // [核心修正] 計算平均匯率成本
+                let avgFxRateText = '';
+                if (h.currency !== 'TWD' && h.totalCostOriginal > 0) {
+                    const avgFxRate = h.totalCostTWD / h.totalCostOriginal;
+                    avgFxRateText = `<span class="block text-xs text-gray-400 mt-1">@ ${avgFxRate.toFixed(4)}</span>`;
+                }
+                
                 row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">${h.symbol}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.totalCostTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'}">${formatNumber(h.unrealizedPLTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${h.returnRate >= 0 ? 'text-red-600' : 'text-green-600'}">${(h.returnRate || 0).toFixed(2)}%</td>`;
                 tableBody.appendChild(row);
             });
