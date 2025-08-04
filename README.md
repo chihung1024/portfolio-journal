@@ -31,7 +31,7 @@
 
 ### 架構串連與工作流程
 
-```mermaid
+mermaid
 graph TD
     subgraph "使用者端 (Client-Side)"
         A[使用者 Browser] -- 操作/瀏覽 --> B[前端應用<br>(index.html)];
