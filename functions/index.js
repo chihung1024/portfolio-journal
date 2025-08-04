@@ -396,38 +396,41 @@ function calculateXIRR(flows) {
 }
 
 function calculateCoreMetrics(evts, market) {
-    const pf = {};
-    let totalRealizedPL = 0;
-    for (const e of evts) {
-        const sym = e.symbol.toUpperCase();
-        if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 };
-        switch (e.eventType) {
-            case "transaction": {
-                if (e.type === "buy") {
-                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, date: toDate(e.date) });
-                } else {
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
-                    const saleProceedsTWD = getTotalCost(e) * fx;
-                    let sellQty = e.quantity;
-                    let costOfGoodsSoldTWD = 0;
-                    pf[sym].lots.sort((a,b) => a.date - b.date); // FIFO
-                    while (sellQty > 0 && pf[sym].lots.length > 0) {
-                        const lot = pf[sym].lots[0];
-                        const lotFx = findFxRate(market, pf[sym].currency, lot.date);
-                        const lotCostTWD = lot.quantity * lot.pricePerShareOriginal * lotFx;
-                        const qtyToSell = Math.min(sellQty, lot.quantity);
-                        costOfGoodsSoldTWD += qtyToSell * (lotCostTWD / lot.quantity);
-                        lot.quantity -= qtyToSell;
-                        sellQty -= qtyToSell;
-                        if (lot.quantity < 1e-9) pf[sym].lots.shift();
-                    }
-                    const realized = saleProceedsTWD - costOfGoodsSoldTWD;
-                    totalRealizedPL += realized;
-                    pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
-                    pf[sym].realizedPLTWD += realized;
-                }
-                break;
-            }
+    const pf = {};
+    let totalRealizedPL = 0;
+    for (const e of evts) {
+        const sym = e.symbol.toUpperCase();
+        if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 };
+        
+        switch (e.eventType) {
+            case "transaction": {
+                if (e.type === "buy") {
+                    // [核心修正] 使用 getTotalCost 來計算成本，而不是單純的 e.price
+                    const costPerShareOriginal = getTotalCost(e) / e.quantity;
+                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: costPerShareOriginal, date: toDate(e.date) });
+                } else { // sell
+                    const fx = findFxRate(market, e.currency, toDate(e.date));
+                    const saleProceedsTWD = getTotalCost(e) * fx;
+                    let sellQty = e.quantity;
+                    let costOfGoodsSoldTWD = 0;
+                    pf[sym].lots.sort((a,b) => a.date - b.date); // FIFO
+                    while (sellQty > 0 && pf[sym].lots.length > 0) {
+                        const lot = pf[sym].lots[0];
+                        const lotFx = findFxRate(market, pf[sym].currency, lot.date);
+                        const lotCostTWD = lot.quantity * lot.pricePerShareOriginal * lotFx;
+                        const qtyToSell = Math.min(sellQty, lot.quantity);
+                        costOfGoodsSoldTWD += qtyToSell * (lotCostTWD / lot.quantity);
+                        lot.quantity -= qtyToSell;
+                        sellQty -= qtyToSell;
+                        if (lot.quantity < 1e-9) pf[sym].lots.shift();
+                    }
+                    const realized = saleProceedsTWD - costOfGoodsSoldTWD;
+                    totalRealizedPL += realized;
+                    pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
+                    pf[sym].realizedPLTWD += realized;
+                }
+                break;
+            }
             case "split":
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
@@ -448,14 +451,14 @@ function calculateCoreMetrics(evts, market) {
             }
         }
     }
-    const { holdingsToUpdate } = calculateFinalHoldings(pf, market);
-    const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
-    const xirr = calculateXIRR(xirrFlows);
-    const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
-    const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.investedCostTWD, 0);
-    const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
-    const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
-    return { holdings: { holdingsToUpdate, holdingsToDelete: [] }, totalRealizedPL, xirr, overallReturnRate };
+    const { holdingsToUpdate } = calculateFinalHoldings(pf, market);
+    const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
+    const xirr = calculateXIRR(xirrFlows);
+    const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
+    const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.investedCostTWD, 0);
+    const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
+    const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
+    return { holdings: { holdingsToUpdate, holdingsToDelete: [] }, totalRealizedPL, xirr, overallReturnRate };
 }
 
 async function performRecalculation(uid) {
