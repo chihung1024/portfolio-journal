@@ -180,16 +180,21 @@
         }
 
         async function loadPortfolioData() {
-            if (!userId) return;
-            document.getElementById('loading-overlay').style.display = 'flex';
+            if (!userId) return; // 如果沒有 userId，直接返回
+            
+            const loadingOverlay = document.getElementById('loading-overlay');
+            
+            // [核心修正] 函式一開始就顯示讀取動畫
+            loadingOverlay.style.display = 'flex';
+            
             try {
                 const result = await apiRequest('get_data', {});
-                
                 const portfolioData = result.data;
+        
+                // ... (所有 render 和 update 函式的呼叫保持不變)
                 transactions = portfolioData.transactions || [];
                 userSplits = portfolioData.splits || [];
                 marketDataForFrontend = portfolioData.marketData || {}; 
-                
                 const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
                     obj[item.symbol] = item; return obj;
                 }, {});
@@ -202,12 +207,13 @@
                 const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
                 updateTwrChart(portfolioData.twrHistory || {}, portfolioData.benchmarkHistory || {}, benchmarkSymbol);
                 document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
-                showNotification('success', '資料同步完成！');
+        
             } catch (error) {
                 console.error('Failed to load portfolio data:', error);
                 showNotification('error', `讀取資料失敗: ${error.message}`);
             } finally {
-                document.getElementById('loading-overlay').style.display = 'none';
+                // [核心修正] 無論成功或失敗，在函式結束時都隱藏讀取動畫
+                loadingOverlay.style.display = 'none';
             }
         }
 
