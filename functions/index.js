@@ -405,21 +405,42 @@ function calculateCoreMetrics(evts, market) {
         switch (e.eventType) {
             case "transaction": {
                 if (e.type === "buy") {
-                    // [核心修正] 使用 getTotalCost 來計算成本，而不是單純的 e.price
+                    // --- [修正點 1：買入時，使用手動匯率計算並儲存 TWD 成本] ---
                     const costPerShareOriginal = getTotalCost(e) / e.quantity;
-                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: costPerShareOriginal, date: toDate(e.date) });
+                    
+                    // 優先使用交易本身的匯率 e.exchangeRate，若無則查找市場匯率
+                    const fx = e.exchangeRate || findFxRate(market, e.currency, toDate(e.date));
+                    const costPerShareTWD = (getTotalCost(e) * fx) / e.quantity;
+
+                    // 在 a lot 物件中同時儲存原幣成本和台幣成本
+                    pf[sym].lots.push({ 
+                        quantity: e.quantity, 
+                        pricePerShareOriginal: costPerShareOriginal, 
+                        date: toDate(e.date),
+                        costPerShareTWD: costPerShareTWD // <--- 新增儲存 TWD 成本
+                    });
+
                 } else { // sell
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
+                    // --- [修正點 2：賣出時，使用手動匯率計算 TWD 收入] ---
+                    // 優先使用交易本身的匯率 e.exchangeRate，若無則查找市場匯率
+                    const fx = e.exchangeRate || findFxRate(market, e.currency, toDate(e.date));
                     const saleProceedsTWD = getTotalCost(e) * fx;
+
                     let sellQty = e.quantity;
                     let costOfGoodsSoldTWD = 0;
                     pf[sym].lots.sort((a,b) => a.date - b.date); // FIFO
+                    
                     while (sellQty > 0 && pf[sym].lots.length > 0) {
                         const lot = pf[sym].lots[0];
-                        const lotFx = findFxRate(market, pf[sym].currency, lot.date);
-                        const lotCostTWD = lot.quantity * lot.pricePerShareOriginal * lotFx;
+                        // const lotFx = findFxRate(market, pf[sym].currency, lot.date); // <-- 舊的錯誤邏輯
+                        // const lotCostTWD = lot.quantity * lot.pricePerShareOriginal * lotFx; // <-- 舊的錯誤邏輯
+                        
                         const qtyToSell = Math.min(sellQty, lot.quantity);
-                        costOfGoodsSoldTWD += qtyToSell * (lotCostTWD / lot.quantity);
+
+                        // --- [修正點 3：賣出時，直接使用先前儲存的 TWD 成本] ---
+                        // 直接從 lot 物件中讀取已計算好的 TWD 成本，不再需要查找舊匯率
+                        costOfGoodsSoldTWD += qtyToSell * lot.costPerShareTWD;
+
                         lot.quantity -= qtyToSell;
                         sellQty -= qtyToSell;
                         if (lot.quantity < 1e-9) pf[sym].lots.shift();
