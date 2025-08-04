@@ -31,28 +31,28 @@
 
 ### 架構串連與工作流程
 
-mermaid
+```mermaid
 graph TD
     subgraph "使用者端 (Client-Side)"
-        A[使用者 Browser] -- 操作/瀏覽 --> B[前端應用<br>(index.html)];
+        A["使用者 Browser"] --> B["前端應用<br/>(index.html)"];
     end
 
     subgraph "Google Cloud Platform (GCP)"
-        D[Cloud Function<br>後端 API (index.js)]
+        D["Cloud Function<br/>後端 API (index.js)"];
     end
     
     subgraph "Cloudflare Platform"
-        E[D1 Worker API<br>(資料庫代理)] --> F[Cloudflare D1<br>資料庫];
-        H[排程工具<br>(如 Cloud Scheduler)]
+        E["D1 Worker API<br/>(資料庫代理)"] --> F["Cloudflare D1<br/>資料庫"];
+        H["排程工具<br/>(如 Cloud Scheduler)"];
     end
 
     subgraph "Python 執行環境"
-        I[Python 腳本<br>(main.py)]
+        I["Python 腳本<br/>(main.py)"];
     end
 
     subgraph "第三方服務 (3rd Party Services)"
-        C[Firebase Authentication];
-        G[Yahoo Finance API];
+        C["Firebase Authentication"];
+        G["Yahoo Finance API"];
     end
 
     %% 流程定義
@@ -73,6 +73,8 @@ graph TD
     I -- "3a. 抓取歷史數據" --> G;
     I -- "4a. 寫入歷史數據" --> E;
     I -- "5a. 觸發全局重算" --> D;
+```
+
 
 #### 工作流程詳解：
 1.  **使用者認證與資料載入**：
