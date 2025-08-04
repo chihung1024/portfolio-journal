@@ -574,7 +574,10 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
     if (!action || !uid) return res.status(400).send({ success: false, message: 'Bad Request: Missing action or uid.' });
 
     try {
-        switch (action) {
+          switch (action) {
+            case 'recalculate':
+                        await performRecalculation(uid);
+                        return res.status(200).send({ success: true, message: `Recalculation successful for ${uid}` });
             case 'get_data': {
                 const [summaryResult, holdingsResult, transactionsResult, splitsResult] = await Promise.all([
                     d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
