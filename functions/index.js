@@ -408,7 +408,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     return { twrHistory, benchmarkHistory };
 }
 
-function calculateFinalHoldings(pf, market, liveQuotes = null) {
+function calculateFinalHoldings(pf, market) {
   const holdingsToUpdate = {};
   const holdingsToDelete = [];
   const today = new Date();
@@ -420,12 +420,8 @@ function calculateFinalHoldings(pf, market, liveQuotes = null) {
     if (qty > 1e-9) {
         const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
         const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
-        
-        // --- [核心修改] ---
-        // 優先使用傳入的 liveQuotes (即時報價)，如果沒有，才從 market (資料庫歷史) 中尋找最近的價格
-        const curPrice = liveQuotes?.[sym]?.regularMarketPrice ?? findNearest(market[sym]?.prices, today);
-        // --- [核心修改結束] ---
-
+        const priceHist = market[sym]?.prices || {};
+        const curPrice = findNearest(priceHist, today);
         const fx = findFxRate(market, h.currency, today);
         const mktVal = qty * (curPrice ?? 0) * (h.currency === "TWD" ? 1 : fx);
         const unreal = mktVal - totCostTWD;
@@ -433,21 +429,12 @@ function calculateFinalHoldings(pf, market, liveQuotes = null) {
         const totalRet = unreal + h.realizedPLTWD;
         const rrCurrent = totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0;
         const rrTotal = invested > 0 ? (totalRet / invested) * 100 : 0;
-
         holdingsToUpdate[sym] = {
-          symbol: sym, 
-          quantity: qty, 
-          currency: h.currency,
-          avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0, 
-          totalCostTWD: totCostTWD, 
-          investedCostTWD: invested,
-          currentPriceOriginal: curPrice ?? null, 
-          marketValueTWD: mktVal,
-          unrealizedPLTWD: unreal, 
-          realizedPLTWD: h.realizedPLTWD,
-          returnRateCurrent: rrCurrent, 
-          returnRateTotal: rrTotal, 
-          returnRate: rrCurrent
+          symbol: sym, quantity: qty, currency: h.currency,
+          avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0, totalCostTWD: totCostTWD, investedCostTWD: invested,
+          currentPriceOriginal: curPrice ?? null, marketValueTWD: mktVal,
+          unrealizedPLTWD: unreal, realizedPLTWD: h.realizedPLTWD,
+          returnRateCurrent: rrCurrent, returnRateTotal: rrTotal, returnRate: rrCurrent
         };
     } else {
         holdingsToDelete.push(sym);
@@ -585,16 +572,7 @@ function calculateCoreMetrics(evts, market, log) {
     const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0);
     const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
     const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
-    
-    // --- [核心修正] ---
-    // 在回傳的物件中，加入 pf 這個欄位
-    return { 
-        holdings: { holdingsToUpdate, holdingsToDelete }, 
-        totalRealizedPL, 
-        xirr, 
-        overallReturnRate,
-        pf: pf // <--- 就是加上這一行
-    };
+    return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
 }
 
 async function performRecalculation(uid) {
@@ -693,7 +671,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
 
     // 4. 處理請求
     const { action, data } = req.body;
-    const uid = decodedToken.uid;
+    const uid = decodedToken.uid; // uid 從已驗證的 token 中取得
     
     if (!action || !uid) {
         return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
@@ -717,16 +695,16 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
                 const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
                 const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-                return res.status(200).send({
-                    success: true,
-                    data: {
-                        summary,
-                        holdings: holdingsResult,
-                        transactions: txs,
-                        splits,
+                return res.status(200).send({ 
+                    success: true, 
+                    data: { 
+                        summary, 
+                        holdings: holdingsResult, 
+                        transactions: txs, 
+                        splits, 
                         history, twrHistory, benchmarkHistory,
-                        marketData
-                    }
+                        marketData 
+                    } 
                 });
             }
 
@@ -780,63 +758,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             case 'update_benchmark': {
                 const { benchmarkSymbol } = data;
                 if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
-                await getMarketDataFromDb([], benchmarkSymbol);
+                await getMarketDataFromDb([], benchmarkSymbol); 
                 await d1Client.query( 'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', benchmarkSymbol] );
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
             }
             
-            case 'recalculate_with_live_data': {
-                const [txs, splits] = await Promise.all([
-                    d1Client.query('SELECT * FROM transactions WHERE uid = ?', [uid]),
-                    d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
-                ]);
-
-                if (txs.length === 0) {
-                    return res.status(200).send({ success: true, data: { holdings: [], summary: {} } });
-                }
-
-                const benchmarkSymbol = (await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']))[0]?.value || 'SPY';
-                const market = await getMarketDataFromDb(txs, benchmarkSymbol);
-                const { evts } = prepareEvents(txs, splits, market);
-
-                const coreMetricsResult = calculateCoreMetrics(evts, market);
-                const pf_for_final_holdings = coreMetricsResult.pf;
-
-                const symbolsToFetch = Object.keys(pf_for_final_holdings)
-                    .filter(sym => pf_for_final_holdings[sym].lots.reduce((sum, lot) => sum + lot.quantity, 0) > 1e-9);
-                
-                let liveQuotes = {};
-                if (symbolsToFetch.length > 0) {
-                    try {
-                        const quoteData = await yahooFinance.quote(symbolsToFetch);
-                        liveQuotes = (Array.isArray(quoteData) ? quoteData : [quoteData]).reduce((acc, q) => {
-                            if (q) acc[q.symbol] = q;
-                            return acc;
-                        }, {});
-                    } catch(quoteError) {
-                        console.error("抓取即時報價失敗:", quoteError.message);
-                    }
-                }
-                
-                const { holdingsToUpdate } = calculateFinalHoldings(pf_for_final_holdings, market, liveQuotes);
-                
-                const summaryData = {
-                    totalRealizedPL: coreMetricsResult.totalRealizedPL,
-                    xirr: coreMetricsResult.xirr,
-                    overallReturnRate: coreMetricsResult.overallReturnRate,
-                    benchmarkSymbol: benchmarkSymbol
-                };
-
-                return res.status(200).send({ 
-                    success: true, 
-                    data: {
-                        holdings: Object.values(holdingsToUpdate),
-                        summary: summaryData
-                    } 
-                });
-            }
-
             default:
                 return res.status(400).send({ success: false, message: '未知的操作' });
         }
