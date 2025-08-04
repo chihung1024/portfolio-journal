@@ -336,6 +336,7 @@ function calculateFinalHoldings(pf, market) {
           unrealizedPLTWD: unreal, 
           realizedPLTWD: h.realizedPLTWD,
           returnRate: rrCurrent
+          totalCostOriginal: totCostOrg
         };
     }
   }
@@ -487,10 +488,10 @@ async function performRecalculation(uid) {
         
         for (const sym in holdingsToUpdate) {
             const h = holdingsToUpdate[sym];
-            dbOps.push({
-                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                params: [ uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate ]
-            });
+            dbOps.push({
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, totalCostOriginal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                params: [ uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate, h.totalCostOriginal ]
+            });
         }
         
         const summaryData = {
