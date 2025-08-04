@@ -397,7 +397,7 @@
                 saveBtn.disabled = false; return;
             }
             try {
-                await apiRequest('add_split', { splitData });
+                await apiRequest('add_split', splitData);
                 closeModal('split-modal');
                 await loadPortfolioData();
             } catch (error) {
