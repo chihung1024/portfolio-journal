@@ -213,29 +213,43 @@
 
         // --- 使用者認證相關函式 ---
         function handleAuthentication() {
-            onAuthStateChanged(auth, (user) => {
+            onAuthStateChanged(auth, async (user) => { // <-- [修改] 將函式改為 async
                 const loadingOverlay = document.getElementById('loading-overlay');
                 const mainContent = document.querySelector('main');
                 const authContainer = document.getElementById('auth-container');
                 const userInfo = document.getElementById('user-info');
                 const logoutBtn = document.getElementById('logout-btn');
-
+        
                 if (user) {
+                    // --- [核心修正] ---
+                    // 1. 一偵測到使用者，就立刻切換畫面並顯示讀取動畫
                     userId = user.uid;
                     document.getElementById('auth-status').textContent = '已連線';
                     document.getElementById('user-id').textContent = `使用者: ${user.email}`;
+                    
                     authContainer.classList.add('hidden');
                     mainContent.classList.remove('hidden');
                     userInfo.classList.remove('hidden');
                     logoutBtn.classList.remove('hidden');
-                    loadPortfolioData(); 
+                    loadingOverlay.style.display = 'flex'; // <--- 立刻顯示讀取動畫
+                    
+                    // 2. 呼叫 loadPortfolioData 並等待它完成
+                    //    (注意：loadPortfolioData 內部在完成時會自動隱藏動畫)
+                    await loadPortfolioData();
+                    // --- [修正結束] ---
+        
                 } else {
+                    // 使用者已登出或未登入 (此部分邏輯不變)
                     userId = null;
+                    if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+        
                     loadingOverlay.style.display = 'none';
                     authContainer.classList.remove('hidden');
                     mainContent.classList.add('hidden');
                     userInfo.classList.add('hidden');
                     logoutBtn.classList.add('hidden');
+                    
+                    // 清空畫面資料
                     renderHoldingsTable({});
                     renderTransactionsTable([]);
                     renderSplitsTable([]);
@@ -324,16 +338,14 @@
             const btn = document.getElementById('manual-refresh-btn');
             const icon = btn.querySelector('svg');
             
-            // 禁用按鈕並顯示讀取中動畫
+            // 禁用按鈕並啟動動畫
             btn.disabled = true;
             icon.classList.add('animate-spin');
             showNotification('info', '正在抓取即時報價並重新計算...');
         
             try {
-                // 我們將呼叫一個新的後端 action，名為 'recalculate_with_live_data'
                 const result = await apiRequest('recalculate_with_live_data', {});
                 
-                // 後端計算完後，會返回最新的完整數據，我們用它來刷新整個頁面
                 const portfolioData = result.data;
                 const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
                     obj[item.symbol] = item; return obj;
@@ -348,9 +360,11 @@
                 console.error('Failed to manually refresh data:', error);
                 showNotification('error', `更新失敗: ${error.message}`);
             } finally {
-                // 恢復按鈕
+                // --- [核心修正] ---
+                // finally 區塊確保無論成功(try)或失敗(catch)，這段程式碼都一定會執行
                 btn.disabled = false;
                 icon.classList.remove('animate-spin');
+                // --- [修正結束] ---
             }
         }
         
