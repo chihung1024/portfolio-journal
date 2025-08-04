@@ -264,16 +264,26 @@ function calculateDailyPortfolioValues(evts, market, startDate) {
     return history;
 }
 
+// [核心修正] 修改此函式，將 Benchmark 也換算為 TWD 計價
 function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate) {
     const dates = Object.keys(dailyPortfolioValues).sort();
     if (!startDate || dates.length === 0) return { twrHistory: {}, benchmarkHistory: {} };
+    
     const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase();
     const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {};
+    
+    // 判斷 Benchmark 的幣別 (非台股/TWD結尾的，預設為 USD)
+    const benchmarkCurrency = (upperBenchmarkSymbol.endsWith('.TW') || upperBenchmarkSymbol.endsWith('.TWO')) ? 'TWD' : 'USD';
+
+    // 找到起始日的價格和匯率，換算為 TWD
     const benchmarkStartPrice = findNearest(benchmarkPrices, startDate);
     if (!benchmarkStartPrice) {
         console.log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol} on ${startDate.toISOString().split('T')[0]}.`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
+    const startFx = findFxRate(market, benchmarkCurrency, startDate);
+    const benchmarkStartPriceTWD = benchmarkStartPrice * startFx;
+  
     const cashflows = evts.reduce((acc, e) => {
         const dateStr = toDate(e.date).toISOString().split('T')[0];
         let flow = 0;
@@ -316,8 +326,10 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
         lastMarketValue = MVE;
         const currentBenchPrice = findNearest(benchmarkPrices, new Date(dateStr));
-        if (currentBenchPrice) {
-            benchmarkHistory[dateStr] = ((currentBenchPrice / benchmarkStartPrice) - 1) * 100;
+        if (currentBenchPrice && benchmarkStartPriceTWD > 0) {
+            const currentFx = findFxRate(market, benchmarkCurrency, new Date(dateStr));
+            const currentBenchPriceTWD = currentBenchPrice * currentFx;
+            benchmarkHistory[dateStr] = ((currentBenchPriceTWD / benchmarkStartPriceTWD) - 1) * 100;
         }
     }
     return { twrHistory, benchmarkHistory };
