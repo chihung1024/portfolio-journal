@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v1.5.4 - 真正完整、無省略、修正所有已知錯誤)
+// == GCP Cloud Function 完整程式码 (v1.5.4 - 真正完整、无省略、修正所有已知错误)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -8,11 +8,11 @@ const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
 const { v4: uuidv4 } = require('uuid');
 
-// --- 平台設定 ---
+// --- 平台设定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
 const D1_API_KEY = process.env.D1_API_KEY;
 
-// --- D1 資料庫客戶端 ---
+// --- D1 资料库客户端 ---
 const d1Client = {
   async query(sql, params = []) {
     if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set."); }
@@ -38,7 +38,7 @@ const d1Client = {
   }
 };
 
-// --- 資料準備與抓取函式 ---
+// --- 资料准备与抓取函式 ---
 async function fetchAndSaveMarketData(symbol) {
   try {
     console.log(`Fetching full history for ${symbol} from Yahoo Finance...`);
@@ -116,8 +116,7 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
   return marketData;
 }
 
-
-// --- 核心計算與輔助函式 (完整版) ---
+// --- 核心计算与辅助函式 (完整版) ---
 const toDate = v => v.toDate ? v.toDate() : new Date(v);
 const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
 
@@ -540,7 +539,6 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 ]);
                 const benchmarkData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
                 const benchmarkSymbol = benchmarkData.length > 0 ? benchmarkData[0].value : 'SPY';
-                // Pass transactions to getMarketDataFromDb to fetch all necessary market data including exchange rates
                 const marketData = await getMarketDataFromDb(txs, benchmarkSymbol);
                 const [summaryResult, holdingsResult] = await Promise.all([
                     d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
@@ -558,12 +556,12 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                         transactions: txs, 
                         splits, 
                         history, twrHistory, benchmarkHistory,
-                        marketData // Pass market data to the frontend
+                        marketData 
                     } 
                 });
             }
             case 'add_transaction': {
-                const txData = data;
+                const { txData } = data;
                 if (!txData || !txData.symbol) return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
                 const newTxId = uuidv4();
                 await d1Client.query( `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate] );
