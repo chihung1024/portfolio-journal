@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v1.5.2 - 配息修正最終版)
+// == GCP Cloud Function 完整程式碼 (v1.5.2 - 原幣價格顯示修正最終版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -42,7 +42,6 @@ const d1Client = {
 async function fetchAndSaveMarketData(symbol) {
   try {
     console.log(`Fetching full history for ${symbol} from Yahoo Finance...`);
-    // [修正] 新增 auto_adjust: false 和 back_adjust: false 來確保能抓取到最原始的配息資訊
     const hist = await yahooFinance.historical(symbol, { 
         period1: '2000-01-01', 
         interval: '1d',
@@ -485,7 +484,7 @@ function calculateCoreMetrics(evts, market) {
 
 // --- 主計算流程 ---
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] Recalculation Process Start (v2.0 - GCP/D1) ---`);
+    console.log(`--- [${uid}] Recalculation Process Start (v1.5.2) ---`);
     try {
         const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
@@ -510,22 +509,41 @@ async function performRecalculation(uid) {
         const portfolioResult = calculateCoreMetrics(evts, market);
         const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
         const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
-        const { holdingsToUpdate } = portfolioResult.holdings;
+        const { holdingsToUpdate, holdingsToDelete } = portfolioResult.holdings;
         const dbOps = [];
+        
         dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
+        // 這一步其實可以省略，因為後續的 INSERT 會覆蓋。但保留也無妨。
+
         for (const sym in holdingsToUpdate) {
             const h = holdingsToUpdate[sym];
+            // [最終修正] 這就是修正 bug 的地方！確保所有欄位都被包含在 INSERT 指令中。
             dbOps.push({
-                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, marketValueTWD, totalCostTWD, unrealizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                params: [uid, h.symbol, h.quantity, h.currency, h.marketValueTWD, h.totalCostTWD, h.unrealizedPLTWD, h.returnRate]
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                params: [
+                    uid, 
+                    h.symbol, 
+                    h.quantity, 
+                    h.currency, 
+                    h.avgCostOriginal, 
+                    h.totalCostTWD, 
+                    h.investedCostTWD, 
+                    h.currentPriceOriginal, 
+                    h.marketValueTWD, 
+                    h.unrealizedPLTWD, 
+                    h.realizedPLTWD, 
+                    h.returnRate
+                ]
             });
         }
+        
         const summaryData = {
             totalRealizedPL: portfolioResult.totalRealizedPL,
             xirr: portfolioResult.xirr,
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol,
         };
+
         await d1Client.batch([
             { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid]},
             { 
