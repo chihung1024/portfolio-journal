@@ -116,6 +116,7 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
   return marketData;
 }
 
+
 // --- 核心計算與輔助函式 (完整版) ---
 const toDate = v => v.toDate ? v.toDate() : new Date(v);
 const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
@@ -314,19 +315,16 @@ function calculateFinalHoldings(pf, market) {
     const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
     if (qty > 1e-9) {
         const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
-        // Cost in TWD must consider the exchange rate on the day of purchase for each lot
         const totCostTWD = h.lots.reduce((s, l) => {
             const lotFx = findFxRate(market, h.currency, l.date);
             return s + l.quantity * l.pricePerShareOriginal * lotFx;
         }, 0);
-
         const priceHist = market[sym]?.prices || {};
         const curPrice = findNearest(priceHist, today);
         const fx = findFxRate(market, h.currency, today);
         const mktVal = qty * (curPrice ?? 0) * fx;
         const unreal = mktVal - totCostTWD;
         const invested = totCostTWD + h.realizedCostTWD;
-        const totalRet = unreal + h.realizedPLTWD;
         const rrCurrent = totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0;
         
         holdingsToUpdate[sym] = {
@@ -461,9 +459,8 @@ function calculateCoreMetrics(evts, market) {
     return { holdings: { holdingsToUpdate, holdingsToDelete: [] }, totalRealizedPL, xirr, overallReturnRate };
 }
 
-// --- 主計算流程 ---
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] Recalculation Process Start (v1.5.3) ---`);
+    console.log(`--- [${uid}] Recalculation Process Start (v1.5.4) ---`);
     try {
         const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
@@ -485,8 +482,10 @@ async function performRecalculation(uid) {
         const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
         const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
         const { holdingsToUpdate } = portfolioResult.holdings;
+        
         const dbOps = [];
         dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
+        
         for (const sym in holdingsToUpdate) {
             const h = holdingsToUpdate[sym];
             dbOps.push({
@@ -494,6 +493,7 @@ async function performRecalculation(uid) {
                 params: [ uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate ]
             });
         }
+        
         const summaryData = {
             totalRealizedPL: portfolioResult.totalRealizedPL,
             xirr: portfolioResult.xirr,
@@ -516,10 +516,9 @@ async function performRecalculation(uid) {
     }
 }
 
-// --- 統一的 HTTP 觸發器 ---
 exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
-    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST'); res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
+    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
     const apiKey = req.headers['x-api-key'];
@@ -541,33 +540,30 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 ]);
                 const benchmarkData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
                 const benchmarkSymbol = benchmarkData.length > 0 ? benchmarkData[0].value : 'SPY';
-
+                // Pass transactions to getMarketDataFromDb to fetch all necessary market data including exchange rates
                 const marketData = await getMarketDataFromDb(txs, benchmarkSymbol);
-
                 const [summaryResult, holdingsResult] = await Promise.all([
                     d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
                     d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
                 ]);
-                
                 const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
                 const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
                 const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
                 const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-                
                 return res.status(200).send({ 
                     success: true, 
                     data: { 
                         summary, 
                         holdings: holdingsResult, 
                         transactions: txs, 
-                        splits: splits, 
+                        splits, 
                         history, twrHistory, benchmarkHistory,
-                        marketData 
+                        marketData // Pass market data to the frontend
                     } 
                 });
             }
             case 'add_transaction': {
-                const { txData } = data;
+                const txData = data;
                 if (!txData || !txData.symbol) return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
                 const newTxId = uuidv4();
                 await d1Client.query( `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate] );
@@ -589,7 +585,7 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                 return res.status(200).send({ success: true, message: 'Transaction deleted and recalculation triggered.' });
             }
             case 'add_split': {
-                const { splitData } = data;
+                const splitData = data;
                 if (!splitData || !splitData.symbol || !splitData.ratio) return res.status(400).send({ success: false, message: 'Bad Request: Missing split data.' });
                 const newSplitId = uuidv4();
                 await d1Client.query( `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio] );
