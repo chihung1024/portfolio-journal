@@ -279,14 +279,22 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
     const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase();
     const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {};
-    const benchmarkStartPrice = findNearest(benchmarkPrices, startDate);
+    
+    // --- [Benchmark 修正點 1：判斷 Benchmark 幣別並取得起始匯率] ---
+    const benchmarkCurrency = isTwStock(upperBenchmarkSymbol) ? "TWD" : "USD";
+    const startFxRate = findFxRate(market, benchmarkCurrency, startDate);
+    const benchmarkStartPriceOriginal = findNearest(benchmarkPrices, startDate);
 
-    if (!benchmarkStartPrice) {
+    if (!benchmarkStartPriceOriginal) {
         log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
+    // 將起始價格轉換為台幣
+    const benchmarkStartPriceTWD = benchmarkStartPriceOriginal * startFxRate;
+
 
     const cashflows = evts.reduce((acc, e) => {
+        // ... 此處的 cashflows 計算邏輯保持不變 ...
         const dateStr = toDate(e.date).toISOString().split('T')[0];
         let flow = 0;
         const currency = e.currency || market[e.symbol.toUpperCase()]?.currency || 'USD';
@@ -322,6 +330,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     let lastMarketValue = 0;
 
     for (const dateStr of dates) {
+        // --- 投資組合 TWR 計算 (此部分完全不變) ---
         const MVE = dailyPortfolioValues[dateStr]; 
         const CF = cashflows[dateStr] || 0; 
 
@@ -330,13 +339,20 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
             const periodReturn = MVE / denominator;
             cumulativeHpr *= periodReturn;
         }
-
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
         lastMarketValue = MVE;
         
-        const currentBenchPrice = findNearest(benchmarkPrices, new Date(dateStr));
-        if (currentBenchPrice) {
-            benchmarkHistory[dateStr] = ((currentBenchPrice / benchmarkStartPrice) - 1) * 100;
+        // --- [Benchmark 修正點 2：在迴圈中取得每日匯率並計算台幣報酬率] ---
+        const currentBenchPriceOriginal = findNearest(benchmarkPrices, new Date(dateStr));
+        
+        // 確保起始台幣價格有效
+        if (currentBenchPriceOriginal && benchmarkStartPriceTWD > 0) {
+            // 取得當天的匯率
+            const currentFxRate = findFxRate(market, benchmarkCurrency, new Date(dateStr));
+            // 將當前價格轉換為台幣
+            const currentBenchPriceTWD = currentBenchPriceOriginal * currentFxRate;
+            // 使用台幣價格來計算報酬率
+            benchmarkHistory[dateStr] = ((currentBenchPriceTWD / benchmarkStartPriceTWD) - 1) * 100;
         }
     }
     
