@@ -693,7 +693,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
 
     // 4. 處理請求
     const { action, data } = req.body;
-    const uid = decodedToken.uid; 
+    const uid = decodedToken.uid;
     
     if (!action || !uid) {
         return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
@@ -717,16 +717,16 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
                 const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
                 const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-                return res.status(200).send({ 
-                    success: true, 
-                    data: { 
-                        summary, 
-                        holdings: holdingsResult, 
-                        transactions: txs, 
-                        splits, 
+                return res.status(200).send({
+                    success: true,
+                    data: {
+                        summary,
+                        holdings: holdingsResult,
+                        transactions: txs,
+                        splits,
                         history, twrHistory, benchmarkHistory,
-                        marketData 
-                    } 
+                        marketData
+                    }
                 });
             }
 
@@ -780,7 +780,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             case 'update_benchmark': {
                 const { benchmarkSymbol } = data;
                 if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
-                await getMarketDataFromDb([], benchmarkSymbol); 
+                await getMarketDataFromDb([], benchmarkSymbol);
                 await d1Client.query( 'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', benchmarkSymbol] );
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
@@ -801,33 +801,38 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 const { evts } = prepareEvents(txs, splits, market);
 
                 const coreMetricsResult = calculateCoreMetrics(evts, market);
-                const pf_for_symbols = coreMetricsResult.pf;
-                const symbolsToFetch = Object.keys(pf_for_symbols).filter(sym => pf_for_symbols[sym].lots.reduce((sum, lot) => sum + lot.quantity, 0) > 1e-9);
+                const pf_for_final_holdings = coreMetricsResult.pf;
+
+                const symbolsToFetch = Object.keys(pf_for_final_holdings)
+                    .filter(sym => pf_for_final_holdings[sym].lots.reduce((sum, lot) => sum + lot.quantity, 0) > 1e-9);
                 
                 let liveQuotes = {};
                 if (symbolsToFetch.length > 0) {
-                    const quoteData = await yahooFinance.quote(symbolsToFetch);
-                    liveQuotes = (Array.isArray(quoteData) ? quoteData : [quoteData]).reduce((acc, q) => {
-                        if (q) acc[q.symbol] = q;
-                        return acc;
-                    }, {});
+                    try {
+                        const quoteData = await yahooFinance.quote(symbolsToFetch);
+                        liveQuotes = (Array.isArray(quoteData) ? quoteData : [quoteData]).reduce((acc, q) => {
+                            if (q) acc[q.symbol] = q;
+                            return acc;
+                        }, {});
+                    } catch(quoteError) {
+                        console.error("抓取即時報價失敗:", quoteError.message);
+                    }
                 }
                 
-                const { holdingsToUpdate } = calculateFinalHoldings(pf_for_symbols, market, liveQuotes);
+                const { holdingsToUpdate } = calculateFinalHoldings(pf_for_final_holdings, market, liveQuotes);
                 
-                const summaryResult = await d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid]);
-                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
+                const summaryData = {
+                    totalRealizedPL: coreMetricsResult.totalRealizedPL,
+                    xirr: coreMetricsResult.xirr,
+                    overallReturnRate: coreMetricsResult.overallReturnRate,
+                    benchmarkSymbol: benchmarkSymbol
+                };
 
                 return res.status(200).send({ 
                     success: true, 
                     data: {
                         holdings: Object.values(holdingsToUpdate),
-                        summary: {
-                            ...summary,
-                            totalRealizedPL: coreMetricsResult.totalRealizedPL,
-                            xirr: coreMetricsResult.xirr,
-                            overallReturnRate: coreMetricsResult.overallReturnRate
-                        }
+                        summary: summaryData
                     } 
                 });
             }
