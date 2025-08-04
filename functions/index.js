@@ -307,39 +307,52 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 }
 
 function calculateFinalHoldings(pf, market) {
-  const holdingsToUpdate = {};
-  const today = new Date();
-  for (const sym in pf) {
-    const h = pf[sym];
-    const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
-    if (qty > 1e-9) {
-        const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
-        const totCostTWD = h.lots.reduce((s, l) => {
-            const lotFx = findFxRate(market, h.currency, l.date);
-            return s + l.quantity * l.pricePerShareOriginal * lotFx;
-        }, 0);
-        const priceHist = market[sym]?.prices || {};
-        const curPrice = findNearest(priceHist, today);
-        const fx = findFxRate(market, h.currency, today);
-        const mktVal = qty * (curPrice ?? 0) * fx;
-        const unreal = mktVal - totCostTWD;
-        const invested = totCostTWD + h.realizedCostTWD;
-        const rrCurrent = totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0;
-        
-        holdingsToUpdate[sym] = {
-          symbol: sym, quantity: qty, currency: h.currency,
-          avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0, 
-          totalCostTWD: totCostTWD, 
-          investedCostTWD: invested,
-          currentPriceOriginal: curPrice ?? null, 
-          marketValueTWD: mktVal,
-          unrealizedPLTWD: unreal, 
-          realizedPLTWD: h.realizedPLTWD,
-          returnRate: rrCurrent
-        };
-    }
-  }
-  return { holdingsToUpdate, holdingsToDelete: [] };
+    const holdingsToUpdate = {};
+    const today = new Date();
+    for (const sym in pf) {
+        const h = pf[sym];
+        const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
+        if (qty > 1e-9) {
+            const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
+
+            // --- [核心最終修正：從 a lot 中直接加總已算好的 TWD 成本] ---
+            // 舊的錯誤邏輯:
+            // const totCostTWD = h.lots.reduce((s, l) => {
+            //     const lotFx = findFxRate(market, h.currency, l.date);
+            //     return s + l.quantity * l.pricePerShareOriginal * lotFx;
+            // }, 0);
+
+            // 新的正確邏輯:
+            // 直接加總每個 a lot 中已經包含手動匯率計算的 TWD 成本。
+            const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.costPerShareTWD, 0);
+            
+            const priceHist = market[sym]?.prices || {};
+            const curPrice = findNearest(priceHist, today);
+            const fx = findFxRate(market, h.currency, today);
+            const mktVal = qty * (curPrice ?? 0) * fx;
+            const unreal = mktVal - totCostTWD;
+            
+            // investedCostTWD should be the sum of realized cost and current holding cost
+            const invested = totCostTWD + (h.realizedCostTWD || 0);
+            const rrCurrent = totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0;
+            
+            holdingsToUpdate[sym] = {
+                symbol: sym,
+                quantity: qty,
+                currency: h.currency,
+                avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0,
+                totalCostTWD: totCostTWD,
+                investedCostTWD: invested,
+                currentPriceOriginal: curPrice ?? null,
+                marketValueTWD: mktVal,
+                unrealizedPLTWD: unreal,
+                realizedPLTWD: h.realizedPLTWD || 0, // Ensure this exists
+                returnRate: rrCurrent
+            };
+        }
+    }
+    // The second element of the returned object is for holdings to delete, which is not used in this logic.
+    return { holdingsToUpdate, holdingsToDelete: [] }; 
 }
 
 function createCashflowsForXirr(evts, holdings, market) {
