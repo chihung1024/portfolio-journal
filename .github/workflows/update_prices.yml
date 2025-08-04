@@ -1,9 +1,9 @@
 name: Update Stock Prices
 
 on:
-  workflow_dispatch:        # 手動執行
+  workflow_dispatch:        # 允許手動執行
   schedule:
-    - cron: '0 0 * * *'     # 每日 00:00 UTC（台灣 08:00）
+    - cron: '0 0 * * *'     # 每日 00:00 UTC 執行
 
 jobs:
   update-prices:
@@ -17,20 +17,14 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance firebase-admin
+          pip install yfinance requests pandas
 
       - name: Run price-update script
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
+          D1_API_KEY: ${{ secrets.D1_API_KEY }}
+          GCP_API_URL: ${{ secrets.GCP_API_URL }}
         run: python main.py
