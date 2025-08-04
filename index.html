@@ -78,6 +78,11 @@
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
                     <div class="sm:flex sm:items-center sm:space-x-4"><h2 class="text-xl font-bold text-gray-800">投資組合</h2><div class="mt-2 sm:mt-0 border-b sm:border-b-0 sm:border-l border-gray-200 sm:pl-4"><nav class="-mb-px flex space-x-6" id="tabs"><a href="#" data-tab="holdings" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-indigo-500 text-indigo-600">持股一覽</a><a href="#" data-tab="transactions" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a><a href="#" data-tab="splits" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a></nav></div></div>
                     <div class="flex space-x-2">
+                        <button id="manual-refresh-btn" class="btn bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-green-700 flex items-center space-x-2">
+                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
+                            <span>更新即時報價</span>
+                        </button>
+                        
                         <button id="manage-splits-btn" class="btn bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700 flex items-center space-x-2"><i data-lucide="git-merge" class="h-5 w-5"></i><span>管理拆股</span></button>
                         <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
                     </div>
@@ -312,6 +317,42 @@
             }
             return result;
         }
+
+        async function handleManualRefresh() {
+            if (!userId) return;
+        
+            const btn = document.getElementById('manual-refresh-btn');
+            const icon = btn.querySelector('i');
+            
+            // 禁用按鈕並顯示讀取中動畫
+            btn.disabled = true;
+            icon.classList.add('animate-spin');
+            showNotification('info', '正在抓取即時報價並重新計算...');
+        
+            try {
+                // 我們將呼叫一個新的後端 action，名為 'recalculate_with_live_data'
+                const result = await apiRequest('recalculate_with_live_data', {});
+                
+                // 後端計算完後，會返回最新的完整數據，我們用它來刷新整個頁面
+                const portfolioData = result.data;
+                const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+                    obj[item.symbol] = item; return obj;
+                }, {});
+        
+                renderHoldingsTable(holdingsObject);
+                updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+                
+                showNotification('success', '資產數據已更新至最新報價！');
+        
+            } catch (error) {
+                console.error('Failed to manually refresh data:', error);
+                showNotification('error', `更新失敗: ${error.message}`);
+            } finally {
+                // 恢復按鈕
+                btn.disabled = false;
+                icon.classList.remove('animate-spin');
+            }
+        }
         
         // --- 事件監聽器設定 ---
         function setupEventListeners() {
@@ -341,6 +382,9 @@
             
             document.getElementById('currency').addEventListener('change', toggleOptionalFields);
             document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
+           
+            // [新增] 綁定手動更新按鈕的點擊事件
+            document.getElementById('manual-refresh-btn').addEventListener('click', handleManualRefresh);
         }
 
         // --- 所有其他 UI、表單處理、輔助函式 (保持不變) ---
