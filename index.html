@@ -283,17 +283,33 @@
             const formatHistory = (history) => history ? Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]) : [];
             if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: formatHistory(twrHistory) }, { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) } ]);
         }
+
         async function apiRequest(action, data) {
-            const payload = { action, uid: currentUserId, data };
-            const response = await fetch(API.URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
-                body: JSON.stringify(payload)
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.message || '伺服器發生錯誤');
-            return result;
+            const payload = { action, uid: currentUserId, data };
+        
+            // --- [新增偵錯日誌] ---
+            // 在發送請求前，將我們要發送的完整資料印出來看看
+            console.log("即將發送到後端的完整 Payload:", JSON.stringify(payload, null, 2));
+            // --- [新增偵錯日誌] ---
+        
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-KEY': API.KEY
+                },
+                body: JSON.stringify(payload)
+            });
+        
+            const result = await response.json();
+            if (!response.ok) {
+                // 將後端回傳的詳細錯誤訊息也印出來
+                console.error("後端返回的錯誤詳情:", result); 
+                throw new Error(result.message || '伺服器發生錯誤');
+            }
+            return result;
         }
+        
         function handleEdit(e) {
             const txId = e.target.dataset.id;
             const transaction = transactions.find(t => t.id === txId);
