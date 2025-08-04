@@ -585,7 +585,16 @@ function calculateCoreMetrics(evts, market, log) {
     const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0);
     const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
     const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
-    return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
+    
+    // --- [核心修正] ---
+    // 在回傳的物件中，加入 pf 這個欄位
+    return { 
+        holdings: { holdingsToUpdate, holdingsToDelete }, 
+        totalRealizedPL, 
+        xirr, 
+        overallReturnRate,
+        pf: pf // <--- 就是加上這一行
+    };
 }
 
 async function performRecalculation(uid) {
