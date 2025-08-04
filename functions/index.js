@@ -560,14 +560,21 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
                     } 
                 });
             }
-            case 'add_transaction': {
-                const { txData } = data;
-                if (!txData || !txData.symbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少交易資料。' });
-                const newTxId = uuidv4();
-                await d1Client.query( `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate] );
-                await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: '交易已新增並觸發重新計算。', txId: newTxId });
-            }
+
+            case 'add_transaction': {
+                const txData = data; // [核心修正] 直接使用 data 物件，而不是解構 txData
+                if (!txData || !txData.symbol) {
+                    return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
+                }
+                const newTxId = uuidv4();
+                await d1Client.query(
+                    `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: 'Transaction added and recalculation triggered.', txId: newTxId });
+            }
+          
             case 'edit_transaction': {
                 const { txId, txData } = data;
                 if (!txId || !txData) return res.status(400).send({ success: false, message: '請求錯誤：缺少 txId 或 txData。' });
