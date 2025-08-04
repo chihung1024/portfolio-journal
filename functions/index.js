@@ -1,6 +1,7 @@
 /* eslint-disable */
 // =========================================================================================
 // == GCP Cloud Function 完整程式碼 (v1.5.2 - 原幣價格顯示修正最終版)
+// == 功能：包含讀取、新增、編輯、刪除、拆股、更新Benchmark等所有後端功能。
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -513,8 +514,7 @@ async function performRecalculation(uid) {
         const dbOps = [];
         
         dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
-        // 這一步其實可以省略，因為後續的 INSERT 會覆蓋。但保留也無妨。
-
+        
         for (const sym in holdingsToUpdate) {
             const h = holdingsToUpdate[sym];
             // [最終修正] 這就是修正 bug 的地方！確保所有欄位都被包含在 INSERT 指令中。
@@ -585,10 +585,7 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
     if (!action || !uid) return res.status(400).send({ success: false, message: 'Bad Request: Missing action or uid.' });
 
     try {
-          switch (action) {
-            case 'recalculate':
-                        await performRecalculation(uid);
-                        return res.status(200).send({ success: true, message: `Recalculation successful for ${uid}` });
+        switch (action) {
             case 'get_data': {
                 const [summaryResult, holdingsResult, transactionsResult, splitsResult] = await Promise.all([
                     d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
