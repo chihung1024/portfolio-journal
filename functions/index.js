@@ -343,12 +343,14 @@ function calculateFinalHoldings(pf, market) {
 }
 
 function createCashflowsForXirr(evts, holdings, market) {
-    const flows = [];
-    evts.filter(e => e.eventType === "transaction").forEach(t => {
-        const fx = findFxRate(market, t.currency, toDate(t.date));
-        const amt = getTotalCost(t) * fx;
-        flows.push({ date: toDate(t.date), amount: t.type === "buy" ? -amt : amt });
-    });
+    const flows = [];
+    evts.filter(e => e.eventType === "transaction").forEach(t => {
+        // --- [修正點 4：XIRR 現金流，使用手動匯率] ---
+        // 優先使用交易本身的匯率 t.exchangeRate，若無則查找市場匯率
+        const fx = t.exchangeRate || findFxRate(market, t.currency, toDate(t.date));
+        const amt = getTotalCost(t) * fx;
+        flows.push({ date: toDate(t.date), amount: t.type === "buy" ? -amt : amt });
+    });
     evts.filter(e => e.eventType === "dividend").forEach(d => {
         const stateOnDate = getPortfolioStateOnDate(evts, toDate(d.date));
         const sym = d.symbol.toUpperCase();
