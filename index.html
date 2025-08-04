@@ -134,6 +134,7 @@
         const currentUserId = "test-user-01";
         let transactions = [];
         let userSplits = [];
+        let marketDataForFrontend = {}; // 新增：用來儲存匯率等市場數據
         let chart, twrChart;
         let confirmCallback = null;
 
@@ -166,6 +167,10 @@
                 const portfolioData = result.data;
                 transactions = portfolioData.transactions || [];
                 userSplits = portfolioData.splits || [];
+    
+                // [修正] 將後端傳來的市場數據(匯率)也存起來
+                marketDataForFrontend = portfolioData.marketData || {};
+                
                 const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
                     obj[item.symbol] = item; return obj;
                 }, {});
@@ -215,10 +220,46 @@
             for (const t of transactions) {
                 const row = document.createElement('tr');
                 row.className = "hover:bg-gray-50";
-                const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * (t.exchangeRate || 1);
-                row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap">${t.date.split('T')[0]}</td><td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
+                
+                // [核心修正] 在前端計算TWD總額時，從 marketDataForFrontend 查找並應用匯率
+                const transactionDate = t.date.split('T')[0];
+                const fxRate = findFxRateForFrontend(t.currency, transactionDate);
+                const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+    
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td>
+                    <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
+                    <td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td>
+                    <td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                        <button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
+                        <button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button>
+                    </td>`;
                 tableBody.appendChild(row);
             };
+        }
+
+        // --- 新增的輔助函式 ---
+        const currencyToFx_FE = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
+    
+        function findFxRateForFrontend(currency, dateStr) {
+            if (currency === 'TWD') return 1;
+            const fxSym = currencyToFx_FE[currency];
+            if (!fxSym || !marketDataForFrontend[fxSym]) return 1;
+    
+            const rates = marketDataForFrontend[fxSym].rates || {};
+            if (rates[dateStr]) return rates[dateStr];
+            
+            // 向前查找最近的匯率
+            let nearestDate = null;
+            for (const rateDate in rates) {
+                if (rateDate <= dateStr && (!nearestDate || rateDate > nearestDate)) {
+                    nearestDate = rateDate;
+                }
+            }
+            return nearestDate ? rates[nearestDate] : 1;
         }
 
         function renderSplitsTable() {
