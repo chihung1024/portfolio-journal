@@ -261,24 +261,35 @@ function getPortfolioStateOnDate(allEvts, targetDate) {
   return state;
 }
 
-function dailyValue(state, market, date) {
+function dailyValue(state, market, date, allEvts) {
   return Object.keys(state).reduce((totalValue, sym) => {
     const s = state[sym];
     const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
     if (qty < 1e-9) return totalValue;
 
-    const price = findNearest(market[sym]?.prices, date);
+    let price = findNearest(market[sym]?.prices, date);
     if (price === undefined) {
       const yesterday = new Date(date);
       yesterday.setDate(yesterday.getDate() - 1);
       const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date;
       if (yesterday < firstLotDate) return totalValue;
       const yesterdayState = { [sym]: s };
-      return totalValue + dailyValue(yesterdayState, market, yesterday);
+      // [BUG FIX] 確保遞迴呼叫時也傳遞 allEvts
+      return totalValue + dailyValue(yesterdayState, market, yesterday, allEvts);
     }
 
+    // [BUG FIX] 將股價還原至未調整狀態，以應對資料來源提供的已調整股價。
+    // 這確保了當天的名目持股數量乘以當天的名目股價，從而得到正確的市值。
+    const futureSplits = allEvts.filter(e =>
+      e.eventType === 'split' &&
+      e.symbol.toUpperCase() === sym.toUpperCase() &&
+      toDate(e.date) > toDate(date)
+    );
+    const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
+    const unadjustedPrice = price * adjustmentRatio;
+
     const fx = findFxRate(market, s.currency, date);
-    return totalValue + (qty * price * (s.currency === "TWD" ? 1 : fx));
+    return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
   }, 0);
 }
 
@@ -326,7 +337,8 @@ function calculateDailyPortfolioValues(evts, market, startDate) {
   while (curDate <= today) {
     const dateStr = curDate.toISOString().split("T")[0];
     const stateOnDate = getPortfolioStateOnDate(evts, curDate);
-    history[dateStr] = dailyValue(stateOnDate, market, curDate);
+    // [BUG FIX] 傳遞 evts 參數至 dailyValue 函式
+    history[dateStr] = dailyValue(stateOnDate, market, curDate, evts);
     curDate.setDate(curDate.getDate() + 1);
   }
   return history;
