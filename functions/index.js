@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.1.1 - Benchmark 同步修正版)
+// == GCP Cloud Function 完整程式碼 (v2.3.0 - 最終穩定版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -549,13 +549,12 @@ function calculateCoreMetrics(evts, market) {
 // --- 完整計算函式保留區 (結束) ---
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.1.1) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.2.0 - 重構) ---`);
     try {
-        const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-        const [txs, splits] = await Promise.all([
+        const [txs, splits, controlsData] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
+            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
+            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
         ]);
 
         if (txs.length === 0) {
@@ -566,6 +565,21 @@ async function performRecalculation(uid) {
             ]);
             return;
         }
+
+        // --- [重構核心] ---
+        // 1. 確定所有需要的金融商品代碼和最早的日期
+        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+        const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+        const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
+        const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
+        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
+        const firstDate = txs[0].date.split('T')[0];
+
+        // 2. 一次性並發檢查並回補所有需要的數據
+        await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, firstDate)));
+        console.log(`[${uid}] 所有金融商品的數據覆蓋範圍已確認完畢。`);
+        // --- [重構核心結束] ---
+
 
         const market = await getMarketDataFromDb(txs, benchmarkSymbol);
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
@@ -659,22 +673,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 const txData = isEditing ? data.txData : data;
                 const txId = isEditing ? data.txId : uuidv4();
 
-                // --- [BUG FIX v2.1.1] ---
-                // 1. 在操作交易前，先讀取使用者目前的 benchmark 設定
-                const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-                const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY'; // 若未設定，則使用預設值 'SPY'
-
-                // 2. 確保所有相關金融商品 (股票、匯率、Benchmark) 的數據都已覆蓋到新交易的日期
-                await ensureDataCoverage(txData.symbol.toUpperCase(), txData.date);
-                const fxSymbol = currencyToFx[txData.currency];
-                if (fxSymbol) {
-                    await ensureDataCoverage(fxSymbol, txData.date);
-                }
-                // *** 這是修正問題的關鍵步驟：確保 Benchmark 的數據也同步更新 ***
-                await ensureDataCoverage(benchmarkSymbol, txData.date);
-                // --- [BUG FIX END] ---
-
-                // 3. 寫入交易紀錄
+                // 簡化後的邏輯：直接寫入資料庫，然後讓 performRecalculation 處理一切
                 if(isEditing) {
                     await d1Client.query(
                         `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
@@ -687,7 +686,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     );
                 }
                 
-                // 4. 觸發重算 (此時所有數據都已準備好)
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '操作成功並觸發重新計算。', id: txId });
             }
@@ -703,16 +701,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             case 'update_benchmark': {
                 const { benchmarkSymbol } = data;
                 if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
-
-                const txs = await d1Client.query('SELECT MIN(date) as first_date FROM transactions WHERE uid = ?', [uid]);
-                const firstDate = txs.length > 0 && txs[0].first_date ? txs[0].first_date.split('T')[0] : new Date().toISOString().split('T')[0];
-
-                await ensureDataCoverage(benchmarkSymbol.toUpperCase(), firstDate);
                 
                 await d1Client.query(
                     'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
                     [uid, 'benchmarkSymbol', benchmarkSymbol.toUpperCase()]
                 );
+                // 讓 performRecalculation 自動處理數據回補
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
             }
