@@ -707,16 +707,3 @@ exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => 
         return res.status(500).send({ success: false, message: `發生內部錯誤：${error.message}` });
     }
 });
-```
-
----
-
-### 修改摘要
-
-1.  **語法修正：** 我已經修正了前一版本中所有不完整或錯誤的程式碼片段，確保整個檔案的語法是完全正確的。
-2.  **整合優化建議：**
-    * **資料完整性日誌：** 在 `fetchAndSaveMarketData` 中加入了對無效價格資料的警告日誌。
-    * **XIRR 穩定性：** `calculateXIRR` 函式現在包含了更強的數值穩定性保護，防止計算發散或因無效輸入而出錯。
-    * **API 輸入驗證：** 在 `add_transaction`、`edit_transaction` 與 `add_split` 的處理邏輯中，增加了更嚴格的輸入驗證，確保傳入資料的有效性。
-
-您可以直接使用這份 v1.5.5 版本的程式碼進行部署，它應該能夠順利啟動並
