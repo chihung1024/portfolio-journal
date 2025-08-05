@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.3.0 - 最終穩定版)
+// == GCP Cloud Function 完整程式碼 (v2.3.1 - 數據校驗修正版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -40,6 +40,10 @@ const d1Client = {
 
 // --- 資料抓取與覆蓋範圍管理 ---
 
+/**
+ * [BUG FIX v2.3.1] 修改函式，使其返回抓取到的原始數據陣列
+ * @returns {Promise<Array|null>} - 成功則返回數據陣列，失敗則返回 null
+ */
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         console.log(`[Data Fetch] 正在從 Yahoo Finance 抓取 ${symbol} 從 ${startDate} 到 ${endDate} 的數據...`);
@@ -53,7 +57,7 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
 
         if (!hist || hist.length === 0) {
             console.warn(`[Data Fetch] 警告：在指定區間內找不到 ${symbol} 的數據。`);
-            return true;
+            return []; // 返回空陣列表示沒有抓到數據
         }
 
         const dbOps = [];
@@ -79,11 +83,11 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
             await d1Client.batch(dbOps);
             console.log(`[Data Fetch] 成功寫入 ${dbOps.length} 筆 ${symbol} 的新數據到 D1。`);
         }
-        return true;
+        return hist; // 返回抓取到的原始數據
 
     } catch (e) {
         console.error(`[Data Fetch] 錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
-        return false;
+        return null; // 返回 null 表示抓取過程出錯
     }
 }
 
@@ -96,11 +100,20 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
 
     if (coverageData.length === 0) {
         console.log(`[Coverage Check] ${symbol} 是新商品，將抓取從 ${requiredStartDate} 到今天的完整數據。`);
-        await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
-        await d1Client.query(
-            'INSERT INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)',
-            [symbol, requiredStartDate, today]
-        );
+        const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
+
+        // [BUG FIX v2.3.1] 核心修正：使用 API 實際返回的最早日期來記錄
+        if (fetchedData && fetchedData.length > 0) {
+            const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
+            console.log(`[Coverage Check] API 返回的實際最早日期為 ${actualEarliestDate}，將以此日期為準進行記錄。`);
+            await d1Client.query(
+                'INSERT INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)',
+                [symbol, actualEarliestDate, today]
+            );
+        } else {
+            console.warn(`[Coverage Check] ${symbol} 首次抓取未能返回任何數據，將不會在 coverage 表中創建紀錄。`);
+        }
+
     } else {
         const currentEarliestDate = coverageData[0].earliest_date;
         if (requiredStartDate < currentEarliestDate) {
@@ -154,7 +167,7 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
 }
 
 
-// --- 核心計算與輔助函式 ---
+// --- 核心計算與輔助函式 (此區塊無變動) ---
 const toDate = v => v ? (v.toDate ? v.toDate() : new Date(v)) : null;
 const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 
@@ -549,7 +562,7 @@ function calculateCoreMetrics(evts, market) {
 // --- 完整計算函式保留區 (結束) ---
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.2.0 - 重構) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.3.0 - 重構) ---`);
     try {
         const [txs, splits, controlsData] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -566,8 +579,6 @@ async function performRecalculation(uid) {
             return;
         }
 
-        // --- [重構核心] ---
-        // 1. 確定所有需要的金融商品代碼和最早的日期
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
         const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
         const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
@@ -575,11 +586,8 @@ async function performRecalculation(uid) {
         const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
         const firstDate = txs[0].date.split('T')[0];
 
-        // 2. 一次性並發檢查並回補所有需要的數據
         await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, firstDate)));
         console.log(`[${uid}] 所有金融商品的數據覆蓋範圍已確認完畢。`);
-        // --- [重構核心結束] ---
-
 
         const market = await getMarketDataFromDb(txs, benchmarkSymbol);
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
@@ -632,11 +640,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
 
     const { action, uid, data } = req.body;
-    if (!action || !uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
+    if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
     try {
         switch (action) {
             case 'get_data': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const [txs, splits] = await Promise.all([
                     d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
                     d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
@@ -669,11 +678,11 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
 
             case 'add_transaction':
             case 'edit_transaction': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const isEditing = action === 'edit_transaction';
                 const txData = isEditing ? data.txData : data;
                 const txId = isEditing ? data.txId : uuidv4();
 
-                // 簡化後的邏輯：直接寫入資料庫，然後讓 performRecalculation 處理一切
                 if(isEditing) {
                     await d1Client.query(
                         `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
@@ -691,6 +700,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             }
 
             case 'delete_transaction': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const { txId } = data;
                 if (!txId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 txId。' });
                 await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
@@ -699,6 +709,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             }
 
             case 'update_benchmark': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const { benchmarkSymbol } = data;
                 if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
                 
@@ -706,12 +717,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
                     [uid, 'benchmarkSymbol', benchmarkSymbol.toUpperCase()]
                 );
-                // 讓 performRecalculation 自動處理數據回補
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
             }
 
             case 'add_split': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const { date, symbol, ratio } = data;
                 if (!date || !symbol || !ratio) return res.status(400).send({ success: false, message: '請求錯誤：缺少拆股事件必要欄位。' });
                 const newSplitId = uuidv4();
@@ -720,21 +731,60 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
             }
             case 'delete_split': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const { splitId } = data;
                 if (!splitId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 splitId。' });
                 await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '分割事件已刪除並觸發重新計算。' });
             }
-            case 'recalculate':
+            case 'recalculate': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: `${uid} 的重新計算成功` });
+            }
+            
+            case 'clear_user_data': {
+                if (!uid) {
+                    return res.status(400).send({ success: false, message: '請求錯誤：清除使用者資料必須提供 uid。' });
+                }
+                console.warn(`[DANGER] 即將開始刪除使用者 ${uid} 的所有資料...`);
+                const userTables = ['transactions', 'splits', 'holdings', 'portfolio_summary', 'controls'];
+                const deleteOps = userTables.map(table => ({
+                    sql: `DELETE FROM ${table} WHERE uid = ?`,
+                    params: [uid]
+                }));
+                await d1Client.batch(deleteOps);
+                console.log(`[SUCCESS] 已成功清除使用者 ${uid} 的所有資料。`);
+                return res.status(200).send({ success: true, message: `已成功清除使用者 ${uid} 的所有資料。` });
+            }
+
+            case '__DANGEROUSLY_CLEAR_ENTIRE_DATABASE__': {
+                console.warn(`[DANGER ZONE] 收到清空整個資料庫的請求！`);
+                if (data?.confirm !== 'DELETE_ALL_DATA_NOW') {
+                     return res.status(403).send({ success: false, message: '危險操作！請求被拒絕。請提供正確的確認訊息以清空整個資料庫。' });
+                }
+
+                const allTables = [
+                    'transactions', 'splits', 'holdings', 'portfolio_summary', 'controls',
+                    'price_history', 'dividend_history', 'exchange_rates', 'market_data_coverage'
+                ];
+                const deleteOps = allTables.map(table => ({
+                    sql: `DELETE FROM ${table};`,
+                    params: []
+                }));
+                
+                await d1Client.batch(deleteOps);
+                console.log(`[DANGER ZONE] 整個資料庫已被成功清空。`);
+                return res.status(200).send({ success: true, message: '已成功清除資料庫中的所有資料。所有資料表結構已保留。' });
+            }
 
             default:
                 return res.status(400).send({ success: false, message: '未知的操作' });
         }
     } catch (error) {
-        console.error(`[${uid}] '${action}' 操作的處理程序失敗：`, error);
-        return res.status(500).send({ success: false, message: `發生內部錯誤：${error.message}` });
+        const errorMessage = error.message || 'An unknown error occurred.';
+        console.error(`[${uid || 'N/A'}] '${action}' 操作的處理程序失敗：`, errorMessage);
+        return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
 });
