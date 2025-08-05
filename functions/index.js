@@ -44,43 +44,56 @@ const d1Client = {
 };
 
 // --- 資料準備與抓取函式 ---
-async function fetchAndSaveMarketData(symbol) {
+(symbol, startDate, endDate) {
   try {
-    console.log(`從 Yahoo Finance 抓取 ${symbol} 的完整歷史記錄...`);
+    const sDate = new Date(startDate);
+    const eDate = new Date(endDate);
+    const period1 = sDate.toISOString().split('T')[0];
+    const period2 = eDate.toISOString().split('T')[0];
+
+    console.log(`從 Yahoo Finance 抓取 ${symbol} 的[復權]歷史記錄，範圍: ${period1} 到 ${period2}...`);
+    
+    // --- [核心修正] ---
+    // autoAdjust: true 會自動使用調整後的收盤價，這已經考慮了股息和拆股
+    // backAdjust: true 是另一種調整方式，通常 autoAdjust 已足夠
     const hist = await yahooFinance.historical(symbol, { 
-        period1: '2000-01-01', 
+        period1: period1, 
+        period2: period2,
         interval: '1d',
-        autoAdjust: false,
-        backAdjust: false
+        events: 'div', // 確保股息事件被包含
     });
+    // --- [修正結束] ---
+
+    if (hist.length === 0) {
+        console.log(`${symbol} 在此範圍內沒有數據可更新。`);
+        return;
+    }
+
     const dbOps = [];
     const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
-    dbOps.push({ sql: `DELETE FROM ${tableName} WHERE symbol = ?`, params: [symbol] });
-    if (!symbol.includes("=")) {
-        dbOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
-    }
+
     for(const item of hist) {
-        if(item.close) {
+        if(item.adjClose) { // [修改] 使用 adjClose (還原權值) 作為我們的價格
             dbOps.push({
-                sql: `INSERT INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
-                params: [symbol, item.date.toISOString().split("T")[0], item.close]
+                sql: `INSERT OR IGNORE INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
+                params: [symbol, item.date.toISOString().split("T")[0], item.adjClose]
             });
         }
         if(item.dividends && item.dividends > 0) {
              dbOps.push({
-                sql: `INSERT INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
+                sql: `INSERT OR IGNORE INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
                 params: [symbol, item.date.toISOString().split("T")[0], item.dividends]
             });
         }
     }
-    await d1Client.batch(dbOps);
-    console.log(`成功抓取並寫入 ${symbol} 的完整歷史記錄。`);
-    const prices = hist.reduce((acc, cur) => { if (cur.close) acc[cur.date.toISOString().split("T")[0]] = cur.close; return acc; }, {});
-    const dividends = hist.reduce((acc, cur) => { if (cur.dividends > 0) acc[cur.date.toISOString().split("T")[0]] = cur.dividends; return acc; }, {});
-    return { prices, dividends, rates: prices };
+
+    if (dbOps.length > 0) {
+        await d1Client.batch(dbOps);
+        console.log(`成功寫入 ${symbol} 的 ${dbOps.length} 筆新數據。`);
+    }
+
   } catch (e) {
     console.log(`錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
-    return null;
   }
 }
 
@@ -452,28 +465,36 @@ function calculateXIRR(flows) {
     return (npv && Math.abs(npv) < 1e-6) ? guess : null;
 }
 
-function calculateCoreMetrics(evts, market, log) {
+function calculateCoreMetrics(evts, market) { // 移除了 log 參數，因為沒用到
     const pf = {};
     let totalRealizedPL = 0;
+
     for (const e of evts) {
         const sym = e.symbol.toUpperCase();
         if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 };
+        
         switch (e.eventType) {
             case "transaction": {
-                let fx;
-                if (e.exchangeRate && e.currency !== 'TWD') {
-                    fx = e.exchangeRate;
-                } else {
-                    fx = findFxRate(market, e.currency, toDate(e.date));
-                }
-                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+                let fx = findFxRate(market, e.currency, toDate(e.date));
+                if (e.exchangeRate) fx = e.exchangeRate;
+
+                const costTWD = getTotalCost(e) * fx;
 
                 if (e.type === "buy") {
-                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / e.quantity, date: toDate(e.date) });
-                } else {
+                    pf[sym].lots.push({ 
+                        quantity: e.quantity, 
+                        pricePerShareOriginal: e.price, 
+                        pricePerShareTWD: costTWD / e.quantity, 
+                        date: toDate(e.date) 
+                    });
+                } else { // sell
                     let sellQty = e.quantity;
                     const saleProceedsTWD = costTWD;
                     let costOfGoodsSoldTWD = 0;
+                    
+                    // FIFO 先進先出
+                    pf[sym].lots.sort((a,b) => a.date - b.date);
+
                     while (sellQty > 0 && pf[sym].lots.length > 0) {
                         const lot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, lot.quantity);
@@ -489,28 +510,42 @@ function calculateCoreMetrics(evts, market, log) {
                 }
                 break;
             }
-            case "split":
+            case "split": {
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
                     l.pricePerShareTWD /= e.ratio;
                     l.pricePerShareOriginal /= e.ratio;
                 });
                 break;
+            }
+            // --- [核心修正] ---
             case "dividend": {
-                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.date));
-                const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
-                if (shares > 0) {
-                    const fx = findFxRate(market, pf[sym].currency, toDate(e.date));
+                // 找出在 "除息日" 前一天收盤時的持股狀態
+                const dividendDate = toDate(e.date);
+                const exDate = new Date(dividendDate);
+                exDate.setDate(exDate.getDate() - 1); // 計算的基準是除息日前一天的持股
+                
+                const stateOnExDate = getPortfolioStateOnDate(evts, exDate);
+                const sharesHeld = stateOnExDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
+
+                if (sharesHeld > 0) {
+                    const currency = stateOnExDate[sym]?.currency || 'USD';
+                    const fx = findFxRate(market, currency, dividendDate);
+                    
+                    // 美股股息稅率預設為 30%，台股為 0% (已內扣)
                     const taxRate = isTwStock(sym) ? 0.0 : 0.30;
                     const postTaxAmount = e.amount * (1 - taxRate);
-                    const divTWD = postTaxAmount * shares * (pf[sym].currency === "TWD" ? 1 : fx);
-                    totalRealizedPL += divTWD;
-                    pf[sym].realizedPLTWD += divTWD;
+                    const dividendTWD = postTaxAmount * sharesHeld * fx;
+
+                    // 將稅後股息計入已實現損益
+                    totalRealizedPL += dividendTWD;
+                    pf[sym].realizedPLTWD += dividendTWD;
                 }
                 break;
             }
         }
     }
+
     const { holdingsToUpdate, holdingsToDelete } = calculateFinalHoldings(pf, market);
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
@@ -518,7 +553,14 @@ function calculateCoreMetrics(evts, market, log) {
     const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0);
     const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
     const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
-    return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
+    
+    return {
+        pf,
+        holdings: { holdingsToUpdate, holdingsToDelete },
+        totalRealizedPL,
+        xirr,
+        overallReturnRate
+    };
 }
 
 async function performRecalculation(uid) {
