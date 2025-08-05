@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.3.1 - 數據校驗修正版)
+// == GCP Cloud Function 完整程式碼 (v2.4.0 - 最終修正版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -40,10 +40,6 @@ const d1Client = {
 
 // --- 資料抓取與覆蓋範圍管理 ---
 
-/**
- * [BUG FIX v2.3.1] 修改函式，使其返回抓取到的原始數據陣列
- * @returns {Promise<Array|null>} - 成功則返回數據陣列，失敗則返回 null
- */
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         console.log(`[Data Fetch] 正在從 Yahoo Finance 抓取 ${symbol} 從 ${startDate} 到 ${endDate} 的數據...`);
@@ -57,7 +53,7 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
 
         if (!hist || hist.length === 0) {
             console.warn(`[Data Fetch] 警告：在指定區間內找不到 ${symbol} 的數據。`);
-            return []; // 返回空陣列表示沒有抓到數據
+            return [];
         }
 
         const dbOps = [];
@@ -83,11 +79,11 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
             await d1Client.batch(dbOps);
             console.log(`[Data Fetch] 成功寫入 ${dbOps.length} 筆 ${symbol} 的新數據到 D1。`);
         }
-        return hist; // 返回抓取到的原始數據
+        return hist;
 
     } catch (e) {
         console.error(`[Data Fetch] 錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
-        return null; // 返回 null 表示抓取過程出錯
+        return null;
     }
 }
 
@@ -98,11 +94,11 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
     const coverageData = await d1Client.query('SELECT earliest_date FROM market_data_coverage WHERE symbol = ?', [symbol]);
     const today = new Date().toISOString().split('T')[0];
 
+    // 案例 1: 全新商品，資料庫完全沒有紀錄
     if (coverageData.length === 0) {
         console.log(`[Coverage Check] ${symbol} 是新商品，將抓取從 ${requiredStartDate} 到今天的完整數據。`);
         const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
 
-        // [BUG FIX v2.3.1] 核心修正：使用 API 實際返回的最早日期來記錄
         if (fetchedData && fetchedData.length > 0) {
             const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
             console.log(`[Coverage Check] API 返回的實際最早日期為 ${actualEarliestDate}，將以此日期為準進行記錄。`);
@@ -113,27 +109,43 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
         } else {
             console.warn(`[Coverage Check] ${symbol} 首次抓取未能返回任何數據，將不會在 coverage 表中創建紀錄。`);
         }
+        return; // 完成新商品處理
+    }
 
-    } else {
-        const currentEarliestDate = coverageData[0].earliest_date;
-        if (requiredStartDate < currentEarliestDate) {
-            console.log(`[Coverage Check] 新交易日期 ${requiredStartDate} 早於現有紀錄 ${currentEarliestDate}。將回補缺少的歷史數據。`);
-            const fetchEndDate = new Date(currentEarliestDate);
-            fetchEndDate.setDate(fetchEndDate.getDate() - 1);
-            const fetchEndDateStr = fetchEndDate.toISOString().split('T')[0];
+    const currentEarliestDate = coverageData[0].earliest_date;
+    // 案例 2: 已有紀錄，但新交易日期更早
+    if (requiredStartDate < currentEarliestDate) {
+        // [v2.4.0 核心修正] 模仿週末腳本的可靠行為：先刪除，再完整重抓
+        console.log(`[Coverage Check] 新日期 ${requiredStartDate} 早於現有紀錄 ${currentEarliestDate}。將對 ${symbol} 執行完整數據覆蓋。`);
+        
+        const isFx = symbol.includes("=");
+        const priceTable = isFx ? "exchange_rates" : "price_history";
+        const deleteOps = [{ sql: `DELETE FROM ${priceTable} WHERE symbol = ?`, params: [symbol] }];
+        if (!isFx) {
+            deleteOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
+        }
+        await d1Client.batch(deleteOps);
+        console.log(`[Coverage Check] 已刪除 ${symbol} 的所有舊市場數據。`);
 
-            if (requiredStartDate <= fetchEndDateStr) {
-                await fetchAndSaveMarketDataRange(symbol, requiredStartDate, fetchEndDateStr);
-            }
+        // 重新完整抓取
+        const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
+
+        if (fetchedData && fetchedData.length > 0) {
+            const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
+             console.log(`[Coverage Check] API 重新抓取後，返回的實際最早日期為 ${actualEarliestDate}。`);
             await d1Client.query(
                 'UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?',
-                [requiredStartDate, today, symbol]
+                [actualEarliestDate, today, symbol]
             );
         } else {
-            console.log(`[Coverage Check] ${symbol} 的數據已覆蓋所需日期，無需更新。`);
+             console.warn(`[Coverage Check] ${symbol} 重新抓取未能返回任何數據，earliest_date 維持不變。`);
         }
+
+    } else {
+        console.log(`[Coverage Check] ${symbol} 的數據已覆蓋所需日期，無需更新。`);
     }
 }
+
 
 async function getMarketDataFromDb(txs, benchmarkSymbol) {
     const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
@@ -562,7 +574,7 @@ function calculateCoreMetrics(evts, market) {
 // --- 完整計算函式保留區 (結束) ---
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.3.0 - 重構) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.3.1) ---`);
     try {
         const [txs, splits, controlsData] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -788,3 +800,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
 });
+" in the document.
+The user wants to add a new action to clear the entire database.
+
+I will add two new actions:
+1.  `clear_user_data`: Clears all data for a specific user.
+2.  `__DANGEROUSLY_CLEAR_ENTIRE_DATABASE__`: Clears all data from all tables, for all users. This is the one the user explicitly asked for.
+
+I will add these actions to the `switch` statement in `exports.unifiedPortfolioHandler`.
+I will also update the version number in the header comme
