@@ -1,20 +1,12 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Run 完整程式碼 (v1.9 - 最終穩定版)
+// == GCP Cloud Function 完整程式碼 (v1.5.4 - 真正完整、無省略、修正所有已知錯誤)
 // =========================================================================================
 
-const express = require('express');
-const cors = require('cors');
-const admin = require("firebase-admin");
+const functions = require("firebase-functions");
 const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
 const { v4: uuidv4 } = require('uuid');
-
-admin.initializeApp();
-
-const app = express();
-app.use(cors({ origin: true }));
-app.use(express.json());
 
 // --- 平台設定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
@@ -22,200 +14,166 @@ const D1_API_KEY = process.env.D1_API_KEY;
 
 // --- D1 資料庫客戶端 ---
 const d1Client = {
-  async query(sql, params = []) {
-    if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1 environment variables are not set."); }
-    try {
-      const response = await axios.post(`${D1_WORKER_URL}/query`, { sql, params }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
-      if (response.data && response.data.success) { return response.data.results; }
-      throw new Error(response.data.error || "D1 查詢失敗");
-    } catch (error) {
-      console.error("d1Client.query Error:", error.response ? error.response.data : error.message);
-      throw new Error(`Failed to execute D1 query: ${error.message}`);
-    }
-  },
-  async batch(statements) {
-     if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1 environment variables are not set."); }
-     try {
-      const response = await axios.post(`${D1_WORKER_URL}/batch`, { statements }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
-      if (response.data && response.data.success) { return response.data.results; }
-      throw new Error(response.data.error || "D1 批次操作失敗");
-    } catch (error) {
-      console.error("d1Client.batch Error:", error.response ? error.response.data : error.message);
-      throw new Error(`Failed to execute D1 batch: ${error.message}`);
-    }
-  }
+  async query(sql, params = []) {
+    if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set."); }
+    try {
+      const response = await axios.post(`${D1_WORKER_URL}/query`, { sql, params }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
+      if (response.data && response.data.success) { return response.data.results; }
+      throw new Error(response.data.error || "D1 查詢失敗");
+    } catch (error) {
+      console.error("d1Client.query Error:", error.response ? error.response.data : error.message);
+      throw new Error(`Failed to execute D1 query: ${error.message}`);
+    }
+  },
+  async batch(statements) {
+     if (!D1_WORKER_URL || !D1_API_KEY) { throw new Error("D1_WORKER_URL and D1_API_KEY environment variables are not set."); }
+     try {
+      const response = await axios.post(`${D1_WORKER_URL}/batch`, { statements }, { headers: { 'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json' } });
+      if (response.data && response.data.success) { return response.data.results; }
+      throw new Error(response.data.error || "D1 批次操作失敗");
+    } catch (error) {
+      console.error("d1Client.batch Error:", error.response ? error.response.data : error.message);
+      throw new Error(`Failed to execute D1 batch: ${error.message}`);
+    }
+  }
 };
 
 // --- 資料準備與抓取函式 ---
-async function fetchAndSaveMarketData(symbol, startDate, endDate) {
-  try {
-    const sDate = new Date(startDate);
-    const eDate = new Date(endDate);
-    const period1 = sDate.toISOString().split('T')[0];
-    const period2 = eDate.toISOString().split('T')[0];
-
-    console.log(`[${symbol}] 正在抓取數據，範圍: ${period1} 到 ${period2}...`);
-
-    const dbOps = [];
-    const priceTableName = symbol.includes("=") ? "exchange_rates" : "price_history";
-
-    // 步驟 1: 使用 getChart() 專門、可靠地抓取股息 (Dividends) 事件
-    try {
-        const chartData = await yahooFinance.getChart(symbol, { period1, period2, interval: '1d' });
-        
-        if (chartData.events?.dividends) {
-            for (const divEvent of chartData.events.dividends) {
-                dbOps.push({
-                    sql: `INSERT OR IGNORE INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
-                    params: [symbol, divEvent.date.toISOString().split("T")[0], divEvent.amount]
-                });
-            }
-             console.log(`[${symbol}] 成功抓取到 ${chartData.events.dividends.length} 筆股息事件。`);
-        }
-    } catch (eventError) {
-        console.log(`[${symbol}] 抓取股息/拆股事件失敗: ${eventError.message}`);
-    }
-
-    // 步驟 2: 使用 historical() 來抓取每日的復權收盤價
-    try {
-        const hist = await yahooFinance.historical(symbol, { period1, period2, interval: '1d' });
-        
-        if (hist.length > 0) {
-            for(const item of hist) {
-                if(item.adjClose) { // 使用 adjClose (還原權值) 作為我們的價格
-                    dbOps.push({
-                        sql: `INSERT OR IGNORE INTO ${priceTableName} (symbol, date, price) VALUES (?, ?, ?)`,
-                        params: [symbol, item.date.toISOString().split("T")[0], item.adjClose]
-                    });
-                }
-            }
-            console.log(`[${symbol}] 成功抓取到 ${hist.length} 筆歷史價格。`);
-        }
-    } catch (priceError) {
-         console.log(`[${symbol}] 抓取歷史價格失敗: ${priceError.message}`);
-    }
-
-    if (dbOps.length > 0) {
-        await d1Client.batch(dbOps);
-        console.log(`[${symbol}] 成功寫入 ${dbOps.length} 筆新數據到資料庫。`);
-    }
-  } catch (e) {
-    console.log(`[${symbol}] 處理市場資料時發生嚴重錯誤: ${e.message}`);
-  }
+async function fetchAndSaveMarketData(symbol) {
+  try {
+    console.log(`從 Yahoo Finance 抓取 ${symbol} 的完整歷史記錄...`);
+    const hist = await yahooFinance.historical(symbol, { 
+        period1: '2000-01-01', 
+        interval: '1d',
+        autoAdjust: false,
+        backAdjust: false
+    });
+    const dbOps = [];
+    const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
+    dbOps.push({ sql: `DELETE FROM ${tableName} WHERE symbol = ?`, params: [symbol] });
+    if (!symbol.includes("=")) {
+        dbOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
+    }
+    for(const item of hist) {
+        if(item.close) {
+            dbOps.push({
+                sql: `INSERT INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
+                params: [symbol, item.date.toISOString().split("T")[0], item.close]
+            });
+        }
+        if(item.dividends && item.dividends > 0) {
+             dbOps.push({
+                sql: `INSERT INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
+                params: [symbol, item.date.toISOString().split("T")[0], item.dividends]
+            });
+        }
+    }
+    await d1Client.batch(dbOps);
+    console.log(`成功抓取並寫入 ${symbol} 的完整歷史記錄。`);
+    const prices = hist.reduce((acc, cur) => { if (cur.close) acc[cur.date.toISOString().split("T")[0]] = cur.close; return acc; }, {});
+    const dividends = hist.reduce((acc, cur) => { if (cur.dividends > 0) acc[cur.date.toISOString().split("T")[0]] = cur.dividends; return acc; }, {});
+    return { prices, dividends, rates: prices };
+  } catch (e) {
+    console.log(`錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
+    return null;
+  }
 }
 
-
-async function getMarketDataFromDb(txs, benchmarkSymbol, uid) {
-    const syms = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-    const currencies = [...new Set(txs.map(t => t.currency || "USD"))].filter(c => c !== "TWD");
-    const fxSyms = currencies.map(c => currencyToFx[c]).filter(Boolean);
-    const allRequiredSymbols = [...new Set([...syms, ...fxSyms, benchmarkSymbol.toUpperCase()])];
-
-    console.log(`[${uid}] 資料檢查，標的：${allRequiredSymbols.join(', ')}`);
-    const marketData = {};
-    const today = new Date();
-
-    const userFirstTxDateResult = await d1Client.query('SELECT MIN(date) as min_date FROM transactions WHERE uid = ?', [uid]);
-    const userFirstTxDate = (userFirstTxDateResult[0] && userFirstTxDateResult[0].min_date) ? new Date(userFirstTxDateResult[0].min_date) : new Date();
-
-    for (const s of allRequiredSymbols) {
-        if (!s) continue;
-        
-        const isFx = s.includes("=");
-        const priceTable = isFx ? "exchange_rates" : "price_history";
-        
-        let requiredStartDate;
-        if (isFx || s === benchmarkSymbol.toUpperCase()) {
-            requiredStartDate = new Date(userFirstTxDate);
-            requiredStartDate.setMonth(requiredStartDate.getMonth() - 1);
-        } else {
-            const symbolFirstTxDateResult = await d1Client.query('SELECT MIN(date) as min_date FROM transactions WHERE symbol = ? AND uid = ?', [s, uid]);
-            requiredStartDate = (symbolFirstTxDateResult[0] && symbolFirstTxDateResult[0].min_date) 
-                ? new Date(symbolFirstTxDateResult[0].min_date) 
-                : new Date(userFirstTxDate);
-            requiredStartDate.setMonth(requiredStartDate.getMonth() - 1);
-        }
-
-        const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
-        let latestDateInDb = null;
-        if (priceData.length > 0) {
-            priceData.forEach(row => {
-                const currentDate = new Date(row.date);
-                if (!latestDateInDb || currentDate > latestDateInDb) {
-                    latestDateInDb = currentDate;
-                }
-            });
-        }
-        
-        if (!latestDateInDb || new Date(latestDateInDb) < requiredStartDate) {
-            console.log(`[${uid}] ${s} 資料不完整。進行首次/補充抓取...`);
-            await fetchAndSaveMarketData(s, requiredStartDate, today);
-        } else if (latestDateInDb < today) {
-            console.log(`[${uid}] ${s} 數據不是最新的。進行增量更新...`);
-            const fetchStartDate = new Date(latestDateInDb);
-            fetchStartDate.setDate(fetchStartDate.getDate() + 1);
-            await fetchAndSaveMarketData(s, fetchStartDate, today);
-        }
-
-        const finalPriceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
-        marketData[s] = {
-            prices: finalPriceData.reduce((acc, row) => { acc[row.date] = row.price; return acc; }, {}),
-            dividends: {}
-        };
-        if (isFx) marketData[s].rates = marketData[s].prices;
-
-        if (!isFx) {
-            const divData = await d1Client.query(`SELECT date, dividend FROM dividend_history WHERE symbol = ?`, [s]);
-            marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date] = row.dividend; return acc; }, {});
-        }
-    }
-    console.log(`[${uid}] 所有市場資料已載入。`);
-    return marketData;
+async function getMarketDataFromDb(txs, benchmarkSymbol) {
+  const syms = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+  const currencies = [...new Set(txs.map(t => t.currency || "USD"))].filter(c => c !== "TWD");
+  const fxSyms = currencies.map(c => currencyToFx[c]).filter(Boolean);
+  const allRequiredSymbols = [...new Set([...syms, ...fxSyms, benchmarkSymbol.toUpperCase()])];
+  console.log(`資料檢查，標的：${allRequiredSymbols.join(', ')}`);
+  const marketData = {};
+  for (const s of allRequiredSymbols) {
+    if (!s) continue;
+    const isFx = s.includes("=");
+    const priceTable = isFx ? "exchange_rates" : "price_history";
+    const divTable = "dividend_history";
+    const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
+    if (priceData.length > 0) {
+      marketData[s] = {
+          prices: priceData.reduce((acc, row) => { acc[row.date] = row.price; return acc; }, {}),
+          dividends: {}
+      };
+      if (isFx) marketData[s].rates = marketData[s].prices;
+      if(!isFx) {
+          const divData = await d1Client.query(`SELECT date, dividend FROM ${divTable} WHERE symbol = ?`, [s]);
+          marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date] = row.dividend; return acc; }, {});
+      }
+    } else {
+      console.log(`在 D1 中找不到 ${s} 的資料。正在抓取...`);
+      const fetchedData = await fetchAndSaveMarketData(s);
+      if (fetchedData) {
+        marketData[s] = fetchedData;
+      } else {
+        throw new Error(`無法抓取 ${s} 的關鍵市場資料。中止計算。`);
+      }
+    }
+  }
+  console.log("所有必要的市場資料都已存在並載入。");
+  return marketData;
 }
 
-// --- 核心計算與輔助函式 ---
-const toDate = v => new Date(v);
+// --- 核心計算與輔助函式 (完整版) ---
+const toDate = v => v.toDate ? v.toDate() : new Date(v);
 const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
 
-function isTwStock(symbol) { return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; }
-function getTotalCost(tx) { return (tx.totalCost != null) ? Number(tx.totalCost) : Number(tx.price || 0) * Number(tx.quantity || 0); }
+function isTwStock(symbol) {
+    if (!symbol) return false;
+    const upperSymbol = symbol.toUpperCase();
+    return upperSymbol.endsWith('.TW') || upperSymbol.endsWith('.TWO');
+}
+
+function getTotalCost(tx) {
+  return (tx.totalCost !== undefined && tx.totalCost !== null)
+    ? Number(tx.totalCost)
+    : Number(tx.price || 0) * Number(tx.quantity || 0);
+}
 
 function findNearest(hist, date, toleranceDays = 7) {
-    if (!hist || Object.keys(hist).length === 0) return undefined;
-    const tgt = date instanceof Date ? date : new Date(date);
-    const tgtStr = tgt.toISOString().slice(0, 10);
-    if (hist[tgtStr]) return hist[tgtStr];
-    for (let i = 1; i <= toleranceDays; i++) {
-        const checkDate = new Date(tgt);
-        checkDate.setDate(checkDate.getDate() - i);
-        const checkDateStr = checkDate.toISOString().split('T')[0];
-        if (hist[checkDateStr]) return hist[checkDateStr];
-    }
-    const sortedDates = Object.keys(hist).sort((a, b) => new Date(b) - new Date(a));
-    for (const dateStr of sortedDates) {
-        if (dateStr <= tgtStr) return hist[dateStr];
-    }
-    return undefined;
+    if (!hist || Object.keys(hist).length === 0) return undefined;
+    const tgt = date instanceof Date ? date : new Date(date);
+    const tgtStr = tgt.toISOString().slice(0, 10);
+    if (hist[tgtStr]) return hist[tgtStr];
+    for (let i = 1; i <= toleranceDays; i++) {
+        const checkDate = new Date(tgt);
+        checkDate.setDate(checkDate.getDate() - i);
+        const checkDateStr = checkDate.toISOString().split('T')[0];
+        if (hist[checkDateStr]) return hist[checkDateStr];
+    }
+    const sortedDates = Object.keys(hist).sort((a, b) => new Date(b) - new Date(a));
+    for (const dateStr of sortedDates) {
+        if (dateStr <= tgtStr) return hist[dateStr];
+    }
+    return undefined;
 }
 
 function findFxRate(market, currency, date, tolerance = 15) {
-  if (!currency || currency === "TWD") return 1;
-  const fxSym = currencyToFx[currency];
-  if (!fxSym) return 1;
-  const hist = market[fxSym]?.rates || {};
-  return findNearest(hist, date, tolerance) ?? 1;
+  if (!currency || currency === "TWD") return 1;
+  const fxSym = currencyToFx[currency];
+  if (!fxSym) return 1;
+  const hist = market[fxSym]?.rates || {};
+  return findNearest(hist, date, tolerance) ?? 1;
 }
 
 function getPortfolioStateOnDate(allEvts, targetDate) {
     const state = {};
     const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate));
+    const futureSplits = allEvts.filter(e => e.eventType === 'split' && toDate(e.date) > toDate(targetDate));
+
     for (const e of pastEvents) {
         const sym = e.symbol.toUpperCase();
         if (!state[sym]) state[sym] = { lots: [], currency: e.currency || "USD" };
+        
         if (e.eventType === 'transaction') {
             state[sym].currency = e.currency;
+            const fx = 1; // This is intentionally 1, as dailyValue calculates fx separately
+            const costPerShareTWD = getTotalCost(e) / (e.quantity || 1) * fx;
+
             if (e.type === 'buy') {
-                state[sym].lots.push({ quantity: e.quantity, price: e.price, date: toDate(e.date) });
+                state[sym].lots.push({ quantity: e.quantity, pricePerShareTWD: costPerShareTWD });
             } else {
                 let sellQty = e.quantity;
                 while (sellQty > 0 && state[sym].lots.length > 0) {
@@ -230,9 +188,23 @@ function getPortfolioStateOnDate(allEvts, targetDate) {
                 }
             }
         } else if (e.eventType === 'split') {
-            state[sym].lots.forEach(lot => { lot.quantity *= e.ratio; lot.price /= e.ratio; });
+            state[sym].lots.forEach(lot => {
+                lot.quantity *= e.ratio;
+                lot.pricePerShareTWD /= e.ratio;
+            });
         }
     }
+
+    for (const sym in state) {
+        futureSplits
+            .filter(s => s.symbol.toUpperCase() === sym)
+            .forEach(split => {
+                state[sym].lots.forEach(lot => {
+                    lot.quantity *= split.ratio;
+                });
+            });
+    }
+
     return state;
 }
 
@@ -241,16 +213,18 @@ function dailyValue(state, market, date) {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
         if (qty < 1e-9) return totalValue;
+        
         const price = findNearest(market[sym]?.prices, date);
         if (price === undefined) {
              const yesterday = new Date(date);
              yesterday.setDate(yesterday.getDate() - 1);
-             const firstEventDate = s.lots[0]?.date ? toDate(s.lots[0].date) : date;
+             const firstEventDate = toDate(s.lots[0]?.date || date);
              if (yesterday < firstEventDate) return totalValue;
              return totalValue + dailyValue({[sym]: s}, market, yesterday);
         }
+        
         const fx = findFxRate(market, s.currency, date);
-        return totalValue + (qty * price * fx);
+        return totalValue + (qty * price * (s.currency === "TWD" ? 1 : fx));
     }, 0);
 }
 
@@ -260,37 +234,30 @@ function prepareEvents(txs, splits, market) {
         if (tx.type === "buy") {
             const sym = tx.symbol.toUpperCase();
             const d = toDate(tx.date);
-            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) {
-                firstBuyDateMap[sym] = d;
-            }
+            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) firstBuyDateMap[sym] = d;
         }
     });
+
     const evts = [
         ...txs.map(t => ({ ...t, date: toDate(t.date), eventType: "transaction" })),
         ...splits.map(s => ({ ...s, date: toDate(s.date), eventType: "split" }))
     ];
+
     Object.keys(market).forEach(sym => {
         if (market[sym] && market[sym].dividends) {
             Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
                 const dividendDate = new Date(dateStr);
                 if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
-                    evts.push({ 
-                        date: dividendDate, 
-                        symbol: sym, 
-                        amount, 
-                        eventType: "dividend",
-                        currency: market[sym].currency || 'USD' 
-                    });
+                    evts.push({ date: dividendDate, symbol: sym, amount, eventType: "dividend" });
                 }
             });
         }
     });
-    evts.sort((a, b) => a.date - b.date);
-    const firstTx = evts.find(e => e.eventType === 'transaction');
-    return { evts, firstBuyDate: firstTx ? firstTx.date : null };
-}
 
-function calculateDailyPortfolioValues(evts, market, startDate) {
+    evts.sort((a, b) => toDate(a.date) - toDate(b.date));
+    const firstTx = evts.find(e => e.eventType === 'transaction');
+    return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null, firstBuyDateMap };
+}function calculateDailyPortfolioValues(evts, market, startDate, log) {
     if (!startDate) return {};
     let curDate = new Date(startDate);
     curDate.setUTCHours(0, 0, 0, 0);
@@ -306,72 +273,119 @@ function calculateDailyPortfolioValues(evts, market, startDate) {
     return history;
 }
 
-function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate) {
+function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate, log) {
     const dates = Object.keys(dailyPortfolioValues).sort();
     if (!startDate || dates.length === 0) return { twrHistory: {}, benchmarkHistory: {} };
+
     const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase();
     const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {};
+    
+    // --- [Benchmark 修正點 1：判斷 Benchmark 幣別並取得起始匯率] ---
     const benchmarkCurrency = isTwStock(upperBenchmarkSymbol) ? "TWD" : "USD";
     const startFxRate = findFxRate(market, benchmarkCurrency, startDate);
     const benchmarkStartPriceOriginal = findNearest(benchmarkPrices, startDate);
-    if (!benchmarkStartPriceOriginal) return { twrHistory: {}, benchmarkHistory: {} };
+
+    if (!benchmarkStartPriceOriginal) {
+        log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
+        return { twrHistory: {}, benchmarkHistory: {} };
+    }
+    // 將起始價格轉換為台幣
     const benchmarkStartPriceTWD = benchmarkStartPriceOriginal * startFxRate;
+
+
     const cashflows = evts.reduce((acc, e) => {
+        // ... 此處的 cashflows 計算邏輯保持不變 ...
         const dateStr = toDate(e.date).toISOString().split('T')[0];
         let flow = 0;
-        let fx = findFxRate(market, e.currency, toDate(e.date));
-        if (e.eventType === 'transaction' && e.exchangeRate) fx = e.exchangeRate;
+        const currency = e.currency || market[e.symbol.toUpperCase()]?.currency || 'USD';
+        
+        let fx;
+        if (e.eventType === 'transaction' && e.exchangeRate && e.currency !== 'TWD') {
+            fx = e.exchangeRate;
+        } else {
+            fx = findFxRate(market, currency, toDate(e.date));
+        }
+
         if (e.eventType === 'transaction') {
-            flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * fx;
+            const cost = getTotalCost(e);
+            flow = (e.type === 'buy' ? 1 : -1) * cost * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'dividend') {
             const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.date));
             const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
             if (shares > 0) {
                 const taxRate = isTwStock(e.symbol) ? 0.0 : 0.30;
-                flow = -1 * e.amount * (1 - taxRate) * shares * fx;
+                const postTaxAmount = e.amount * (1 - taxRate);
+                flow = -1 * postTaxAmount * shares * fx;
             }
         }
-        if (flow !== 0) acc[dateStr] = (acc[dateStr] || 0) + flow;
+        if (flow !== 0) {
+            acc[dateStr] = (acc[dateStr] || 0) + flow;
+        }
         return acc;
     }, {});
-    const twrHistory = {}, benchmarkHistory = {};
-    let cumulativeHpr = 1, lastMarketValue = 0;
+    
+    const twrHistory = {};
+    const benchmarkHistory = {};
+    let cumulativeHpr = 1;
+    let lastMarketValue = 0;
+
     for (const dateStr of dates) {
+        // --- 投資組合 TWR 計算 (此部分完全不變) ---
         const MVE = dailyPortfolioValues[dateStr]; 
         const CF = cashflows[dateStr] || 0; 
+
         const denominator = lastMarketValue + CF;
-        if (denominator !== 0) cumulativeHpr *= (MVE / denominator);
+        if (denominator !== 0) {
+            const periodReturn = MVE / denominator;
+            cumulativeHpr *= periodReturn;
+        }
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
         lastMarketValue = MVE;
+        
+        // --- [Benchmark 修正點 2：在迴圈中取得每日匯率並計算台幣報酬率] ---
         const currentBenchPriceOriginal = findNearest(benchmarkPrices, new Date(dateStr));
+        
+        // 確保起始台幣價格有效
         if (currentBenchPriceOriginal && benchmarkStartPriceTWD > 0) {
+            // 取得當天的匯率
             const currentFxRate = findFxRate(market, benchmarkCurrency, new Date(dateStr));
-            benchmarkHistory[dateStr] = (((currentBenchPriceOriginal * currentFxRate) / benchmarkStartPriceTWD) - 1) * 100;
+            // 將當前價格轉換為台幣
+            const currentBenchPriceTWD = currentBenchPriceOriginal * currentFxRate;
+            // 使用台幣價格來計算報酬率
+            benchmarkHistory[dateStr] = ((currentBenchPriceTWD / benchmarkStartPriceTWD) - 1) * 100;
         }
     }
+    
     return { twrHistory, benchmarkHistory };
 }
 
 function calculateFinalHoldings(pf, market) {
-  const holdingsToUpdate = {}, holdingsToDelete = [];
+  const holdingsToUpdate = {};
+  const holdingsToDelete = [];
   const today = new Date();
+
   for (const sym in pf) {
     const h = pf[sym];
     const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
+    
     if (qty > 1e-9) {
         const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
         const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
-        const curPrice = findNearest(market[sym]?.prices, today);
+        const priceHist = market[sym]?.prices || {};
+        const curPrice = findNearest(priceHist, today);
         const fx = findFxRate(market, h.currency, today);
-        const mktVal = qty * (curPrice ?? 0) * fx;
+        const mktVal = qty * (curPrice ?? 0) * (h.currency === "TWD" ? 1 : fx);
         const unreal = mktVal - totCostTWD;
         const invested = totCostTWD + h.realizedCostTWD;
+        const totalRet = unreal + h.realizedPLTWD;
+        const rrCurrent = totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0;
+        const rrTotal = invested > 0 ? (totalRet / invested) * 100 : 0;
         holdingsToUpdate[sym] = {
           symbol: sym, quantity: qty, currency: h.currency,
           avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0, totalCostTWD: totCostTWD, investedCostTWD: invested,
           currentPriceOriginal: curPrice ?? null, marketValueTWD: mktVal,
           unrealizedPLTWD: unreal, realizedPLTWD: h.realizedPLTWD,
-          returnRate: totCostTWD > 0 ? (unreal / totCostTWD) * 100 : 0
+          returnRateCurrent: rrCurrent, returnRateTotal: rrTotal, returnRate: rrCurrent
         };
     } else {
         holdingsToDelete.push(sym);
@@ -383,30 +397,41 @@ function calculateFinalHoldings(pf, market) {
 function createCashflowsForXirr(evts, holdings, market) {
     const flows = [];
     evts.filter(e => e.eventType === "transaction").forEach(t => {
-        let fx = findFxRate(market, t.currency, toDate(t.date));
-        if (t.exchangeRate) fx = t.exchangeRate;
-        const amt = getTotalCost(t) * fx;
+        let fx;
+        if (t.exchangeRate && t.currency !== 'TWD') {
+            fx = t.exchangeRate;
+        } else {
+            fx = findFxRate(market, t.currency, toDate(t.date));
+        }
+        const amt = getTotalCost(t) * (t.currency === "TWD" ? 1 : fx);
         flows.push({ date: toDate(t.date), amount: t.type === "buy" ? -amt : amt });
     });
     evts.filter(e => e.eventType === "dividend").forEach(d => {
         const stateOnDate = getPortfolioStateOnDate(evts, toDate(d.date));
         const sym = d.symbol.toUpperCase();
+        const currency = stateOnDate[sym]?.currency || 'USD';
         const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
         if (shares > 0) {
-            const fx = findFxRate(market, d.currency, toDate(d.date));
+            const fx = findFxRate(market, currency, toDate(d.date));
             const taxRate = isTwStock(sym) ? 0.0 : 0.30;
-            const amt = d.amount * (1 - taxRate) * shares * fx;
+            const postTaxAmount = d.amount * (1 - taxRate);
+            const amt = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
             flows.push({ date: toDate(d.date), amount: amt });
         }
     });
     const totalMarketValue = Object.values(holdings).reduce((s, h) => s + h.marketValueTWD, 0);
-    if (totalMarketValue > 0) flows.push({ date: new Date(), amount: totalMarketValue });
+    if (totalMarketValue > 0) {
+        flows.push({ date: new Date(), amount: totalMarketValue });
+    }
     const combined = flows.reduce((acc, flow) => {
         const dateStr = flow.date.toISOString().slice(0, 10);
         acc[dateStr] = (acc[dateStr] || 0) + flow.amount;
         return acc;
     }, {});
-    return Object.entries(combined).filter(([,amount]) => Math.abs(amount) > 1e-6).map(([date, amount]) => ({ date: new Date(date), amount })).sort((a, b) => a.date - b.date);
+    return Object.entries(combined)
+        .filter(([,amount]) => Math.abs(amount) > 1e-6)
+        .map(([date, amount]) => ({ date: new Date(date), amount }))
+        .sort((a, b) => a.date - b.date);
 }
 
 function calculateXIRR(flows) {
@@ -416,18 +441,23 @@ function calculateXIRR(flows) {
     const dates = flows.map(f => f.date);
     const epoch = dates[0].getTime();
     const years = dates.map(d => (d.getTime() - epoch) / (365.25 * 24 * 60 * 60 * 1000));
+    
     let guess = 0.1;
+    let npv; 
+
     for (let i = 0; i < 50; i++) {
-        const npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0);
+        npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0);
+        
         if (Math.abs(npv) < 1e-6) return guess;
         const derivative = amounts.reduce((sum, amount, j) => sum - years[j] * amount / Math.pow(1 + guess, years[j] + 1), 0);
         if (Math.abs(derivative) < 1e-9) break;
         guess -= npv / derivative;
     }
-    return null;
+    
+    return (npv && Math.abs(npv) < 1e-6) ? guess : null;
 }
 
-function calculateCoreMetrics(evts, market) {
+function calculateCoreMetrics(evts, market, log) {
     const pf = {};
     let totalRealizedPL = 0;
     for (const e of evts) {
@@ -435,15 +465,20 @@ function calculateCoreMetrics(evts, market) {
         if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 };
         switch (e.eventType) {
             case "transaction": {
-                let fx = findFxRate(market, e.currency, toDate(e.date));
-                if (e.exchangeRate) fx = e.exchangeRate;
-                const costTWD = getTotalCost(e) * fx;
+                let fx;
+                if (e.exchangeRate && e.currency !== 'TWD') {
+                    fx = e.exchangeRate;
+                } else {
+                    fx = findFxRate(market, e.currency, toDate(e.date));
+                }
+                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+
                 if (e.type === "buy") {
                     pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / e.quantity, date: toDate(e.date) });
                 } else {
                     let sellQty = e.quantity;
+                    const saleProceedsTWD = costTWD;
                     let costOfGoodsSoldTWD = 0;
-                    pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (sellQty > 0 && pf[sym].lots.length > 0) {
                         const lot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, lot.quantity);
@@ -452,7 +487,7 @@ function calculateCoreMetrics(evts, market) {
                         sellQty -= qtyToSell;
                         if (lot.quantity < 1e-9) pf[sym].lots.shift();
                     }
-                    const realized = costTWD - costOfGoodsSoldTWD;
+                    const realized = saleProceedsTWD - costOfGoodsSoldTWD;
                     totalRealizedPL += realized;
                     pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
                     pf[sym].realizedPLTWD += realized;
@@ -462,24 +497,20 @@ function calculateCoreMetrics(evts, market) {
             case "split":
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
-                    l.pricePerShareOriginal /= e.ratio;
                     l.pricePerShareTWD /= e.ratio;
+                    l.pricePerShareOriginal /= e.ratio;
                 });
                 break;
             case "dividend": {
-                const dividendDate = toDate(e.date);
-                const exDate = new Date(dividendDate);
-                exDate.setDate(exDate.getDate() - 1);
-                const stateOnExDate = getPortfolioStateOnDate(evts, exDate);
-                const sharesHeld = stateOnExDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
-                if (sharesHeld > 0) {
-                    const currency = stateOnExDate[sym]?.currency || 'USD';
-                    const fx = findFxRate(market, currency, dividendDate);
+                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.date));
+                const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
+                if (shares > 0) {
+                    const fx = findFxRate(market, pf[sym].currency, toDate(e.date));
                     const taxRate = isTwStock(sym) ? 0.0 : 0.30;
                     const postTaxAmount = e.amount * (1 - taxRate);
-                    const dividendTWD = postTaxAmount * sharesHeld * fx;
-                    totalRealizedPL += dividendTWD;
-                    pf[sym].realizedPLTWD += dividendTWD;
+                    const divTWD = postTaxAmount * shares * (pf[sym].currency === "TWD" ? 1 : fx);
+                    totalRealizedPL += divTWD;
+                    pf[sym].realizedPLTWD += divTWD;
                 }
                 break;
             }
@@ -488,177 +519,172 @@ function calculateCoreMetrics(evts, market) {
     const { holdingsToUpdate, holdingsToDelete } = calculateFinalHoldings(pf, market);
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
+    const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
     const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0);
-    const totalReturnValue = totalRealizedPL + Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
+    const totalReturnValue = totalRealizedPL + totalUnrealizedPL;
     const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
-    return { pf, holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
+    return { holdings: { holdingsToUpdate, holdingsToDelete }, totalRealizedPL, xirr, overallReturnRate };
 }
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v1.9 - 最終穩定版) ---`);
-    try {
-        const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-        const [txs, splits] = await Promise.all([
-            d1Client.query('SELECT * FROM transactions WHERE uid = ?', [uid]),
-            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
-        ]);
-        if (txs.length === 0) { 
-            await d1Client.batch([ { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }, { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] } ]);
-            return; 
-        }
-        const market = await getMarketDataFromDb(txs, benchmarkSymbol, uid);
-        const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
-        if (!firstBuyDate) return;
-        const portfolioResult = calculateCoreMetrics(evts, market);
-        const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
-        const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
-        const { holdingsToUpdate } = portfolioResult.holdings;
-        const dbOps = [];
-        dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
-        for (const sym in holdingsToUpdate) {
-            const h = holdingsToUpdate[sym];
-            dbOps.push({
-                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                params: [ uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate ]
-            });
-        }
-        const summaryData = {
-            totalRealizedPL: portfolioResult.totalRealizedPL,
-            xirr: portfolioResult.xirr,
-            overallReturnRate: portfolioResult.overallReturnRate,
-            benchmarkSymbol: benchmarkSymbol,
-        };
-        const finalBatch = [
-            { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid]},
-            { 
-                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
-                params: [ uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString() ]
-            },
-            ...dbOps
-        ];
-        await d1Client.batch(finalBatch);
-        console.log(`--- [${uid}] 重新計算程序完成 ---`);
-    } catch (e) {
-        console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
-        throw e;
-    }
+    console.log(`--- [${uid}] 重新計算程序開始 (v1.5.4) ---`);
+    try {
+        const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
+        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+        const [txs, splits] = await Promise.all([
+            d1Client.query('SELECT * FROM transactions WHERE uid = ?', [uid]),
+            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
+        ]);
+        if (txs.length === 0) { 
+            await d1Client.batch([
+                { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+            ]);
+            return; 
+        }
+        const market = await getMarketDataFromDb(txs, benchmarkSymbol);
+        const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
+        if (!firstBuyDate) { return; }
+        const portfolioResult = calculateCoreMetrics(evts, market);
+        const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
+        const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
+        const { holdingsToUpdate } = portfolioResult.holdings;
+        
+        const dbOps = [];
+        dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
+        
+        for (const sym in holdingsToUpdate) {
+            const h = holdingsToUpdate[sym];
+            dbOps.push({
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                params: [ uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate ]
+            });
+        }
+        
+        const summaryData = {
+            totalRealizedPL: portfolioResult.totalRealizedPL,
+            xirr: portfolioResult.xirr,
+            overallReturnRate: portfolioResult.overallReturnRate,
+            benchmarkSymbol: benchmarkSymbol,
+        };
+        const finalBatch = [
+            { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid]},
+            { 
+                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
+                params: [ uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString() ]
+            },
+            ...dbOps
+        ];
+        await d1Client.batch(finalBatch);
+        console.log(`--- [${uid}] 重新計算程序完成 ---`);
+    } catch (e) {
+        console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
+        throw e;
+    }
 }
 
-// ======================================================================
-// == 主 API 處理函式 (Express.js 版)
-// ======================================================================
-app.post('/', async (req, res) => {
-    // 1. API 金鑰驗證 (基礎防護)
-    const apiKey = req.headers['x-api-key'];
-    if (apiKey !== D1_API_KEY) {
-        console.warn("API 金鑰驗證失敗。");
-        return res.status(401).send({ success: false, message: 'Unauthorized: Invalid API Key.'});
-    }
+exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+    
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
 
-    // 2. Firebase Auth JWT 令牌驗證
-    let decodedToken;
-    try {
-        const authHeader = req.headers.authorization || '';
-        if (!authHeader.startsWith('Bearer ')) {
-            throw new Error('Missing Bearer token.');
-        }
-        const idToken = authHeader.split('Bearer ')[1];
-        decodedToken = await admin.auth().verifyIdToken(idToken);
-    } catch (error) {
-        console.error("Firebase Auth Token 驗證失敗:", error.message);
-        return res.status(403).send({ success: false, message: `Forbidden: Invalid Auth Token. ${error.message}` });
-    }
+    const { action, uid, data } = req.body;
+    if (!action || !uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
 
-    // 3. 處理請求
-    const { action, data } = req.body;
-    const uid = decodedToken.uid;
-    
-    if (!action || !uid) {
-        return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
-    }
+    try {
+        switch (action) {
+            case 'recalculate':
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: `${uid} 的重新計算成功` });
+            
+            case 'get_data': {
+                const [txs, splits] = await Promise.all([
+                    d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                    d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
+                ]);
+                const benchmarkData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
+                const benchmarkSymbol = benchmarkData.length > 0 ? benchmarkData[0].value : 'SPY';
+                const marketData = await getMarketDataFromDb(txs, benchmarkSymbol);
+                const [summaryResult, holdingsResult] = await Promise.all([
+                    d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
+                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
+                ]);
+                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
+                const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
+                const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
+                const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
+                return res.status(200).send({ 
+                    success: true, 
+                    data: { 
+                        summary, 
+                        holdings: holdingsResult, 
+                        transactions: txs, 
+                        splits, 
+                        history, twrHistory, benchmarkHistory,
+                        marketData 
+                    } 
+                });
+            }
 
-    try {
-        switch (action) {
-            case 'get_data': {
-                const [txs, splits] = await Promise.all([
-                    d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-                    d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
-                ]);
-                const benchmarkData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-                const benchmarkSymbol = benchmarkData.length > 0 ? benchmarkData[0].value : 'SPY';
-                const marketData = await getMarketDataFromDb(txs, benchmarkSymbol, uid);
-                const [summaryResult, holdingsResult] = await Promise.all([
-                    d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
-                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
-                ]);
-                const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
-                const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
-                const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
-                const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-                const sortedTxs = [...txs].sort((a, b) => new Date(b.date) - new Date(a.date));
-                return res.status(200).send({ 
-                    success: true, 
-                    data: { 
-                        summary, 
-                        holdings: holdingsResult, 
-                        transactions: sortedTxs,
-                        splits, 
-                        history, twrHistory, benchmarkHistory,
-                        marketData 
-                    } 
-                });
-            }
-
-            case 'add_transaction':
-            case 'edit_transaction':
-            case 'delete_transaction':
-            case 'add_split':
-            case 'delete_split':
-            case 'update_benchmark': {
-                if (action === 'add_transaction') {
-                    const txData = data;
-                    if (!txData || !txData.symbol) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    const newTxId = uuidv4();
-                    await d1Client.query(`INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]);
-                } else if (action === 'edit_transaction') {
-                    const { txId, txData } = data;
-                    if (!txId || !txData) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    await d1Client.query(`UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]);
-                } else if (action === 'delete_transaction') {
-                    const { txId } = data;
-                    if (!txId) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
-                } else if (action === 'add_split') {
-                    const splitData = data;
-                    if (!splitData) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    const newSplitId = uuidv4();
-                    await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
-                } else if (action === 'delete_split') {
-                    const { splitId } = data;
-                    if (!splitId) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
-                } else if (action === 'update_benchmark') {
-                    const { benchmarkSymbol } = data;
-                    if (!benchmarkSymbol) return res.status(400).send({ success: false, message: 'Bad Request' });
-                    await getMarketDataFromDb([], benchmarkSymbol, uid); 
-                    await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', benchmarkSymbol]);
+            case 'add_transaction': {
+                const txData = data; // [核心修正] 直接使用 data 物件，而不是解構 txData
+                if (!txData || !txData.symbol) {
+                    return res.status(400).send({ success: false, message: 'Bad Request: Missing transaction data.' });
                 }
+                const newTxId = uuidv4();
+                await d1Client.query(
+                    `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                );
                 await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: 'Operation successful and recalculation triggered.' });
+                return res.status(200).send({ success: true, message: 'Transaction added and recalculation triggered.', txId: newTxId });
             }
-            
-            default:
-                return res.status(400).send({ success: false, message: '未知的操作' });
-        }
-    } catch (error) {
-        console.error(`[${uid}] 在處理 '${action}' 操作時失敗：`, error);
-        return res.status(500).send({ success: false, message: `發生內部錯誤：${error.message}` });
-    }
-});
-
-// --- 啟動伺服器 ---
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-    console.log(`伺服器已啟動，正在監聽 ${PORT} 連接埠...`);
+          
+            case 'edit_transaction': {
+                const { txId, txData } = data;
+                if (!txId || !txData) return res.status(400).send({ success: false, message: '請求錯誤：缺少 txId 或 txData。' });
+                await d1Client.query( `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid] );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '交易已更新並觸發重新計算。' });
+            }
+            case 'delete_transaction': {
+                const { txId } = data;
+                if (!txId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 txId。' });
+                await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '交易已刪除並觸發重新計算。' });
+            }
+            case 'add_split': {
+                const splitData = data;
+                if (!splitData || !splitData.symbol || !splitData.ratio) return res.status(400).send({ success: false, message: '請求錯誤：缺少分割資料。' });
+                const newSplitId = uuidv4();
+                await d1Client.query( `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio] );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
+            }
+            case 'delete_split': {
+                const { splitId } = data;
+                if (!splitId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 splitId。' });
+                await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '分割事件已刪除並觸發重新計算。' });
+            }
+            case 'update_benchmark': {
+                const { benchmarkSymbol } = data;
+                if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
+                await getMarketDataFromDb([], benchmarkSymbol); 
+                await d1Client.query( 'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', benchmarkSymbol] );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
+            }
+            default:
+                return res.status(400).send({ success: false, message: '未知的操作' });
+        }
+    } catch (error) {
+        console.error(`[${uid}] '${action}' 操作的處理程序失敗：`, error);
+        return res.status(500).send({ success: false, message: `發生內部錯誤：${error.message}` });
+    }
 });
