@@ -3,8 +3,8 @@ name: Weekend Full Data Refresh
 on:
   workflow_dispatch: # 允許手動從 GitHub Actions 頁面執行
   schedule:
-    # UTC 時間每週日的 00:00 執行 (相當於台灣/香港時間的週日早上 10:00)
-    - cron: '0 0 * * 0'
+    # UTC 時間每週日的 01:00 執行 (相當於台灣/香港時間的週日早上 9:00)
+    - cron: '0 1 * * 0'
 
 jobs:
   full-refresh:
