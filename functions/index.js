@@ -583,30 +583,45 @@ function calculateCoreMetrics(evts, market, log) {
     };
 }
 
-async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 ---`);
+(uid) {
+    console.log(`--- [${uid}] 重新計算程序開始 (v1.6 - 重構版) ---`);
     try {
+        // 1. 獲取所有基礎數據
         const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
         const [txs, splits] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ?', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
         ]);
+
+        // 如果沒有任何交易，清空數據並直接返回
         if (txs.length === 0) { 
+            console.log(`[${uid}] 無交易紀錄，正在清空用戶數據...`);
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
             ]);
             return; 
         }
+
+        // 2. 準備完整的市場數據和事件列表
         const market = await getMarketDataFromDb(txs, benchmarkSymbol);
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
-        if (!firstBuyDate) { return; }
+
+        if (!firstBuyDate) { 
+            console.log(`[${uid}] 無買入交易，無需計算。`);
+            return;
+        }
+
+        // 3. [核心流程] 執行一次完整的核心計算
         const portfolioResult = calculateCoreMetrics(evts, market);
+
+        // 4. 基於完整的事件列表，計算歷史圖表數據
         const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
         const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
-        const { holdingsToUpdate } = portfolioResult.holdings;
         
+        // 5. 準備資料庫寫入操作
+        const { holdingsToUpdate } = portfolioResult.holdings;
         const dbOps = [];
         dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
         
@@ -624,14 +639,20 @@ async function performRecalculation(uid) {
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol,
         };
+
+        // 6. 將所有更新一次性批次寫入資料庫
         const finalBatch = [
+            // 先刪除舊的摘要
             { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid]},
+            // 寫入新的摘要與圖表數據
             { 
                 sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
                 params: [ uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString() ]
             },
+            // 附加所有持股的更新操作
             ...dbOps
         ];
+
         await d1Client.batch(finalBatch);
         console.log(`--- [${uid}] 重新計算程序完成 ---`);
     } catch (e) {
