@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.1.0 - 增量更新與穩定性增強版)
+// == GCP Cloud Function 完整程式碼 (v2.1.1 - Benchmark 同步修正版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -197,11 +197,6 @@ function findFxRate(market, currency, date, tolerance = 15) {
     return findNearest(hist, date, tolerance) ?? 1;
 }
 
-/**
- * [一致性修正]
- * 修正了此函式，使其也接收 market data，以確保成本計算邏輯與 `calculateCoreMetrics` 一致。
- * 現在 lot 中的 pricePerShareTWD 會正確地包含匯率計算。
- */
 function getPortfolioStateOnDate(allEvts, targetDate, market) {
     const state = {};
     const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate));
@@ -245,10 +240,6 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
     return state;
 }
 
-/**
- * [使用者優化]
- * 您新增的股價還原邏輯非常正確，可以應對 yfinance 可能提供調整後股價的情況。
- */
 function dailyValue(state, market, date, allEvts) {
     return Object.keys(state).reduce((totalValue, sym) => {
         const s = state[sym];
@@ -261,7 +252,6 @@ function dailyValue(state, market, date, allEvts) {
             yesterday.setDate(yesterday.getDate() - 1);
             const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date;
             if (yesterday < firstLotDate) return totalValue;
-            // [使用者修正] 確保遞迴呼叫時也傳遞 allEvts，邏輯正確
             return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts);
         }
 
@@ -321,16 +311,13 @@ function calculateDailyPortfolioValues(evts, market, startDate) {
     const history = {};
     while (curDate <= today) {
         const dateStr = curDate.toISOString().split("T")[0];
-        // [一致性修正] 傳遞 market 參數
         const stateOnDate = getPortfolioStateOnDate(evts, curDate, market);
-        // [使用者修正] 傳遞 evts 參數，邏輯正確
         history[dateStr] = dailyValue(stateOnDate, market, curDate, evts);
         curDate.setDate(curDate.getDate() + 1);
     }
     return history;
 }
 
-// ... 其他計算函式 (calculateTwrHistory, calculateFinalHoldings, etc.) 保持不變 ...
 // --- 完整計算函式保留區 (開始) ---
 function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate, log = console.log) {
     const dates = Object.keys(dailyPortfolioValues).sort();
@@ -562,7 +549,7 @@ function calculateCoreMetrics(evts, market) {
 // --- 完整計算函式保留區 (結束) ---
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.1.0) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.1.1) ---`);
     try {
         const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
@@ -672,12 +659,22 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 const txData = isEditing ? data.txData : data;
                 const txId = isEditing ? data.txId : uuidv4();
 
+                // --- [BUG FIX v2.1.1] ---
+                // 1. 在操作交易前，先讀取使用者目前的 benchmark 設定
+                const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
+                const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY'; // 若未設定，則使用預設值 'SPY'
+
+                // 2. 確保所有相關金融商品 (股票、匯率、Benchmark) 的數據都已覆蓋到新交易的日期
                 await ensureDataCoverage(txData.symbol.toUpperCase(), txData.date);
                 const fxSymbol = currencyToFx[txData.currency];
                 if (fxSymbol) {
                     await ensureDataCoverage(fxSymbol, txData.date);
                 }
+                // *** 這是修正問題的關鍵步驟：確保 Benchmark 的數據也同步更新 ***
+                await ensureDataCoverage(benchmarkSymbol, txData.date);
+                // --- [BUG FIX END] ---
 
+                // 3. 寫入交易紀錄
                 if(isEditing) {
                     await d1Client.query(
                         `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
@@ -690,6 +687,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     );
                 }
                 
+                // 4. 觸發重算 (此時所有數據都已準備好)
                 await performRecalculation(uid);
                 return res.status(200).send({ success: true, message: '操作成功並觸發重新計算。', id: txId });
             }
