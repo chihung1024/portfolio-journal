@@ -67,123 +67,147 @@ const d1Client = {
   }
 };
 
-// --- 資料準備與抓取函式 ---
+// --- [新增] 資料抓取與覆蓋範圍管理 ---
 
 /**
- * 從 Yahoo Finance 抓取市場資料並存入 D1 資料庫
- * @param {string} symbol - 股票或匯率代碼
- * @returns {Promise<Object|null>} 市場資料物件或在失敗時返回 null
+ * 抓取指定區間的市場數據並儲存到 D1
+ * @param {string} symbol - 金融商品代碼
+ * @param {string} startDate - 開始日期 'YYYY-MM-DD'
+ * @param {string} endDate - 結束日期 'YYYY-MM-DD'
+ * @returns {boolean} - 是否成功
  */
-async function fetchAndSaveMarketData(symbol) {
-  try {
-    console.log(`從 Yahoo Finance 抓取 ${symbol} 的完整歷史記錄...`);
-    const hist = await yahooFinance.historical(symbol, {
-      period1: '2000-01-01',
-      interval: '1d',
-      autoAdjust: false,
-      backAdjust: false
-    });
-
-    const dbOps = [];
-    const isFx = symbol.includes("=");
-    const priceTableName = isFx ? "exchange_rates" : "price_history";
-    const dividendTableName = "dividend_history";
-
-    // 準備批次刪除舊資料
-    dbOps.push({ sql: `DELETE FROM ${priceTableName} WHERE symbol = ?`, params: [symbol] });
-    if (!isFx) {
-      dbOps.push({ sql: `DELETE FROM ${dividendTableName} WHERE symbol = ?`, params: [symbol] });
-    }
-
-    // 準備批次插入新資料
-    for (const item of hist) {
-      const dateStr = item.date.toISOString().split("T")[0];
-      if (item.close) {
-        dbOps.push({
-          sql: `INSERT INTO ${priceTableName} (symbol, date, price) VALUES (?, ?, ?)`,
-          params: [symbol, dateStr, item.close]
+async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
+    try {
+        console.log(`[Data Fetch] 正在從 Yahoo Finance 抓取 ${symbol} 從 ${startDate} 到 ${endDate} 的數據...`);
+        const hist = await yahooFinance.historical(symbol, {
+            period1: startDate,
+            period2: endDate,
+            interval: '1d',
+            autoAdjust: false,
+            backAdjust: false
         });
-      } else {
-        console.warn(`警告：在 ${symbol} 的 ${dateStr} 日期找到無效的價格資料，已跳過此筆紀錄。`);
-      }
-      if (!isFx && item.dividends && item.dividends > 0) {
-        dbOps.push({
-          sql: `INSERT INTO ${dividendTableName} (symbol, date, dividend) VALUES (?, ?, ?)`,
-          params: [symbol, dateStr, item.dividends]
-        });
-      }
+
+        if (!hist || hist.length === 0) {
+            console.warn(`[Data Fetch] 警告：在指定區間內找不到 ${symbol} 的數據。`);
+            return true; // 視為成功，可能該區間本來就無數據
+        }
+
+        const dbOps = [];
+        const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
+
+        for (const item of hist) {
+            const itemDate = item.date.toISOString().split('T')[0];
+            if (item.close) {
+                // 使用 INSERT OR IGNORE 避免重複寫入，適用於補充數據的場景
+                dbOps.push({
+                    sql: `INSERT OR IGNORE INTO ${tableName} (symbol, date, price) VALUES (?, ?, ?)`,
+                    params: [symbol, itemDate, item.close]
+                });
+            }
+            if (!symbol.includes("=") && item.dividends && item.dividends > 0) {
+                dbOps.push({
+                    sql: `INSERT OR IGNORE INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)`,
+                    params: [symbol, itemDate, item.dividends]
+                });
+            }
+        }
+
+        if (dbOps.length > 0) {
+            await d1Client.batch(dbOps);
+            console.log(`[Data Fetch] 成功寫入 ${dbOps.length} 筆 ${symbol} 的新數據到 D1。`);
+        }
+        return true;
+
+    } catch (e) {
+        console.error(`[Data Fetch] 錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
+        // 即使抓取失敗，也可能只是暫時性問題，不應中斷整個計算流程
+        return false;
     }
-
-    await d1Client.batch(dbOps);
-    console.log(`成功抓取並寫入 ${symbol} 的完整歷史記錄。`);
-
-    // 將抓取結果轉換為記憶體中的格式
-    const prices = hist.reduce((acc, cur) => {
-      if (cur.close) acc[cur.date.toISOString().split("T")[0]] = cur.close;
-      return acc;
-    }, {});
-    const dividends = hist.reduce((acc, cur) => {
-      if (cur.dividends > 0) acc[cur.date.toISOString().split("T")[0]] = cur.dividends;
-      return acc;
-    }, {});
-
-    return { prices, dividends, rates: isFx ? prices : {} };
-  } catch (e) {
-    console.error(`錯誤：抓取 ${symbol} 的市場資料失敗。原因：${e.message}`);
-    return null;
-  }
 }
 
 /**
- * 從資料庫獲取所有必要的市場資料，若不存在則觸發抓取
- * @param {Array<Object>} txs - 交易紀錄
- * @param {string} benchmarkSymbol - 基準指標代碼
- * @returns {Promise<Object>} 市場資料物件
+ * 確保指定商品的數據已覆蓋到必要的開始日期
+ * @param {string} symbol - 金融商品代碼
+ * @param {string} requiredStartDate - 此次交易需要的數據最早日期 'YYYY-MM-DD'
+ */
+async function ensureDataCoverage(symbol, requiredStartDate) {
+    if (!symbol) return;
+    console.log(`[Coverage Check] 檢查 ${symbol} 的數據覆蓋範圍，要求至少從 ${requiredStartDate} 開始。`);
+
+    const coverageData = await d1Client.query('SELECT earliest_date FROM market_data_coverage WHERE symbol = ?', [symbol]);
+    const today = new Date().toISOString().split('T')[0];
+
+    if (coverageData.length === 0) {
+        // 案例 1: 全新商品，資料庫完全沒有紀錄
+        console.log(`[Coverage Check] ${symbol} 是新商品，將抓取從 ${requiredStartDate} 到今天的完整數據。`);
+        await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
+        await d1Client.query(
+            'INSERT INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)',
+            [symbol, requiredStartDate, today]
+        );
+    } else {
+        const currentEarliestDate = coverageData[0].earliest_date;
+        // 案例 2: 已有紀錄，但新交易日期更早
+        if (requiredStartDate < currentEarliestDate) {
+            console.log(`[Coverage Check] 新交易日期 ${requiredStartDate} 早於現有紀錄 ${currentEarliestDate}。將回補缺少的歷史數據。`);
+            // 只抓取缺少的區段：從新的最早日期到舊的最早日期的前一天
+            const fetchEndDate = new Date(currentEarliestDate);
+            fetchEndDate.setDate(fetchEndDate.getDate() - 1);
+            const fetchEndDateStr = fetchEndDate.toISOString().split('T')[0];
+
+            await fetchAndSaveMarketDataRange(symbol, requiredStartDate, fetchEndDateStr);
+            await d1Client.query(
+                'UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?',
+                [requiredStartDate, today, symbol]
+            );
+        } else {
+            console.log(`[Coverage Check] ${symbol} 的數據已覆蓋所需日期，無需更新。`);
+        }
+    }
+}
+
+
+/**
+ * 從 D1 讀取計算所需的所有市場數據
+ * @param {Array} txs - 使用者的所有交易紀錄
+ * @param {string} benchmarkSymbol - 使用者的 benchmark 代碼
+ * @returns {Object} - 包含所有價格、股息、匯率的市場數據物件
  */
 async function getMarketDataFromDb(txs, benchmarkSymbol) {
-  const syms = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-  const currencies = [...new Set(txs.map(t => t.currency || "USD"))].filter(c => c !== "TWD");
-  const fxSyms = currencies.map(c => currencyToFx[c]).filter(Boolean);
-  const allRequiredSymbols = [...new Set([...syms, ...fxSyms, benchmarkSymbol.toUpperCase()])];
+    const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+    const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
+    const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
+    const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])];
 
-  console.log(`資料檢查，標的：${allRequiredSymbols.join(', ')}`);
-  const marketData = {};
+    console.log(`[DB Read] 開始從 D1 讀取市場數據，目標標的: ${allRequiredSymbols.join(', ')}`);
+    const marketData = {};
+    for (const s of allRequiredSymbols) {
+        if (!s) continue;
+        const isFx = s.includes("=");
+        const priceTable = isFx ? "exchange_rates" : "price_history";
+        const divTable = "dividend_history";
 
-  for (const s of allRequiredSymbols) {
-    if (!s) continue;
-    const isFx = s.includes("=");
-    const priceTable = isFx ? "exchange_rates" : "price_history";
-    const divTable = "dividend_history";
+        const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
+        
+        marketData[s] = {
+            prices: priceData.reduce((acc, row) => { acc[row.date.split('T')[0]] = row.price; return acc; }, {}),
+            dividends: {}
+        };
 
-    const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
-    if (priceData.length > 0) {
-      marketData[s] = {
-        prices: priceData.reduce((acc, row) => { acc[row.date] = row.price; return acc; }, {}),
-        dividends: {}
-      };
-      if (isFx) {
-        marketData[s].rates = marketData[s].prices;
-      } else {
-        const divData = await d1Client.query(`SELECT date, dividend FROM ${divTable} WHERE symbol = ?`, [s]);
-        marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date] = row.dividend; return acc; }, {});
-      }
-    } else {
-      console.log(`在 D1 中找不到 ${s} 的資料。正在抓取...`);
-      const fetchedData = await fetchAndSaveMarketData(s);
-      if (fetchedData) {
-        marketData[s] = fetchedData;
-      } else {
-        throw new Error(`無法抓取 ${s} 的關鍵市場資料。中止計算。`);
-      }
+        if (isFx) {
+            marketData[s].rates = marketData[s].prices;
+        } else {
+            const divData = await d1Client.query(`SELECT date, dividend FROM ${divTable} WHERE symbol = ?`, [s]);
+            marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date.split('T')[0]] = row.dividend; return acc; }, {});
+        }
     }
-  }
-  console.log("所有必要的市場資料都已存在並載入。");
-  return marketData;
+    console.log("[DB Read] 所有市場數據已從 D1 載入記憶體。");
+    return marketData;
 }
 
 // --- 核心計算與輔助函式 ---
-const toDate = v => (v.toDate ? v.toDate() : new Date(v));
-const currencyToFx = { USD: "TWD=X", HKD: "HKD=TWD", JPY: "JPY=TWD" };
+const toDate = v => v.toDate ? v.toDate() : new Date(v);
+const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 
 const isTwStock = (symbol) => {
   if (!symbol) return false;
@@ -198,23 +222,21 @@ const getTotalCost = (tx) => {
 };
 
 function findNearest(hist, date, toleranceDays = 7) {
-  if (!hist || Object.keys(hist).length === 0) return undefined;
-  const tgt = date instanceof Date ? date : new Date(date);
-  const tgtStr = tgt.toISOString().slice(0, 10);
-  if (hist[tgtStr]) return hist[tgtStr];
-
-  for (let i = 1; i <= toleranceDays; i++) {
-    const checkDate = new Date(tgt);
-    checkDate.setDate(checkDate.getDate() - i);
-    const checkDateStr = checkDate.toISOString().split('T')[0];
-    if (hist[checkDateStr]) return hist[checkDateStr];
-  }
-
-  const sortedDates = Object.keys(hist).sort((a, b) => new Date(b) - new Date(a));
-  for (const dateStr of sortedDates) {
-    if (dateStr <= tgtStr) return hist[dateStr];
-  }
-  return undefined;
+    if (!hist || Object.keys(hist).length === 0) return undefined;
+    const tgt = date instanceof Date ? date : new Date(date);
+    const tgtStr = tgt.toISOString().slice(0, 10);
+    if (hist[tgtStr]) return hist[tgtStr];
+    for (let i = 1; i <= toleranceDays; i++) {
+        const checkDate = new Date(tgt);
+        checkDate.setDate(checkDate.getDate() - i);
+        const checkDateStr = checkDate.toISOString().split('T')[0];
+        if (hist[checkDateStr]) return hist[checkDateStr];
+    }
+    const sortedDates = Object.keys(hist).sort((a, b) => new Date(b) - new Date(a));
+    for (const dateStr of sortedDates) {
+        if (dateStr <= tgtStr) return hist[dateStr];
+    }
+    return undefined;
 }
 
 function findFxRate(market, currency, date, tolerance = 15) {
@@ -600,194 +622,192 @@ function calculateCoreMetrics(evts, market) {
 }
 
 async function performRecalculation(uid) {
-  console.log(`--- [${uid}] 重新計算程序開始 (v1.5.6) ---`);
-  try {
-    const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-    const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-    const [txs, splits] = await Promise.all([
-      d1Client.query('SELECT * FROM transactions WHERE uid = ?', [uid]),
-      d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
-    ]);
-    if (txs.length === 0) {
-      await d1Client.batch([
-        { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
-        { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
-      ]);
-      console.log(`[${uid}] 無交易紀錄，已清空投資組合資料。`);
-      return;
-    }
-    const market = await getMarketDataFromDb(txs, benchmarkSymbol);
-    const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
-    if (!firstBuyDate) {
-      console.log(`[${uid}] 找不到起始交易日期，計算中止。`);
-      return;
-    }
-    const portfolioResult = calculateCoreMetrics(evts, market);
-    const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
-    const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
-    const { holdingsToUpdate } = portfolioResult.holdings;
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.0.0) ---`);
+    try {
+        const controlsData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
+        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+        const [txs, splits] = await Promise.all([
+            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
+            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid])
+        ]);
 
-    const dbOps = [];
-    dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
+        if (txs.length === 0) {
+            console.log(`[${uid}] 沒有交易紀錄，清空相關資料並結束。`);
+            await d1Client.batch([
+                { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+            ]);
+            return;
+        }
 
-    for (const sym in holdingsToUpdate) {
-      const h = holdingsToUpdate[sym];
-      dbOps.push({
-        sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, investedCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.investedCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
-      });
+        const market = await getMarketDataFromDb(txs, benchmarkSymbol);
+        const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
+        if (!firstBuyDate) { return; }
+
+        const portfolioResult = calculateCoreMetrics(evts, market);
+        const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
+        const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
+        const { holdingsToUpdate } = portfolioResult.holdings;
+        
+        const dbOps = [];
+        dbOps.push({ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] });
+        for (const sym in holdingsToUpdate) {
+            const h = holdingsToUpdate[sym];
+            dbOps.push({
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+                params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
+            });
+        }
+        
+        const summaryData = {
+            totalRealizedPL: portfolioResult.totalRealizedPL,
+            xirr: portfolioResult.xirr,
+            overallReturnRate: portfolioResult.overallReturnRate,
+            benchmarkSymbol: benchmarkSymbol,
+        };
+        const finalBatch = [
+            { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+            {
+                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
+                params: [uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString()]
+            },
+            ...dbOps
+        ];
+        await d1Client.batch(finalBatch);
+        console.log(`--- [${uid}] 重新計算程序完成 ---`);
+    } catch (e) {
+        console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
+        throw e;
     }
-
-    const summaryData = {
-      totalRealizedPL: portfolioResult.totalRealizedPL,
-      xirr: portfolioResult.xirr,
-      overallReturnRate: portfolioResult.overallReturnRate,
-      benchmarkSymbol: benchmarkSymbol,
-    };
-    const finalBatch = [
-      { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
-      {
-        sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
-        params: [uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString()]
-      },
-      ...dbOps
-    ];
-    await d1Client.batch(finalBatch);
-    console.log(`--- [${uid}] 重新計算程序完成 ---`);
-  } catch (e) {
-    console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
-    throw e;
-  }
 }
 
 // --- 主要 HTTP 觸發函式 ---
-exports.unifiedPortfolioHandler = functions.https.onRequest(async (req, res) => {
-  // 設定 CORS 標頭
-  res.set('Access-Control-Allow-Origin', '*');
-  if (req.method === 'OPTIONS') {
-    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY');
-    res.set('Access-Control-Max-Age', '3600');
-    res.status(204).send('');
-    return;
-  }
+// --- API 端點處理 ---
+exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+    
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
 
-  // 驗證請求方法與 API 金鑰
-  if (req.method !== 'POST') {
-    res.status(405).send('Method Not Allowed');
-    return;
-  }
-  const apiKey = req.headers['x-api-key'];
-  if (apiKey !== D1_API_KEY) {
-    res.status(401).send('Unauthorized');
-    return;
-  }
+    const { action, uid, data } = req.body;
+    if (!action || !uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
 
-  // 驗證請求主體
-  const { action, uid, data } = req.body;
-  if (!action || !uid) {
-    res.status(400).send({ success: false, message: '請求錯誤：缺少 action 或 uid。' });
-    return;
-  }
+    try {
+        switch (action) {
+            case 'get_data': {
+                const [txs, splits] = await Promise.all([
+                    d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                    d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
+                ]);
+                const [summaryResult, holdingsResult] = await Promise.all([
+                    d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
+                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
+                ]);
+                const summaryRow = summaryResult[0] || {};
+                const summary = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+                const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+                const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+                const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+                
+                // 為了讓前端能正確顯示交易的 TWD 總額，需要回傳市場數據
+                const benchmarkSymbol = summary.benchmarkSymbol || 'SPY';
+                const marketData = await getMarketDataFromDb(txs, benchmarkSymbol);
 
-  // 根據 action 執行對應操作
-  try {
-    switch (action) {
-      case 'recalculate': {
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: `${uid} 的重新計算成功` });
-      }
-      case 'get_data': {
-        const [txs, splits] = await Promise.all([
-          d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-          d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
-        ]);
-        const benchmarkData = await d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']);
-        const benchmarkSymbol = benchmarkData.length > 0 ? benchmarkData[0].value : 'SPY';
-        // 注意：此處的 marketData 可能不包含所有歷史資料，僅包含與現有交易相關的部分
-        const marketData = await getMarketDataFromDb(txs, benchmarkSymbol);
-        const [summaryResult, holdingsResult] = await Promise.all([
-          d1Client.query('SELECT summary_data, history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ?', [uid]),
-          d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
-        ]);
-        const summary = summaryResult.length > 0 ? JSON.parse(summaryResult[0].summary_data || '{}') : {};
-        const history = summaryResult.length > 0 ? JSON.parse(summaryResult[0].history || '{}') : {};
-        const twrHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].twrHistory || '{}') : {};
-        const benchmarkHistory = summaryResult.length > 0 ? JSON.parse(summaryResult[0].benchmarkHistory || '{}') : {};
-        return res.status(200).send({
-          success: true,
-          data: { summary, holdings: holdingsResult, transactions: txs, splits, history, twrHistory, benchmarkHistory, marketData }
-        });
-      }
-      case 'add_transaction': {
-        const txData = data;
-        if (!txData || !txData.symbol || !txData.date || !txData.type || typeof txData.quantity === 'undefined' || typeof txData.price === 'undefined' || txData.quantity <= 0 || txData.price < 0) {
-          return res.status(400).send({ success: false, message: '請求錯誤：交易資料不完整或無效。' });
+                return res.status(200).send({
+                    success: true,
+                    data: {
+                        summary,
+                        holdings: holdingsResult,
+                        transactions: txs,
+                        splits,
+                        history, twrHistory, benchmarkHistory,
+                        marketData // 將市場數據回傳給前端
+                    }
+                });
+            }
+
+            case 'add_transaction':
+            case 'edit_transaction': {
+                const isEditing = action === 'edit_transaction';
+                const txData = isEditing ? data.txData : data;
+                const txId = isEditing ? data.txId : uuidv4();
+
+                // 核心步驟：在寫入資料庫前，確保數據覆蓋範圍
+                await ensureDataCoverage(txData.symbol.toUpperCase(), txData.date);
+                const fxSymbol = currencyToFx[txData.currency];
+                if (fxSymbol) {
+                    await ensureDataCoverage(fxSymbol, txData.date);
+                }
+
+                // 寫入交易紀錄
+                if(isEditing) {
+                    await d1Client.query(
+                        `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
+                        [txData.date, txData.symbol.toUpperCase(), txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
+                    );
+                } else {
+                    await d1Client.query(
+                        `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [txId, uid, txData.date, txData.symbol.toUpperCase(), txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                    );
+                }
+                
+                // 觸發重算
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '操作成功並觸發重新計算。', id: txId });
+            }
+
+            case 'delete_transaction': {
+                // 刪除操作不需要檢查數據覆蓋，直接刪除後重算即可
+                const { txId } = data;
+                await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '交易已刪除並觸發重新計算。' });
+            }
+
+            case 'update_benchmark': {
+                const { benchmarkSymbol } = data;
+                if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
+
+                // 找出使用者所有交易的最早日期，作為 benchmark 的數據起始點
+                const txs = await d1Client.query('SELECT MIN(date) as first_date FROM transactions WHERE uid = ?', [uid]);
+                const firstDate = txs.length > 0 && txs[0].first_date ? txs[0].first_date.split('T')[0] : new Date().toISOString().split('T')[0];
+
+                await ensureDataCoverage(benchmarkSymbol.toUpperCase(), firstDate);
+                
+                await d1Client.query(
+                    'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
+                    [uid, 'benchmarkSymbol', benchmarkSymbol.toUpperCase()]
+                );
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
+            }
+
+            // 其他 action (add_split, delete_split, recalculate) 保持不變
+            case 'add_split': {
+                const splitData = data;
+                const newSplitId = uuidv4();
+                await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol.toUpperCase(), splitData.ratio]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
+            }
+            case 'delete_split': {
+                const { splitId } = data;
+                await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '分割事件已刪除並觸發重新計算。' });
+            }
+            case 'recalculate':
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: `${uid} 的重新計算成功` });
+
+            default:
+                return res.status(400).send({ success: false, message: '未知的操作' });
         }
-        const newTxId = uuidv4();
-        await d1Client.query(
-          `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
-        );
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '交易已新增並觸發重新計算。', txId: newTxId });
-      }
-      case 'edit_transaction': {
-        const { txId, txData } = data;
-        if (!txId || !txData || !txData.symbol || !txData.date || !txData.type || typeof txData.quantity === 'undefined' || typeof txData.price === 'undefined' || txData.quantity <= 0 || txData.price < 0) {
-          return res.status(400).send({ success: false, message: '請求錯誤：交易資料不完整或無效。' });
-        }
-        await d1Client.query(
-          `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
-          [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
-        );
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '交易已更新並觸發重新計算。' });
-      }
-      case 'delete_transaction': {
-        const { txId } = data;
-        if (!txId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 txId。' });
-        await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '交易已刪除並觸發重新計算。' });
-      }
-      case 'add_split': {
-        const splitData = data;
-        if (!splitData || !splitData.symbol || !splitData.date || !splitData.ratio || splitData.ratio <= 0) {
-          return res.status(400).send({ success: false, message: '請求錯誤：分割資料不完整或無效。' });
-        }
-        const newSplitId = uuidv4();
-        await d1Client.query(
-          `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?, ?, ?, ?, ?)`,
-          [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]
-        );
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
-      }
-      case 'delete_split': {
-        const { splitId } = data;
-        if (!splitId) return res.status(400).send({ success: false, message: '請求錯誤：缺少 splitId。' });
-        await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [splitId, uid]);
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '分割事件已刪除並觸發重新計算。' });
-      }
-      case 'update_benchmark': {
-        const { benchmarkSymbol } = data;
-        if (!benchmarkSymbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 benchmarkSymbol。' });
-        await getMarketDataFromDb([], benchmarkSymbol);
-        await d1Client.query(
-          'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
-          [uid, 'benchmarkSymbol', benchmarkSymbol]
-        );
-        await performRecalculation(uid);
-        return res.status(200).send({ success: true, message: '基準已更新並觸發重新計算。' });
-      }
-      default: {
-        return res.status(400).send({ success: false, message: '未知的操作' });
-      }
+    } catch (error) {
+        console.error(`[${uid}] '${action}' 操作的處理程序失敗：`, error);
+        return res.status(500).send({ success: false, message: `發生內部錯誤：${error.message}` });
     }
-  } catch (error) {
-    console.error(`[${uid}] 在處理 '${action}' 操作時失敗：`, error);
-    return res.status(500).send({ success: false, message: `發生內部伺服器錯誤：${error.message}` });
-  }
 });
