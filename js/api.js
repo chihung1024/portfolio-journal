@@ -5,7 +5,6 @@
 // [新增] 從 Firebase SDK 引入 getAuth，用來獲取當前使用者
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
-import { showNotification } from './ui.js';
 import { getState, setState } from './state.js';
 import { 
     renderHoldingsTable, 
