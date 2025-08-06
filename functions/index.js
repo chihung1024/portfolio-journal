@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.5.0 - 新增資料轉移功能)
+// == GCP Cloud Function 完整程式碼 (v2.6.1 - 完整展開版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -175,7 +175,7 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
 }
 
 
-// --- 核心計算與輔助函式 (此區塊無變動) ---
+// --- 核心計算與輔助函式 ---
 const toDate = v => v ? (v.toDate ? v.toDate() : new Date(v)) : null;
 const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 
@@ -652,14 +652,14 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         switch (action) {
             case 'get_data': {
                 if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
-                const [txs, splits] = await Promise.all([
+                const [txs, splits, holdingsResult, summaryResult, stockNotes] = await Promise.all([
                     d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-                    d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
-                ]);
-                const [summaryResult, holdingsResult] = await Promise.all([
+                    d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid]),
                     d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
-                    d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid])
+                    d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid]) // [修改] 一併獲取筆記
                 ]);
+
                 const summaryRow = summaryResult[0] || {};
                 const summary = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
                 const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
@@ -676,6 +676,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         holdings: holdingsResult,
                         transactions: txs,
                         splits,
+                        stockNotes, // [修改] 將筆記資料回傳給前端
                         history, twrHistory, benchmarkHistory,
                         marketData
                     }
@@ -811,6 +812,41 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 return res.status(200).send({ success: true, message: `已成功將資料從 ${sourceUid} 轉移到 ${targetUid}。` });
             }
 
+            // [新增] 獲取單一股票筆記的 Action
+            case 'get_stock_note': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
+                const { symbol } = data;
+                if (!symbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 symbol。' });
+
+                const results = await d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
+                return res.status(200).send({ success: true, data: results[0] || {} });
+            }
+
+            // [新增] 儲存股票筆記的 Action
+            case 'save_stock_note': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
+                const { symbol, target_price, stop_loss_price, notes } = data;
+                if (!symbol) return res.status(400).send({ success: false, message: '請求錯誤：缺少 symbol。' });
+
+                const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
+                
+                if (existing.length > 0) {
+                    // 更新現有紀錄
+                    await d1Client.query(
+                        'UPDATE user_stock_notes SET target_price = ?, stop_loss_price = ?, notes = ?, last_updated = ? WHERE id = ?',
+                        [target_price, stop_loss_price, notes, new Date().toISOString(), existing[0].id]
+                    );
+                } else {
+                    // 插入新紀錄
+                    await d1Client.query(
+                        'INSERT INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        [uuidv4(), uid, symbol, target_price, stop_loss_price, notes, new Date().toISOString()]
+                    );
+                }
+                // 儲存筆記後，不需要觸發完整的重算，因為它不影響核心財務指標
+                return res.status(200).send({ success: true, message: '筆記已儲存。' });
+            }
+
             default:
                 return res.status(400).send({ success: false, message: '未知的操作' });
         }
@@ -819,4 +855,3 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         console.error(`[${uid || 'N/A'}] '${action}' 操作的處理程序失敗：`, errorMessage);
         return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
-});
