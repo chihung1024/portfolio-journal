@@ -351,7 +351,14 @@ function findFxRate(market, currency, date, tolerance = 15) {
 
 function getPortfolioStateOnDate(allEvts, targetDate, market) {
     const state = {};
-    const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate));
+    // [關鍵修正] 確保 targetDate 也被標準化為 UTC 午夜
+    const standardizedTargetDate = toDate(targetDate);
+
+    const pastEvents = allEvts.filter(e => {
+        const eventDate = toDate(e.date);
+        // 確保兩個日期都是有效的 Date 物件再進行比較
+        return eventDate instanceof Date && !isNaN(eventDate) && eventDate <= standardizedTargetDate;
+    });
 
     for (const e of pastEvents) {
         const sym = e.symbol.toUpperCase();
