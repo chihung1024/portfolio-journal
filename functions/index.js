@@ -1,6 +1,6 @@
 /* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.4.0 - 最終修正版)
+// == GCP Cloud Function 完整程式碼 (v2.5.0 - 新增資料轉移功能)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -94,7 +94,6 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
     const coverageData = await d1Client.query('SELECT earliest_date FROM market_data_coverage WHERE symbol = ?', [symbol]);
     const today = new Date().toISOString().split('T')[0];
 
-    // 案例 1: 全新商品，資料庫完全沒有紀錄
     if (coverageData.length === 0) {
         console.log(`[Coverage Check] ${symbol} 是新商品，將抓取從 ${requiredStartDate} 到今天的完整數據。`);
         const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
@@ -109,13 +108,11 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
         } else {
             console.warn(`[Coverage Check] ${symbol} 首次抓取未能返回任何數據，將不會在 coverage 表中創建紀錄。`);
         }
-        return; // 完成新商品處理
+        return;
     }
 
     const currentEarliestDate = coverageData[0].earliest_date;
-    // 案例 2: 已有紀錄，但新交易日期更早
     if (requiredStartDate < currentEarliestDate) {
-        // [v2.4.0 核心修正] 模仿週末腳本的可靠行為：先刪除，再完整重抓
         console.log(`[Coverage Check] 新日期 ${requiredStartDate} 早於現有紀錄 ${currentEarliestDate}。將對 ${symbol} 執行完整數據覆蓋。`);
         
         const isFx = symbol.includes("=");
@@ -127,7 +124,6 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
         await d1Client.batch(deleteOps);
         console.log(`[Coverage Check] 已刪除 ${symbol} 的所有舊市場數據。`);
 
-        // 重新完整抓取
         const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
 
         if (fetchedData && fetchedData.length > 0) {
@@ -343,7 +339,6 @@ function calculateDailyPortfolioValues(evts, market, startDate) {
     return history;
 }
 
-// --- 完整計算函式保留區 (開始) ---
 function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate, log = console.log) {
     const dates = Object.keys(dailyPortfolioValues).sort();
     if (!startDate || dates.length === 0) return { twrHistory: {}, benchmarkHistory: {} };
@@ -571,10 +566,9 @@ function calculateCoreMetrics(evts, market) {
     const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0;
     return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
 }
-// --- 完整計算函式保留區 (結束) ---
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.3.1) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v2.4.0) ---`);
     try {
         const [txs, splits, controlsData] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -789,6 +783,33 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 await d1Client.batch(deleteOps);
                 console.log(`[DANGER ZONE] 整個資料庫已被成功清空。`);
                 return res.status(200).send({ success: true, message: '已成功清除資料庫中的所有資料。所有資料表結構已保留。' });
+            }
+            
+            // [新增] 資料轉移功能
+            case 'migrate_user_data': {
+                const { sourceUid, targetUid } = data;
+                if (!sourceUid || !targetUid) {
+                    return res.status(400).send({ success: false, message: '請求錯誤：轉移資料必須提供 sourceUid 和 targetUid。' });
+                }
+                if (sourceUid === targetUid) {
+                    return res.status(400).send({ success: false, message: '請求錯誤：來源和目標 UID 不可相同。' });
+                }
+
+                console.log(`[MIGRATION] 開始將資料從 ${sourceUid} 轉移到 ${targetUid}...`);
+
+                const userTables = ['transactions', 'splits', 'holdings', 'portfolio_summary', 'controls'];
+                const updateOps = userTables.map(table => ({
+                    sql: `UPDATE ${table} SET uid = ? WHERE uid = ?`,
+                    params: [targetUid, sourceUid]
+                }));
+
+                await d1Client.batch(updateOps);
+                
+                console.log(`[MIGRATION] UID 更新完成。正在為新帳號 ${targetUid} 觸發重新計算...`);
+                await performRecalculation(targetUid);
+
+                console.log(`[MIGRATION] 資料轉移成功：從 ${sourceUid} 到 ${targetUid}。`);
+                return res.status(200).send({ success: true, message: `已成功將資料從 ${sourceUid} 轉移到 ${targetUid}。` });
             }
 
             default:
