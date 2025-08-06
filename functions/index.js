@@ -420,38 +420,72 @@ function dailyValue(state, market, date, allEvts) {
     }, 0);
 }
 
-function prepareEvents(txs, splits, market) {
-    const firstBuyDateMap = {};
-    txs.forEach(tx => {
-        if (tx.type === "buy") {
-            const sym = tx.symbol.toUpperCase();
-            const d = toDate(tx.date);
-            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) {
-                firstBuyDateMap[sym] = d;
-            }
-        }
-    });
-
+function prepareEvents(txs, splits, userDividends) {
     const evts = [
         ...txs.map(t => ({ ...t, eventType: "transaction" })),
         ...splits.map(s => ({ ...s, eventType: "split" }))
     ];
 
-    Object.keys(market).forEach(sym => {
-        if (market[sym] && market[sym].dividends) {
-            Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
-                const dividendDate = new Date(dateStr);
-                dividendDate.setUTCHours(0, 0, 0, 0);
-                if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
-                    evts.push({ date: dividendDate, symbol: sym, amount, eventType: "dividend" });
-                }
-            });
-        }
-    });
+    // [修改] 只處理使用者確認過的配息
+    const confirmedDividends = userDividends.filter(d => d.status === 'confirmed');
+    evts.push(...confirmedDividends.map(d => ({ ...d, eventType: "dividend" })));
 
     evts.sort((a, b) => toDate(a.date) - toDate(b.date));
     const firstTx = evts.find(e => e.eventType === 'transaction');
     return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
+}
+
+// [新增] 產生待確認配息紀錄的函式
+async function generatePendingDividends(uid, txs, market) {
+    console.log(`[${uid}] 開始掃描並產生待確認的配息紀錄...`);
+    const allSymbols = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+    const allGlobalDividends = await d1Client.query('SELECT * FROM dividend_history');
+    const existingUserDividends = await d1Client.query('SELECT symbol, date FROM user_dividends WHERE uid = ?', [uid]);
+    
+    const existingSet = new Set(existingUserDividends.map(d => `${d.symbol}|${d.date.split('T')[0]}`));
+    const newDividendsToInsert = [];
+
+    for (const globalDiv of allGlobalDividends) {
+        const divDateStr = globalDiv.date.split('T')[0];
+        const divDate = toDate(divDateStr);
+        const sym = globalDiv.symbol.toUpperCase();
+
+        // 檢查此配息是否已存在於使用者的紀錄中
+        if (!allSymbols.includes(sym) || existingSet.has(`${sym}|${divDateStr}`)) {
+            continue;
+        }
+
+        // 計算除息日的持股狀態
+        const stateOnDate = getPortfolioStateOnDate(txs, divDate, market);
+        const holding = stateOnDate[sym];
+        const sharesOnDate = holding ? holding.lots.reduce((sum, lot) => sum + lot.quantity, 0) : 0;
+
+        if (sharesOnDate > 0) {
+            const currency = holding.currency || 'USD';
+            const fx = findFxRate(market, currency, divDate);
+            const grossAmount = sharesOnDate * globalDiv.dividend;
+            const taxRate = isTwStock(sym) ? 0.0 : 0.3; // 預設稅率
+            const estimatedTax = grossAmount * taxRate;
+            const netAmount = grossAmount - estimatedTax;
+
+            newDividendsToInsert.push({
+                sql: `INSERT INTO user_dividends (id, uid, symbol, date, quantity, dividend_per_share, gross_amount, net_amount, tax, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                params: [
+                    uuidv4(), uid, sym, divDateStr, sharesOnDate, globalDiv.dividend, 
+                    grossAmount, netAmount, estimatedTax, currency, 'pending'
+                ]
+            });
+            // 將新產生的配息加入 set，避免重複插入
+            existingSet.add(`${sym}|${divDateStr}`);
+        }
+    }
+
+    if (newDividendsToInsert.length > 0) {
+        await d1Client.batch(newDividendsToInsert);
+        console.log(`[${uid}] 成功產生了 ${newDividendsToInsert.length} 筆新的待確認配息紀錄。`);
+    } else {
+        console.log(`[${uid}] 沒有新的待確認配息紀錄需要產生。`);
+    }
 }
 
 function calculateDailyPortfolioValues(evts, market, startDate) {
@@ -699,12 +733,13 @@ function calculateCoreMetrics(evts, market) {
 }
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v2.4.0) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v3.0 - 配息管理) ---`);
     try {
-        const [txs, splits, controlsData] = await Promise.all([
+        const [txs, splits, controlsData, userDividends] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
-            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
+            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
+            d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]) // 讀取使用者專屬的配息紀錄
         ]);
 
         if (txs.length === 0) {
@@ -712,6 +747,7 @@ async function performRecalculation(uid) {
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] }
             ]);
             return;
         }
@@ -727,7 +763,9 @@ async function performRecalculation(uid) {
         console.log(`[${uid}] 所有金融商品的數據覆蓋範圍已確認完畢。`);
 
         const market = await getMarketDataFromDb(txs, benchmarkSymbol);
-        const { evts, firstBuyDate } = prepareEvents(txs, splits, market);
+        
+        // [修改] 將 userDividends 傳入 prepareEvents
+        const { evts, firstBuyDate } = prepareEvents(txs, splits, userDividends);
         if (!firstBuyDate) { return; }
 
         const portfolioResult = calculateCoreMetrics(evts, market);
@@ -752,9 +790,6 @@ async function performRecalculation(uid) {
             benchmarkSymbol: benchmarkSymbol,
         };
       
-        // --- [新增] 批次切割 (Chunking) 邏輯 ---
-    
-        // 1. 將固定大小的 summary 操作與可能非常大的 holdings 操作分開
         const summaryOps = [
             { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
             {
@@ -763,12 +798,10 @@ async function performRecalculation(uid) {
             }
         ];
     
-        // 先執行 summary 的更新
         await d1Client.batch(summaryOps);
         console.log(`[${uid}] Summary data updated successfully.`);
     
-        // 2. 對 holdings 操作 (dbOps) 進行切割
-        const BATCH_SIZE = 900; // 設定一個安全的批次大小，略小於1000以保留緩衝
+        const BATCH_SIZE = 900; 
         const dbOpsChunks = [];
         for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
             dbOpsChunks.push(dbOps.slice(i, i + BATCH_SIZE));
@@ -776,7 +809,6 @@ async function performRecalculation(uid) {
     
         console.log(`[${uid}] Holdings data will be updated in ${dbOpsChunks.length} batches of up to ${BATCH_SIZE} statements each.`);
     
-        // 3. 透過 Promise.all 並行執行所有切割後的批次任務，以提升效率
         await Promise.all(
             dbOpsChunks.map((chunk, index) => {
                 console.log(`[${uid}] Executing holdings batch #${index + 1} with ${chunk.length} statements...`);
@@ -784,6 +816,9 @@ async function performRecalculation(uid) {
             })
         );
         
+        // [新增] 呼叫新的函式來產生待確認的配息
+        await generatePendingDividends(uid, txs, market);
+
         console.log(`--- [${uid}] 重新計算程序完成 ---`);
     } catch (e) {
         console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
@@ -860,12 +895,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             switch (action) {
             case 'get_data': {
                 if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
-                const [txs, splits, holdingsResult, summaryResult, stockNotes] = await Promise.all([
+                const [txs, splits, holdingsResult, summaryResult, stockNotes, userDividends] = await Promise.all([
                     d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
                     d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
                     d1Client.query('SELECT * FROM holdings WHERE uid = ? ORDER BY marketValueTWD DESC', [uid]),
                     d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
-                    d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid]) // [修改] 一併獲取筆記
+                    d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid]),
+                    d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY date DESC', [uid]) // [新增] 獲取使用者的配息紀錄
                 ]);
 
                 const summaryRow = summaryResult[0] || {};
@@ -884,11 +920,28 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         holdings: holdingsResult,
                         transactions: txs,
                         splits,
-                        stockNotes, // [修改] 將筆記資料回傳給前端
+                        stockNotes, 
+                        userDividends, // [新增] 將配息資料回傳給前端
                         history, twrHistory, benchmarkHistory,
                         marketData
                     }
                 });
+            }
+
+            // [新增] 更新配息紀錄的 Action
+            case 'update_dividend': {
+                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
+                const { id, net_amount, tax, notes } = data;
+                if (!id) return res.status(400).send({ success: false, message: '請求錯誤：缺少配息紀錄 ID。' });
+
+                await d1Client.query(
+                    'UPDATE user_dividends SET net_amount = ?, tax = ?, notes = ?, status = ? WHERE id = ? AND uid = ?',
+                    [net_amount, tax, notes, 'confirmed', id, uid]
+                );
+
+                // 更新配息後，需要觸發一次重算
+                await performRecalculation(uid);
+                return res.status(200).send({ success: true, message: '配息紀錄已更新並確認。' });
             }
 
             case 'add_transaction':
