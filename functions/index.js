@@ -143,34 +143,96 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
 }
 
 
+/**
+ * [優化版] 從 D1 資料庫批次獲取所有市場數據。
+ * 採用 `WHERE IN (...)` 的批次查詢方式，並透過 Promise.all 並行執行，以達到最高效能。
+ * @param {Array} txs - 使用者的交易紀錄，用於分析需要的標的。
+ * @param {string} benchmarkSymbol - 基準指標的代碼。
+ * @returns {Object} - 包含所有價格、股利和匯率的 marketData 物件。
+ */
 async function getMarketDataFromDb(txs, benchmarkSymbol) {
+    // --- 步驟 1: 分類所有需要查詢的代碼 ---
     const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
     const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
-    const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
-    const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
+    const requiredFxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
+    const requiredStockSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase()])].filter(Boolean);
 
-    console.log(`[DB Read] 開始從 D1 讀取市場數據，目標標的: ${allRequiredSymbols.join(', ')}`);
-    const marketData = {};
-    for (const s of allRequiredSymbols) {
-        const isFx = s.includes("=");
-        const priceTable = isFx ? "exchange_rates" : "price_history";
-        const divTable = "dividend_history";
+    console.log(`[DB Read] 開始批次讀取市場數據...`);
+    console.log(`[DB Read] 股票標的: ${requiredStockSymbols.join(', ') || '無'}`);
+    console.log(`[DB Read] 匯率標的: ${requiredFxSymbols.join(', ') || '無'}`);
 
-        const priceData = await d1Client.query(`SELECT date, price FROM ${priceTable} WHERE symbol = ?`, [s]);
-        
-        marketData[s] = {
-            prices: priceData.reduce((acc, row) => { acc[row.date.split('T')[0]] = row.price; return acc; }, {}),
-            dividends: {}
-        };
+    const promises = [];
+    
+    // --- 步驟 2: 動態構建 SQL 並準備批次查詢 ---
 
-        if (isFx) {
-            marketData[s].rates = marketData[s].prices;
-        } else {
-            const divData = await d1Client.query(`SELECT date, dividend FROM ${divTable} WHERE symbol = ?`, [s]);
-            marketData[s].dividends = divData.reduce((acc, row) => { acc[row.date.split('T')[0]] = row.dividend; return acc; }, {});
-        }
+    // 準備股票價格的批次查詢
+    if (requiredStockSymbols.length > 0) {
+        const placeholders = requiredStockSymbols.map(() => '?').join(',');
+        const sql = `SELECT symbol, date, price FROM price_history WHERE symbol IN (${placeholders})`;
+        promises.push(d1Client.query(sql, requiredStockSymbols));
+    } else {
+        promises.push(Promise.resolve([])); // 如果沒有股票，放入一個解析為空陣列的 Promise 以維持順序
     }
-    console.log("[DB Read] 所有市場數據已從 D1 載入記憶體。");
+
+    // 準備股票股利的批次查詢
+    if (requiredStockSymbols.length > 0) {
+        const placeholders = requiredStockSymbols.map(() => '?').join(',');
+        const sql = `SELECT symbol, date, dividend FROM dividend_history WHERE symbol IN (${placeholders})`;
+        promises.push(d1Client.query(sql, requiredStockSymbols));
+    } else {
+        promises.push(Promise.resolve([]));
+    }
+
+    // 準備匯率的批次查詢
+    if (requiredFxSymbols.length > 0) {
+        const placeholders = requiredFxSymbols.map(() => '?').join(',');
+        const sql = `SELECT symbol, date, price FROM exchange_rates WHERE symbol IN (${placeholders})`;
+        promises.push(d1Client.query(sql, requiredFxSymbols));
+    } else {
+        promises.push(Promise.resolve([]));
+    }
+
+    // --- 步驟 3: 並行發起所有批次查詢 ---
+    // 一次性等待所有大的批次查詢完成
+    const [
+        stockPricesFlat,    // 結果會是一個扁平的大陣列，例如 [{symbol: 'AAPL', ...}, {symbol: 'GOOG', ...}]
+        stockDividendsFlat,
+        fxRatesFlat
+    ] = await Promise.all(promises);
+
+    // --- 步驟 4: 重組扁平化的數據 ---
+    const allSymbols = [...requiredStockSymbols, ...requiredFxSymbols];
+
+    // 先建立好 marketData 的基本結構
+    const marketData = allSymbols.reduce((acc, symbol) => {
+        acc[symbol] = { prices: {}, dividends: {} };
+        return acc;
+    }, {});
+
+    // 將股票價格數據填充進 marketData
+    stockPricesFlat.forEach(row => {
+        const date = row.date.split('T')[0];
+        marketData[row.symbol].prices[date] = row.price;
+    });
+
+    // 將股利數據填充進 marketData
+    stockDividendsFlat.forEach(row => {
+        const date = row.date.split('T')[0];
+        marketData[row.symbol].dividends[date] = row.dividend;
+    });
+
+    // 將匯率數據填充進 marketData，並同時建立 .rates 屬性
+    fxRatesFlat.forEach(row => {
+        const date = row.date.split('T')[0];
+        marketData[row.symbol].prices[date] = row.price;
+    });
+    requiredFxSymbols.forEach(fxSymbol => {
+        if(marketData[fxSymbol]) {
+            marketData[fxSymbol].rates = marketData[fxSymbol].prices;
+        }
+    });
+
+    console.log("[DB Read] 所有市場數據已透過批次查詢載入記憶體。");
     return marketData;
 }
 
