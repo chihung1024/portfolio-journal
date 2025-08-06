@@ -34,14 +34,10 @@ function findFxRateForFrontend(currency, dateStr) {
 
 // --- 主要 UI 函式 ---
 
-/**
- * [核心修改] 渲染持股列表
- * - 在大螢幕 (sm 以上) 顯示傳統表格
- * - 在小螢幕 (sm 以下) 顯示卡片式列表
- */
 export function renderHoldingsTable(currentHoldings) {
+    const { stockNotes } = getState(); // [修改] 獲取筆記資料
     const container = document.getElementById('holdings-content');
-    container.innerHTML = ''; // 清空舊內容
+    container.innerHTML = '';
 
     const holdingsArray = Object.values(currentHoldings);
     if (holdingsArray.length === 0) {
@@ -50,7 +46,6 @@ export function renderHoldingsTable(currentHoldings) {
     }
     holdingsArray.sort((a,b) => b.marketValueTWD - a.marketValueTWD);
 
-    // --- 1. 產生桌面版表格的 HTML ---
     const tableHtml = `
         <div class="overflow-x-auto hidden sm:block">
             <table class="min-w-full divide-y divide-gray-200">
@@ -59,7 +54,6 @@ export function renderHoldingsTable(currentHoldings) {
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本(原幣)</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">總成本(TWD)</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價(原幣)</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">市值(TWD)</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">未實現損益(TWD)</th>
@@ -68,15 +62,29 @@ export function renderHoldingsTable(currentHoldings) {
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     ${holdingsArray.map(h => {
+                        const note = stockNotes[h.symbol] || {};
                         const decimals = isTwStock(h.symbol) ? 0 : 2;
                         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+                        
+                        // [修改] 價格提示邏輯
+                        let priceClass = '';
+                        if (note.target_price && h.currentPriceOriginal >= note.target_price) {
+                            priceClass = 'bg-green-100 text-green-800';
+                        } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
+                            priceClass = 'bg-red-100 text-red-800';
+                        }
+
                         return `
                             <tr class="hover:bg-gray-50">
-                                <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">${h.symbol}</td>
+                                <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
+                                    ${h.symbol}
+                                    <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
+                                        <i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i>
+                                    </button>
+                                </td>
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
-                                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.totalCostTWD, 0)}</td>
-                                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
+                                <td class="px-6 py-4 whitespace-nowrap ${priceClass}">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs">${h.currency}</span></td>
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</td>
@@ -88,16 +96,30 @@ export function renderHoldingsTable(currentHoldings) {
         </div>
     `;
 
-    // --- 2. 產生行動裝置版卡片的 HTML ---
     const cardsHtml = `
         <div class="grid grid-cols-1 gap-4 sm:hidden">
             ${holdingsArray.map(h => {
+                const note = stockNotes[h.symbol] || {};
                 const decimals = isTwStock(h.symbol) ? 0 : 2;
                 const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+
+                // [修改] 價格提示邏輯
+                let priceClass = '';
+                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
+                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
+                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
+                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
+                }
+
                 return `
                     <div class="bg-white rounded-lg shadow p-4 space-y-3">
                         <div class="flex justify-between items-center">
-                            <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
+                            <div class="flex items-center">
+                                <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
+                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
+                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
+                                </button>
+                            </div>
                             <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                         </div>
                         <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
@@ -115,7 +137,7 @@ export function renderHoldingsTable(currentHoldings) {
                             </div>
                             <div>
                                 <p class="text-gray-500">現價 (${h.currency})</p>
-                                <p class="font-medium text-gray-800">${formatNumber(h.currentPriceOriginal, 2)}</p>
+                                <p class="font-medium text-gray-800"><span class="${priceClass}">${formatNumber(h.currentPriceOriginal, 2)}</span></p>
                             </div>
                              <div>
                                 <p class="text-gray-500">平均成本</p>
@@ -132,10 +154,12 @@ export function renderHoldingsTable(currentHoldings) {
         </div>
     `;
 
-    // --- 3. 將兩種版面都加到容器中，由 CSS 決定顯示哪一個 ---
     container.innerHTML = tableHtml + cardsHtml;
+    // [修改] 重新渲染 Lucide 圖示
+    lucide.createIcons();
 }
 
+// ... (renderTransactionsTable, renderSplitsTable, updateDashboard, etc. 保持不變)
 
 export function renderTransactionsTable() {
     const { transactions } = getState();
@@ -219,11 +243,13 @@ export function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
 }
 
 export function openModal(modalId, isEdit = false, data = null) { 
-    const { transactions } = getState();
+    const { stockNotes } = getState();
     const formId = modalId.replace('-modal', '-form');
     const form = document.getElementById(formId);
     if (form) form.reset();
+    
     if (modalId === 'transaction-modal') {
+        // ... (原有的 transaction modal 邏輯不變)
         document.getElementById('transaction-id').value = '';
         if(isEdit && data) {
             document.getElementById('modal-title').textContent = '編輯交易紀錄'; 
@@ -243,7 +269,16 @@ export function openModal(modalId, isEdit = false, data = null) {
         toggleOptionalFields();
     } else if (modalId === 'split-modal') {
          document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+    } else if (modalId === 'notes-modal') { // [新增] 處理筆記視窗
+        const symbol = data.symbol;
+        const note = stockNotes[symbol] || {};
+        document.getElementById('notes-modal-title').textContent = `編輯 ${symbol} 的筆記與目標`;
+        document.getElementById('notes-symbol').value = symbol;
+        document.getElementById('target-price').value = note.target_price || '';
+        document.getElementById('stop-loss-price').value = note.stop_loss_price || '';
+        document.getElementById('notes-content').value = note.notes || '';
     }
+    
     document.getElementById(modalId).classList.remove('hidden');
 }
 
