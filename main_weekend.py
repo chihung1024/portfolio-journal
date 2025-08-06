@@ -149,16 +149,14 @@ def trigger_recalculations(uids):
 
     headers = {
         "Content-Type": "application/json",
-        "X-API-KEY": D1_API_KEY,          # Cloud Function 第一層驗證
-        "x-internal-key": INTERNAL_API_KEY  # 進入「內部通道」
+        "X-API-KEY": D1_API_KEY,          # 第一層 API Key
+        "x-internal-key": INTERNAL_API_KEY  # 內部通道金鑰
     }
 
+    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
     for uid in uids:
+        payload = {"action": "recalculate", "data": {"uid": uid}}
         try:
-            payload = {
-                "action": "recalculate",
-                "data": { "uid": uid }      # <- 必須包在 data 裡
-            }
             resp = requests.post(GCP_API_URL, json=payload, headers=headers, timeout=30)
             if resp.status_code == 200:
                 print(f"成功觸發重算: uid: {uid}")
@@ -166,32 +164,8 @@ def trigger_recalculations(uids):
                 print(f"觸發重算失敗: uid: {uid}. 狀態碼: {resp.status_code}, 回應: {resp.text}")
         except Exception as e:
             print(f"觸發重算時發生錯誤: uid: {uid}. 錯誤: {e}")
-        time.sleep(1)
+        time.sleep(1)  # 留點間隔避免突發流量
 
-
-def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算"""
-    if not uids:
-        print("沒有找到需要觸發重算的使用者。")
-        return
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
-        return
-
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    headers = {'X-API-KEY': GCP_API_KEY, 'Content-Type': 'application/json'}
-    
-    for uid in uids:
-        try:
-            payload = {"action": "recalculate", "uid": uid}
-            response = requests.post(GCP_API_URL, json=payload, headers=headers)
-            if response.status_code == 200:
-                print(f"成功觸發重算: uid: {uid}")
-            else:
-                print(f"觸發重算失敗: uid: {uid}. 狀態碼: {response.status_code}, 回應: {response.text}")
-        except Exception as e:
-            print(f"觸發重算時發生錯誤: uid: {uid}. 錯誤: {e}")
-        time.sleep(1) # 避免請求過於頻繁
 
 
 if __name__ == "__main__":
