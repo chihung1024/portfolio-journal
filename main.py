@@ -1,14 +1,10 @@
 import os
-import yfinance as yf
-import requests
-import json
-from datetime import datetime, timedelta
 import time
-import pandas as pd
+from datetime import datetime
 
-# =========================================================================================
-# == Python 每日增量更新腳本 完整程式碼 (v3.0 - 增量更新版)
-# =========================================================================================
+import pandas as pd
+import requests
+import yfinance as yf
 
 # ──────────────────────────────── 1. 環境變數 ────────────────────────────────
 D1_WORKER_URL    = os.getenv("D1_WORKER_URL")
@@ -66,7 +62,7 @@ def get_full_refresh_targets():
     print(f"  標的數: {len(targets)}，使用者數: {len(uids)} {uids}")
     return targets, uids
 
-    
+
 # ──────────────────────────────── 4. 抓取並覆蓋市場數據 ────────────────────────────────
 def fetch_and_overwrite_market_data(targets):
     if not targets:
