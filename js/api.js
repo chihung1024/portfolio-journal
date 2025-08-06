@@ -58,15 +58,22 @@ export async function loadPortfolioData() {
     }
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
-        const result = await apiRequest('get_data', {}); // data 為空物件，因為 uid 已在 apiRequest 中處理
+        const result = await apiRequest('get_data', {});
         
         const portfolioData = result.data;
         
+        // [修改] 將 stockNotes 轉換為以 symbol 為 key 的物件，方便查找
+        const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
+            map[note.symbol] = note;
+            return map;
+        }, {});
+
         // 更新全域狀態
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
-            marketDataForFrontend: portfolioData.marketData || {}
+            marketDataForFrontend: portfolioData.marketData || {},
+            stockNotes: stockNotesMap
         });
         
         const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
