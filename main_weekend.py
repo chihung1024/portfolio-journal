@@ -159,8 +159,8 @@ def trigger_recalculations(uids):
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
+    if not GCP_API_URL or not GCP_API_KEY or not GCP_SA_JSON:
+        print("警告: 缺少 GCP_API_URL / GCP_API_KEY / GCP_SA_JSON，跳過觸發重算。")
         return
 
     print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
