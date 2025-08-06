@@ -1,12 +1,21 @@
-/* eslint-disable */
 // =========================================================================================
-// == GCP Cloud Function 完整程式碼 (v2.6.1 - 完整展開版)
+// == GCP Cloud Function 安全性強化版 (v2.7.0 - Token 認證)
 // =========================================================================================
 
 const functions = require("firebase-functions");
+const admin = require('firebase-admin'); // [新增] 引入 firebase-admin 套件
 const yahooFinance = require("yahoo-finance2").default;
 const axios = require("axios");
 const { v4: uuidv4 } = require('uuid');
+
+// [新增] 初始化 Firebase Admin SDK
+// 在 Google Cloud 環境中，它會自動找到認證資訊，無需提供金鑰檔案
+try {
+  admin.initializeApp();
+  console.log('Firebase Admin SDK 初始化成功。');
+} catch (e) {
+  console.error('Firebase Admin SDK 初始化失敗，請檢查環境設定。', e);
+}
 
 // --- 平台設定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
@@ -35,6 +44,31 @@ const d1Client = {
             console.error("d1Client.batch Error:", error.response ? error.response.data : error.message);
             throw new Error(`Failed to execute D1 batch: ${error.message}`);
         }
+    }
+};
+
+// --- [新增] 安全性中介軟體 (Middleware)，用於驗證 Firebase ID Token ---
+// 這是我們新增加的「驗票員」函式
+const verifyFirebaseToken = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        console.warn('請求被拒絕：缺少 Authorization Bearer Token。');
+        res.status(403).send({ success: false, message: 'Unauthorized: Missing or invalid authorization token.'});
+        return;
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+
+    try {
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        // 驗證成功後，將解碼出的使用者資訊（包含uid）附加到 req 物件上
+        req.user = decodedToken;
+        // 呼叫 next() 才會繼續執行後面的主要邏輯
+        next();
+    } catch (error) {
+        console.error('Token 驗證失敗:', error.message);
+        res.status(403).send({ success: false, message: 'Unauthorized: Token verification failed. 請嘗試重新登入。'});
     }
 };
 
@@ -698,20 +732,43 @@ async function performRecalculation(uid) {
     }
 }
 
-// --- API 端點處理 ---
+// --- [修改] API 端點處理，整合「驗票員」中介軟體 ---
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
+    // 處理 CORS 跨域請求 (請務必將 'Authorization' 加入 Allow-Headers)
     res.set('Access-Control-Allow-Origin', '*');
-    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
-    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+    if (req.method === 'OPTIONS') {
+        res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY, Authorization');
+        res.set('Access-Control-Max-Age', '3600');
+        res.status(204).send('');
+        return;
+    }
     
-    const apiKey = req.headers['x-api-key'];
-    if (apiKey !== D1_API_KEY) return res.status(401).send('Unauthorized');
+    // [新增這段檢查]
+    if (req.method !== 'POST') {
+        return res.status(405).send('Method Not Allowed');
+    }
 
-    const { action, uid, data } = req.body;
-    if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+    // API Key 檢查仍然可以作為第一層基礎防護
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey !== D1_API_KEY) {
+        return res.status(401).send({ success: false, message: 'Unauthorized: Invalid API Key' });
+    }
+    
+    // [關鍵整合] 在執行主要邏輯前，先呼叫 Token 驗證中介軟體
+    await verifyFirebaseToken(req, res, async () => {
+        // --- 如果 Token 驗證成功，以下的主要邏輯才會被執行 ---
+        try {
+            // [關鍵修改] UID 現在從 req.user 中獲取，這是由中介軟體驗證後設定的，絕對安全。
+            const uid = req.user.uid; 
+            const { action, data } = req.body;
 
-    try {
-        switch (action) {
+            if (!action) {
+                return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+            }
+
+            // 您的 switch 邏輯完全不需要修改，因為它們使用的 uid 變數已經是安全的了
+            switch (action) {
             case 'get_data': {
                 if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const [txs, splits, holdingsResult, summaryResult, stockNotes] = await Promise.all([
@@ -912,9 +969,10 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             default:
                 return res.status(400).send({ success: false, message: '未知的操作' });
         }
-    } catch (error) {
-        const errorMessage = error.message || 'An unknown error occurred.';
-        console.error(`[${uid || 'N/A'}] '${action}' 操作的處理程序失敗：`, errorMessage);
-        return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
-    }
+        } catch (error) {
+            const errorMessage = error.message || 'An unknown error occurred.';
+            console.error(`[${req.user?.uid || 'N/A'}] 在執行 action: '${req.body?.action}' 時發生錯誤:`, error);
+            res.status(500).send({ success: false, message: `伺服器內部錯誤：${errorMessage}` });
+        }
+    });
 });
