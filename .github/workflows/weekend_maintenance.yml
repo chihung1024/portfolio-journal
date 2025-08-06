@@ -1,32 +1,44 @@
 name: Weekend Full Data Refresh
 
 on:
-  workflow_dispatch: # 允許手動從 GitHub Actions 頁面執行
+  workflow_dispatch:                 # 手動觸發
   schedule:
-    # UTC 時間每週日的 01:00 執行 (相當於台灣/香港時間的週日早上 9:00)
+    # 每週日 01:00 UTC  ≈ 台灣/香港 09:00
     - cron: '0 1 * * 0'
 
 jobs:
   full-refresh:
     runs-on: ubuntu-latest
     steps:
+      # -------------------------------------------------
+      # 1️⃣ Checkout
+      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # -------------------------------------------------
+      # 2️⃣ Set up Python
+      # -------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
+      # -------------------------------------------------
+      # 3️⃣ Install dependencies
+      # -------------------------------------------------
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install yfinance requests pandas
 
+      # -------------------------------------------------
+      # 4️⃣ Run weekend full‑refresh script
+      # -------------------------------------------------
       - name: Run weekend full-refresh script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
           GCP_API_URL: ${{ secrets.GCP_API_URL }}
-        # [核心修改] 執行新的週末專用腳本
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}   # <── 這一行一定要加
         run: python main_weekend.py
