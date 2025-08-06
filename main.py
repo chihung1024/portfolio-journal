@@ -174,39 +174,35 @@ def fetch_and_append_market_data(symbols):
 
 
 def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算（強化錯誤處理）"""
     if not uids:
-        print("沒有找到需要觸發重算的使用者。")
+        print("→ 沒有使用者需要重算")
+        return
+    if not (GCP_API_URL and D1_API_KEY and INTERNAL_API_KEY):
+        print("→ 缺少 GCP_API_URL / D1_API_KEY / INTERNAL_API_KEY，跳過重算")
         return
 
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
-        return
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": D1_API_KEY,
+        "x-internal-key": INTERNAL_API_KEY,
+    }
 
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    headers = {"X-API-KEY": GCP_API_KEY, "Content-Type": "application/json"}
-
+    print(f"\n→ 觸發 {len(uids)} 位使用者重算")
     for uid in uids:
         try:
-            payload = {"action": "recalculate", "uid": uid}
-            resp = requests.post(GCP_API_URL, json=payload, headers=headers, timeout=30)
-
-            if resp.status_code == 200:
-                print(f"成功觸發重算: uid: {uid}")
-            elif resp.status_code == 403:
-                print(
-                    f"❌ UID {uid} 403 Unauthorized：請檢查 GCP_API_KEY 是否正確/是否有權限。"
-                    f" 回應: {resp.text}"
-                )
+            r = requests.post(
+                GCP_API_URL,
+                json={"action": "recalculate", "data": {"uid": uid}},
+                headers=headers,
+                timeout=30,
+            )
+            if r.status_code == 200:
+                print(f"  ✅ {uid}")
             else:
-                print(f"❌ UID {uid} 觸發重算失敗。HTTP {resp.status_code}: {resp.text}")
-
-        except requests.exceptions.Timeout:
-            print(f"❌ UID {uid} 觸發重算逾時（30s）")
-        except requests.exceptions.RequestException as e:
-            print(f"❌ UID {uid} 觸發重算連線失敗: {e}")
-
-        time.sleep(1)  # 限流
+                print(f"  ❌ {uid} → {r.status_code}: {r.text}")
+        except Exception as e:
+            print(f"  ERROR {uid}: {e}")
+        time.sleep(1)               # 限流
 
 
 
