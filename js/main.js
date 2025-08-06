@@ -2,7 +2,7 @@
 // == 主程式進入點 (main.js)
 // =========================================================================================
 
-import { getState } from './state.js';
+import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { 
@@ -14,7 +14,8 @@ import {
     hideConfirm, 
     toggleOptionalFields, 
     showNotification,
-    switchTab
+    switchTab,
+    renderHoldingsTable // [修改] 引入 renderHoldingsTable
 } from './ui.js';
 
 // --- 事件處理函式 ---
@@ -132,6 +133,47 @@ async function handleUpdateBenchmark() {
     }
 }
 
+// [新增] 處理筆記儲存
+async function handleNotesFormSubmit(e) {
+    e.preventDefault();
+    const saveBtn = document.getElementById('save-notes-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '儲存中...';
+
+    const noteData = {
+        symbol: document.getElementById('notes-symbol').value,
+        target_price: parseFloat(document.getElementById('target-price').value) || null,
+        stop_loss_price: parseFloat(document.getElementById('stop-loss-price').value) || null,
+        notes: document.getElementById('notes-content').value.trim()
+    };
+
+    try {
+        await apiRequest('save_stock_note', noteData);
+        closeModal('notes-modal');
+        
+        // 更新本地 state 並重新渲染持股列表以顯示提示
+        const { stockNotes } = getState();
+        stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
+        setState({ stockNotes });
+        
+        // 重新渲染持股列表以更新價格提示顏色
+        const holdingsResponse = await apiRequest('get_data', {});
+        const holdingsObject = (holdingsResponse.data.holdings || []).reduce((obj, item) => {
+            obj[item.symbol] = item; return obj;
+        }, {});
+        renderHoldingsTable(holdingsObject);
+
+        showNotification('success', `${noteData.symbol} 的筆記已儲存！`);
+    } catch (error) {
+        console.error('Failed to save note:', error);
+        showNotification('error', `儲存筆記失敗: ${error.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存筆記';
+    }
+}
+
+
 /**
  * 集中設定所有 DOM 元素的事件監聽器
  */
@@ -146,18 +188,30 @@ function setupEventListeners() {
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
     document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
-        if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
-        if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
+        if (e.target.closest('.edit-btn')) { handleEdit(e.target.closest('.edit-btn')); } 
+        if (e.target.closest('.delete-btn')) { handleDelete(e.target.closest('.delete-btn')); } 
     });
 
     // 拆股相關
     document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.classList.contains('delete-split-btn')) { handleDeleteSplit(e); } });
+    document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.closest('.delete-split-btn')) { handleDeleteSplit(e.target.closest('.delete-split-btn')); } });
     
     // Benchmark
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
+
+    // [新增] 筆記相關
+    document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
+    document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
+    // 使用事件委派來處理動態產生的筆記按鈕
+    document.getElementById('holdings-content').addEventListener('click', (e) => {
+        const btn = e.target.closest('.open-notes-btn');
+        if (btn) {
+            const symbol = btn.dataset.symbol;
+            openModal('notes-modal', false, { symbol });
+        }
+    });
 
     // 通用 UI
     document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
@@ -177,7 +231,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeChart();
     initializeTwrChart();
     setupEventListeners();
-    initializeAuth(); // 初始化 Firebase 監聽器，它將決定顯示登入頁或主畫面
+    initializeAuth(); 
     
     lucide.createIcons();
 });
