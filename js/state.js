@@ -2,22 +2,24 @@
 // == 狀態管理模組 (state.js)
 // =========================================================================================
 
+// 應用程式的核心狀態
 let state = {
-  currentUserId: null,
-  transactions: [],
-  userSplits: [],
-  manualDividends: [],    // ← 股息專用
-  stockNotes: {},
-  marketDataForFrontend: {},
-  chart: null,
-  twrChart: null,
-  confirmCallback: null
+    currentUserId: null,
+    transactions: [],
+    userSplits: [],
+    stockNotes: {}, // [新增] 用於儲存股票筆記，以 symbol 為 key
+    marketDataForFrontend: {},
+    chart: null,
+    twrChart: null,
+    confirmCallback: null
 };
 
+// 提供外部讀取狀態的方法
 export function getState() {
-  return state;
+    return state;
 }
 
+// 提供外部更新狀態的方法
 export function setState(newState) {
-  state = { ...state, ...newState };
+    state = { ...state, ...newState };
 }
