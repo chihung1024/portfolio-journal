@@ -7,6 +7,7 @@ let state = {
     currentUserId: null,
     transactions: [],
     userSplits: [],
+    stockNotes: {}, // [新增] 用於儲存股票筆記，以 symbol 為 key
     marketDataForFrontend: {},
     chart: null,
     twrChart: null,
