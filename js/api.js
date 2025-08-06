@@ -10,6 +10,7 @@ import {
     renderHoldingsTable, 
     renderTransactionsTable, 
     renderSplitsTable, 
+    renderDividendsTable,
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
@@ -103,9 +104,9 @@ export async function loadPortfolioData() {
         // [修改] 呼叫新的 render 函式
         renderHoldingsTable(holdingsObject);
         renderTransactionsTable();
-        renderDividendsTable(); // <--- 新增呼叫
+        renderDividendsTable();
         renderSplitsTable();
-
+        
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         updateAssetChart(portfolioData.history || {});
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
