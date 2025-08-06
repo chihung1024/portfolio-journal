@@ -73,20 +73,25 @@ export async function loadPortfolioData() {
     }
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
-        const result = await apiRequest('get_data', {});
+        // [修改] 同時獲取主要數據和手動股息數據
+        const [mainDataResult, dividendDataResult] = await Promise.all([
+            apiRequest('get_data', {}),
+            apiRequest('get_dividend_events', {}) 
+        ]);
         
-        const portfolioData = result.data;
+        const portfolioData = mainDataResult.data;
+        const manualDividends = dividendDataResult.data || [];
         
-        // [修改] 將 stockNotes 轉換為以 symbol 為 key 的物件，方便查找
         const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
             map[note.symbol] = note;
             return map;
         }, {});
 
-        // 更新全域狀態
+        // [修改] 更新全域狀態
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
+            manualDividends: manualDividends, // <--- 儲存手動股息
             marketDataForFrontend: portfolioData.marketData || {},
             stockNotes: stockNotesMap
         });
@@ -95,9 +100,12 @@ export async function loadPortfolioData() {
             obj[item.symbol] = item; return obj;
         }, {});
         
+        // [修改] 呼叫新的 render 函式
         renderHoldingsTable(holdingsObject);
-        renderTransactionsTable(); 
+        renderTransactionsTable();
+        renderDividendsTable(); // <--- 新增呼叫
         renderSplitsTable();
+
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         updateAssetChart(portfolioData.history || {});
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
