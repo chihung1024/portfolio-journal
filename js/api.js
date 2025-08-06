@@ -2,7 +2,10 @@
 // == API 通訊模組 (api.js)
 // =========================================================================================
 
+// [新增] 從 Firebase SDK 引入 getAuth，用來獲取當前使用者
+import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
+import { showNotification } from './ui.js';
 import { getState, setState } from './state.js';
 import { 
     renderHoldingsTable, 
@@ -15,36 +18,49 @@ import {
 } from './ui.js';
 
 /**
- * 統一的後端 API 請求函式
- * @param {string} action - 要執行的操作名稱
- * @param {object} data - 要傳送的資料
- * @returns {Promise<object>} - 後端返回的結果
+ * [安全性強化版] 統一的後端 API 請求函式
  */
 export async function apiRequest(action, data) {
-    const { currentUserId } = getState();
-    if (!currentUserId) {
+    const auth = getAuth();
+    const user = auth.currentUser;
+
+    if (!user) {
         showNotification('error', '請先登入再執行操作。');
         throw new Error('User not logged in');
     }
 
-    const payload = { action, uid: currentUserId, data };
-    console.log("即將發送到後端的完整 Payload:", JSON.stringify(payload, null, 2));
-    
-    const response = await fetch(API.URL, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-API-KEY': API.KEY
-        },
-        body: JSON.stringify(payload)
-    });
-    
-    const result = await response.json();
-    if (!response.ok) {
-        console.error("後端返回的錯誤詳情:", result); 
-        throw new Error(result.message || '伺服器發生錯誤');
-    }
-    return result;
+    try {
+        // [關鍵修改] 非同步獲取當前使用者的 Firebase ID Token
+        const token = await user.getIdToken();
+
+        // [關鍵修改] payload 中不再需要手動放入 uid
+        const payload = { action, data };
+
+        const response = await fetch(API.URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`, // [新增] 將 Token 作為 Bearer Token 加入到標頭中
+                'X-API-KEY': API.KEY
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        if (!response.ok) {
+            // 如果認證失敗，後端會回傳 401 或 403
+            if (response.status === 401 || response.status === 403) {
+                 throw new Error(result.message || '認證失敗，您的登入可能已過期，請嘗試重新整理頁面。');
+            }
+            throw new Error(result.message || '伺服器發生錯誤');
+        }
+        return result;
+
+    } catch (error) {
+        console.error('API 請求失敗:', error);
+        // 將錯誤直接拋出，讓呼叫它的地方 (例如 handleFormSubmit) 可以捕獲並顯示通知
+        throw error;
+    }
 }
 
 /**
