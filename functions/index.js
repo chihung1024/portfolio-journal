@@ -72,6 +72,29 @@ const verifyFirebaseToken = async (req, res, next) => {
     }
 };
 
+// --- [新增] Zod Schema 定義，用於驗證輸入資料 ---
+const { z } = require("zod");
+
+// 交易資料的規格
+const transactionSchema = z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必須為 YYYY-MM-DD"),
+    symbol: z.string().min(1, "股票代碼為必填").transform(val => val.toUpperCase().trim()),
+    type: z.enum(['buy', 'sell'], { errorMap: () => ({ message: "交易類型必須為 'buy' 或 'sell'" }) }),
+    quantity: z.number().positive("股數必須為正數"),
+    price: z.number().positive("價格必須為正數"),
+    currency: z.enum(['USD', 'TWD', 'HKD', 'JPY'], { errorMap: () => ({ message: "不支援的幣別" }) }),
+    totalCost: z.number().positive("總成本必須為正數").optional().nullable(),
+    exchangeRate: z.number().positive("匯率必須為正數").optional().nullable(),
+});
+
+// 拆股事件的規格
+const splitSchema = z.object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必須為 YYYY-MM-DD"),
+    symbol: z.string().min(1, "股票代碼為必填").transform(val => val.toUpperCase().trim()),
+    ratio: z.number().positive("比例必須為正數"),
+});
+
+
 // --- 資料抓取與覆蓋範圍管理 ---
 
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
@@ -840,25 +863,41 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
 
             case 'add_transaction':
             case 'edit_transaction': {
-                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
-                const isEditing = action === 'edit_transaction';
-                const txData = isEditing ? data.txData : data;
-                const txId = isEditing ? data.txId : uuidv4();
+                try {
+                    const isEditing = action === 'edit_transaction';
+                    // 步驟一：使用 Zod schema 來解析和驗證輸入資料
+                    // 注意：這裡的 data 依然是 req.body.data
+                    const txData = transactionSchema.parse(isEditing ? data.txData : data);
+                    
+                    // --- 驗證通過後，才執行完整的資料庫邏輯 ---
+                    const txId = isEditing ? data.txId : uuidv4();
 
-                if(isEditing) {
-                    await d1Client.query(
-                        `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
-                        [txData.date, txData.symbol.toUpperCase(), txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
-                    );
-                } else {
-                    await d1Client.query(
-                        `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                        [txId, uid, txData.date, txData.symbol.toUpperCase(), txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
-                    );
+                    if (isEditing) {
+                        // 使用驗證後乾淨的 txData 物件來更新資料庫
+                        await d1Client.query(
+                            `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
+                            [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
+                        );
+                    } else {
+                        // 使用驗證後乾淨的 txData 物件來新增資料庫
+                        await d1Client.query(
+                            `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                        );
+                    }
+                    
+                    await performRecalculation(uid);
+                    return res.status(200).send({ success: true, message: '操作成功並觸發重新計算。', id: txId });
+
+                } catch (error) {
+                    // 如果 Zod 驗證失敗，會在此被捕獲
+                    if (error instanceof z.ZodError) {
+                        console.warn(`[Validation Error] for ${action}:`, error.errors);
+                        return res.status(400).send({ success: false, message: "輸入資料格式錯誤", errors: error.errors });
+                    }
+                    // 其他非預期的錯誤則拋給外層的 try-catch 處理
+                    throw error;
                 }
-                
-                await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: '操作成功並觸發重新計算。', id: txId });
             }
 
             case 'delete_transaction': {
@@ -884,14 +923,25 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             }
 
             case 'add_split': {
-                if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
-                const { date, symbol, ratio } = data;
-                if (!date || !symbol || !ratio) return res.status(400).send({ success: false, message: '請求錯誤：缺少拆股事件必要欄位。' });
-                const newSplitId = uuidv4();
-                await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, date, symbol.toUpperCase(), ratio]);
-                await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
+                try {
+                    // [關鍵修改] 使用 Zod schema 來解析和驗證輸入資料
+                    const splitData = splitSchema.parse(data);
+            
+                    // --- 驗證通過後，才執行原有邏輯 ---
+                    const newSplitId = uuidv4();
+                    await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
+                    await performRecalculation(uid);
+                    return res.status(200).send({ success: true, message: '分割事件已新增並觸發重新計算。', splitId: newSplitId });
+            
+                } catch (error) {
+                    if (error instanceof z.ZodError) {
+                        console.warn('[Validation Error] for add_split:', error.errors);
+                        return res.status(400).send({ success: false, message: "輸入資料格式錯誤", errors: error.errors });
+                    }
+                    throw error;
+                }
             }
+                
             case 'delete_split': {
                 if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const { splitId } = data;
