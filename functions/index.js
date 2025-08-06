@@ -793,28 +793,58 @@ async function performRecalculation(uid) {
 
 // --- [修改] API 端點處理，整合「驗票員」中介軟體 ---
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
-    // 處理 CORS 跨域請求 (請務必將 'Authorization' 加入 Allow-Headers)
+    // 處理 CORS 跨域請求 (請務必將 'Authorization' 和 'X-Service-Account-Key' 加入 Allow-Headers)
     res.set('Access-Control-Allow-Origin', '*');
-    if (req.method === 'OPTIONS') {
-        res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY, Authorization');
-        res.set('Access-Control-Max-Age', '3600');
-        res.status(204).send('');
-        return;
-    }
-    
-    // [新增這段檢查]
+    if (req.method === 'OPTIONS') {
+        res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-KEY, Authorization, X-Service-Account-Key');
+        res.set('Access-Control-Max-Age', '3600');
+        res.status(204).send('');
+        return;
+    }
+
     if (req.method !== 'POST') {
         return res.status(405).send('Method Not Allowed');
     }
 
-    // API Key 檢查仍然可以作為第一層基礎防護
-    const apiKey = req.headers['x-api-key'];
+    // API Key 檢查仍然可以作為第一層基礎防護
+    const apiKey = req.headers['x-api-key'];
     if (apiKey !== D1_API_KEY) {
         return res.status(401).send({ success: false, message: 'Unauthorized: Invalid API Key' });
     }
-    
-    // [關鍵整合] 在執行主要邏輯前，先呼叫 Token 驗證中介軟體
+
+    // --- [新增] 服務帳號金鑰檢查 ---
+    const serviceAccountKey = req.headers['x-service-account-key'];
+    const SERVICE_ACCOUNT_KEY_FROM_ENV = process.env.SERVICE_ACCOUNT_KEY;
+
+    // 如果是來自後端服務的請求
+    if (serviceAccountKey && serviceAccountKey === SERVICE_ACCOUNT_KEY_FROM_ENV) {
+        const { action } = req.body;
+        if (action === 'recalculate_all_users') {
+            try {
+                console.log('[Service Account] 收到全體使用者重算請求...');
+                const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
+                const allUids = allUidsResult.map(row => row.uid);
+                
+                console.log(`[Service Account] 將為 ${allUids.length} 位使用者進行重算。`);
+                for (const uid of allUids) {
+                    console.log(`[Service Account] 正在重算 UID: ${uid}`);
+                    await performRecalculation(uid);
+                }
+                
+                console.log('[Service Account] 全體使用者重算成功。');
+                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
+            } catch (error) {
+                console.error('[Service Account] 重算過程中發生錯誤:', error);
+                return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` });
+            }
+        }
+        return res.status(400).send({ success: false, message: '無效的服務操作。' });
+    }
+    // --- 服務帳號邏輯結束 ---
+
+
+    // [關鍵整合] 如果不是服務帳號請求，則執行正常的使用者 Token 驗證流程
     await verifyFirebaseToken(req, res, async () => {
         // --- 如果 Token 驗證成功，以下的主要邏輯才會被執行 ---
         try {

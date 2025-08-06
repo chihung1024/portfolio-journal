@@ -161,19 +161,29 @@ def trigger_recalculations(uids):
         return
 
     print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    headers = {'X-API-KEY': GCP_API_KEY, 'Content-Type': 'application/json'}
     
-    for uid in uids:
-        try:
-            payload = {"action": "recalculate", "uid": uid}
-            response = requests.post(GCP_API_URL, json=payload, headers=headers)
-            if response.status_code == 200:
-                print(f"成功觸發重算: uid: {uid}")
-            else:
-                print(f"觸發重算失敗: uid: {uid}. 狀態碼: {response.status_code}, 回應: {response.text}")
-        except Exception as e:
-            print(f"觸發重算時發生錯誤: uid: {uid}. 錯誤: {e}")
-        time.sleep(1) # 避免請求過於頻繁
+    # 從環境變數讀取服務帳號金鑰
+    SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
+    if not SERVICE_ACCOUNT_KEY:
+        print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
+        return
+
+    headers = {
+        'X-API-KEY': GCP_API_KEY, 
+        'Content-Type': 'application/json',
+        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
+    }
+    
+    try:
+        # 一次性觸發所有使用者的重算
+        payload = {"action": "recalculate_all_users"}
+        response = requests.post(GCP_API_URL, json=payload, headers=headers)
+        if response.status_code == 200:
+            print(f"成功觸發所有使用者的重算。")
+        else:
+            print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
+    except Exception as e:
+        print(f"觸發全部重算時發生錯誤: {e}")
 
 
 if __name__ == "__main__":
