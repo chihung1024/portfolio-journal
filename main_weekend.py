@@ -1,3 +1,6 @@
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+
 import os
 import yfinance as yf
 import requests
@@ -15,6 +18,8 @@ D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
+GCP_SA_JSON = os.environ.get("GCP_SA_JSON")  # 服務帳戶 JSON 字串
+
 
 def d1_query(sql, params=None):
     """通用 D1 查詢函式"""
@@ -31,6 +36,17 @@ def d1_query(sql, params=None):
     except requests.exceptions.RequestException as e:
         print(f"FATAL: D1 查詢失敗: {e}")
         return None
+
+def get_id_token(sa_json_str, target_audience):
+    """使用服務帳戶 JSON 換取 Cloud Function 專屬 ID Token"""
+    credentials = service_account.IDTokenCredentials.from_service_account_info(
+        json.loads(sa_json_str),
+        target_audience=target_audience
+    )
+    request = Request()
+    credentials.refresh(request)
+    return credentials.token
+
 
 def d1_batch(statements):
     """通用 D1 批次操作函式"""
@@ -149,7 +165,12 @@ def trigger_recalculations(uids):
         return
 
     print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    headers = {'X-API-KEY': GCP_API_KEY, 'Content-Type': 'application/json'}
+    id_token = get_id_token(GCP_SA_JSON, GCP_API_URL)
+    headers = {
+        'X-API-KEY': GCP_API_KEY,
+        'Authorization': f'Bearer {id_token}',
+        'Content-Type': 'application/json'
+    }
     
     for uid in uids:
         try:
