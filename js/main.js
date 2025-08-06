@@ -20,23 +20,30 @@ import {
 
 // --- 事件處理函式 ---
 
-function handleEdit(e) {
+// 修改前: function handleEdit(e) { const txId = e.target.dataset.id; ... }
+// 修改後:
+function handleEdit(button) {
     const { transactions } = getState();
-    const txId = e.target.dataset.id;
+    const txId = button.dataset.id; // 從傳入的按鈕元素獲取 data-id
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
     openModal('transaction-modal', true, transaction);
 }
 
-async function handleDelete(e) {
-    const txId = e.target.dataset.id;
+// 修改前: async function handleDelete(e) { const txId = e.target.dataset.id; ... }
+// 修改後:
+async function handleDelete(button) {
+    const txId = button.dataset.id; // 從傳入的按鈕元素獲取 data-id
     showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
         try {
+            document.getElementById('loading-overlay').style.display = 'flex';
             await apiRequest('delete_transaction', { txId });
             showNotification('success', '交易紀錄已刪除！');
             await loadPortfolioData();
         } catch (error) {
             showNotification('error', `刪除失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
         }
     });
 }
@@ -187,9 +194,31 @@ function setupEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+
+    // --- 修改前 ---
+    /*
     document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
-        if (e.target.closest('.edit-btn')) { handleEdit(e.target.closest('.edit-btn')); } 
-        if (e.target.closest('.delete-btn')) { handleDelete(e.target.closest('.delete-btn')); } 
+        if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
+        if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
+    });
+    */
+    
+    // --- 修改後 (更穩健的作法) ---
+    document.getElementById('transactions-table-body').addEventListener('click', (e) => {
+        // 從點擊的元素開始，向上尋找 class 為 .edit-btn 的最近祖先
+        const editButton = e.target.closest('.edit-btn');
+        if (editButton) {
+            e.preventDefault(); // 防止預設行為
+            handleEdit(editButton); // 將找到的按鈕元素傳給處理函式
+            return; // 找到就不用再往下找了
+        }
+    
+        // 從點擊的元素開始，向上尋找 class 為 .delete-btn 的最近祖先
+        const deleteButton = e.target.closest('.delete-btn');
+        if (deleteButton) {
+            e.preventDefault(); // 防止預設行為
+            handleDelete(deleteButton); // 將找到的按鈕元素傳給處理函式
+        }
     });
 
     // 拆股相關
