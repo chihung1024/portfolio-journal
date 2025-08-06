@@ -437,12 +437,17 @@ function prepareEvents(txs, splits, userDividends) {
 
 // [新增] 產生待確認配息紀錄的函式
 async function generatePendingDividends(uid, txs, market) {
-    console.log(`[${uid}] 開始掃描並產生待確認的配息紀錄...`);
+    console.log(`[${uid}] [DEBUG] 開始掃描配息...`);
     const allSymbols = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+    console.log(`[${uid}] [DEBUG] 使用者持有標的: ${allSymbols.join(', ')}`);
+
     const allGlobalDividends = await d1Client.query('SELECT * FROM dividend_history');
+    console.log(`[${uid}] [DEBUG] 從 dividend_history 讀取到 ${allGlobalDividends.length} 筆全域配息紀錄。`);
+
     const existingUserDividends = await d1Client.query('SELECT symbol, date FROM user_dividends WHERE uid = ?', [uid]);
-    
     const existingSet = new Set(existingUserDividends.map(d => `${d.symbol}|${d.date.split('T')[0]}`));
+    console.log(`[${uid}] [DEBUG] 使用者已存在 ${existingSet.size} 筆個人配息紀錄。`);
+
     const newDividendsToInsert = [];
 
     for (const globalDiv of allGlobalDividends) {
@@ -450,21 +455,25 @@ async function generatePendingDividends(uid, txs, market) {
         const divDate = toDate(divDateStr);
         const sym = globalDiv.symbol.toUpperCase();
 
-        // 檢查此配息是否已存在於使用者的紀錄中
-        if (!allSymbols.includes(sym) || existingSet.has(`${sym}|${divDateStr}`)) {
-            continue;
+        if (!allSymbols.includes(sym)) {
+            continue; // 使用者未持有此股票，跳過
+        }
+        if (existingSet.has(`${sym}|${divDateStr}`)) {
+            // console.log(`[${uid}] [DEBUG] 已存在配息紀錄，跳過: ${sym} on ${divDateStr}`);
+            continue; // 已存在，跳過
         }
 
-        // 計算除息日的持股狀態
         const stateOnDate = getPortfolioStateOnDate(txs, divDate, market);
         const holding = stateOnDate[sym];
         const sharesOnDate = holding ? holding.lots.reduce((sum, lot) => sum + lot.quantity, 0) : 0;
+        console.log(`[${uid}] [DEBUG] 檢查 ${sym} 在 ${divDateStr} 的持股: ${sharesOnDate} 股`);
 
         if (sharesOnDate > 0) {
+            console.log(`[${uid}] [DEBUG] 發現新的應收配息: ${sharesOnDate} 股的 ${sym} 在 ${divDateStr}`);
             const currency = holding.currency || 'USD';
             const fx = findFxRate(market, currency, divDate);
             const grossAmount = sharesOnDate * globalDiv.dividend;
-            const taxRate = isTwStock(sym) ? 0.0 : 0.3; // 預設稅率
+            const taxRate = isTwStock(sym) ? 0.0 : 0.3; 
             const estimatedTax = grossAmount * taxRate;
             const netAmount = grossAmount - estimatedTax;
 
@@ -475,16 +484,15 @@ async function generatePendingDividends(uid, txs, market) {
                     grossAmount, netAmount, estimatedTax, currency, 'pending'
                 ]
             });
-            // 將新產生的配息加入 set，避免重複插入
             existingSet.add(`${sym}|${divDateStr}`);
         }
     }
 
     if (newDividendsToInsert.length > 0) {
         await d1Client.batch(newDividendsToInsert);
-        console.log(`[${uid}] 成功產生了 ${newDividendsToInsert.length} 筆新的待確認配息紀錄。`);
+        console.log(`[${uid}] [SUCCESS] 成功產生了 ${newDividendsToInsert.length} 筆新的待確認配息紀錄。`);
     } else {
-        console.log(`[${uid}] 沒有新的待確認配息紀錄需要產生。`);
+        console.log(`[${uid}] [INFO] 沒有新的待確認配息紀錄需要產生。`);
     }
 }
 
