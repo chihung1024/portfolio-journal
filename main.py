@@ -18,28 +18,49 @@ GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
-    """通用 D1 查詢函式"""
-    if params is None:
-        params = []
-    headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
+    """通用 D1 查詢函式（強化錯誤處理）"""
+    params = params or []
+    headers = {"X-API-KEY": D1_API_KEY, "Content-Type": "application/json"}
+
     try:
-        response = requests.post(f"{D1_WORKER_URL}/query", json={"sql": sql, "params": params}, headers=headers)
-        response.raise_for_status()
-        return response.json().get('results', [])
+        resp = requests.post(
+            f"{D1_WORKER_URL}/query",
+            json={"sql": sql, "params": params},
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+    except requests.exceptions.Timeout:
+        print("FATAL: D1 查詢逾時（30s）")
+    except requests.exceptions.HTTPError:
+        print(f"FATAL: D1 查詢 HTTP 錯誤 {resp.status_code}: {resp.text}")
     except requests.exceptions.RequestException as e:
-        print(f"FATAL: D1 查詢失敗: {e}")
-        return None
+        print(f"FATAL: D1 查詢連線失敗: {e}")
+    return None
+
 
 def d1_batch(statements):
-    """通用 D1 批次操作函式"""
-    headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
+    """通用 D1 批次操作函式（強化錯誤處理）"""
+    headers = {"X-API-KEY": D1_API_KEY, "Content-Type": "application/json"}
+
     try:
-        response = requests.post(f"{D1_WORKER_URL}/batch", json={"statements": statements}, headers=headers)
-        response.raise_for_status()
+        resp = requests.post(
+            f"{D1_WORKER_URL}/batch",
+            json={"statements": statements},
+            headers=headers,
+            timeout=60,
+        )
+        resp.raise_for_status()
         return True
+    except requests.exceptions.Timeout:
+        print("FATAL: D1 批次操作逾時（60s）")
+    except requests.exceptions.HTTPError:
+        print(f"FATAL: D1 批次操作 HTTP 錯誤 {resp.status_code}: {resp.text}")
     except requests.exceptions.RequestException as e:
-        print(f"FATAL: D1 批次操作失敗: {e}")
-        return False
+        print(f"FATAL: D1 批次操作連線失敗: {e}")
+    return False
+
 
 def get_update_targets():
     """從 market_data_coverage 表獲取所有需要更新的標的"""
@@ -152,28 +173,40 @@ def fetch_and_append_market_data(symbols):
 
 
 def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算"""
+    """主動觸發所有使用者的投資組合重新計算（強化錯誤處理）"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
+
     if not GCP_API_URL or not GCP_API_KEY:
         print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
         return
 
     print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    headers = {'X-API-KEY': GCP_API_KEY, 'Content-Type': 'application/json'}
-    
+    headers = {"X-API-KEY": GCP_API_KEY, "Content-Type": "application/json"}
+
     for uid in uids:
         try:
             payload = {"action": "recalculate", "uid": uid}
-            response = requests.post(GCP_API_URL, json=payload, headers=headers)
-            if response.status_code == 200:
+            resp = requests.post(GCP_API_URL, json=payload, headers=headers, timeout=30)
+
+            if resp.status_code == 200:
                 print(f"成功觸發重算: uid: {uid}")
+            elif resp.status_code == 403:
+                print(
+                    f"❌ UID {uid} 403 Unauthorized：請檢查 GCP_API_KEY 是否正確/是否有權限。"
+                    f" 回應: {resp.text}"
+                )
             else:
-                print(f"觸發重算失敗: uid: {uid}. 狀態碼: {response.status_code}, 回應: {response.text}")
-        except Exception as e:
-            print(f"觸發重算時發生錯誤: uid: {uid}. 錯誤: {e}")
-        time.sleep(1) # 避免請求過於頻繁
+                print(f"❌ UID {uid} 觸發重算失敗。HTTP {resp.status_code}: {resp.text}")
+
+        except requests.exceptions.Timeout:
+            print(f"❌ UID {uid} 觸發重算逾時（30s）")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ UID {uid} 觸發重算連線失敗: {e}")
+
+        time.sleep(1)  # 限流
+
 
 
 if __name__ == "__main__":
