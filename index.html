@@ -113,7 +113,7 @@
                 <div class="space-y-4">
                     <div>
                         <label for="source-uid" class="block text-sm font-medium text-gray-700">舊測試帳號 UID (來源)</label>
-                        <input type="text" id="source-uid" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" placeholder="例如：test-user-01">
+                        <input type="text" id="source-uid" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" placeholder="例如：test-user-01" value="test-user-01">
                     </div>
                     <div>
                         <label for="target-uid" class="block text-sm font-medium text-gray-700">新註冊帳號 UID (目標)</label>
@@ -157,13 +157,12 @@
         // =========================================================================================
 
         const firebaseConfig = {
-          apiKey: "AIzaSyA_yBMNUBUK6yGClPJ4BwbMrFFh4pDHqYc",
-          authDomain: "portfolio-journal-467915.firebaseapp.com",
-          projectId: "portfolio-journal-467915",
-          storageBucket: "portfolio-journal-467915.firebasestorage.app",
-          messagingSenderId: "951186116587",
-          appId: "1:951186116587:web:9a630cf9b4b1c0893613ae",
-          measurementId: "G-6C3M8W9RH7"
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
         };
 
         const firebaseApp = initializeApp(firebaseConfig);
