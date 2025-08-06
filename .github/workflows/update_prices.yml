@@ -30,4 +30,4 @@ jobs:
           pip install yfinance requests pandas
 
       - name: Run weekend full-refresh script
-        run: python main_weekend.py
+        run: python main.py
