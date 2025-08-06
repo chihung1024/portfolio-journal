@@ -1,20 +1,19 @@
 name: Weekend Full Data Refresh
 
 on:
-  workflow_dispatch:        # 允許手動執行
+  workflow_dispatch:           # 可於 Actions 頁手動執行
   schedule:
-    # 每週日 01:00 (UTC)＝台灣/香港週日 09:00
-    - cron: '0 1 * * 0'
+    - cron: '0 1 * * 0'        # 每週日 01:00 UTC（台灣 09:00）
 
 jobs:
   full-refresh:
     runs-on: ubuntu-latest
 
-    env:                     # ← 把 Secrets 提前宣告成 Job-level env
-      D1_WORKER_URL:   ${{ secrets.D1_WORKER_URL }}
-      D1_API_KEY:      ${{ secrets.D1_API_KEY }}
-      GCP_API_URL:     ${{ secrets.GCP_API_URL }}
-      INTERNAL_API_KEY:${{ secrets.INTERNAL_API_KEY }}   # ← 關鍵：runner log 才看得到
+    env:                       # 將 Secrets 宣告為 Job-level env
+      D1_WORKER_URL:    ${{ secrets.D1_WORKER_URL }}
+      D1_API_KEY:       ${{ secrets.D1_API_KEY }}
+      GCP_API_URL:      ${{ secrets.GCP_API_URL }}
+      INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}   # ← 關鍵
 
     steps:
       - name: Checkout repository
