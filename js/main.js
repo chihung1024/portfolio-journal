@@ -237,30 +237,18 @@ function setupEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
-
-    // --- 修改前 ---
-    /*
-    document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
-        if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
-        if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
-    });
-    */
     
-    // --- 修改後 (更穩健的作法) ---
     document.getElementById('transactions-table-body').addEventListener('click', (e) => {
-        // 從點擊的元素開始，向上尋找 class 為 .edit-btn 的最近祖先
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
-            e.preventDefault(); // 防止預設行為
-            handleEdit(editButton); // 將找到的按鈕元素傳給處理函式
-            return; // 找到就不用再往下找了
+            e.preventDefault();
+            handleEdit(editButton);
+            return;
         }
-    
-        // 從點擊的元素開始，向上尋找 class 為 .delete-btn 的最近祖先
         const deleteButton = e.target.closest('.delete-btn');
         if (deleteButton) {
-            e.preventDefault(); // 防止預設行為
-            handleDelete(deleteButton); // 將找到的按鈕元素傳給處理函式
+            e.preventDefault();
+            handleDelete(deleteButton);
         }
     });
 
@@ -268,15 +256,19 @@ function setupEventListeners() {
     document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.closest('.delete-split-btn')) { handleDeleteSplit(e.target.closest('.delete-split-btn')); } });
+    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
+        const deleteBtn = e.target.closest('.delete-split-btn');
+        if (deleteBtn) {
+            handleDeleteSplit(deleteBtn);
+        }
+    });
     
     // Benchmark
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
 
-    // [新增] 筆記相關
+    // 筆記相關
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
-    // 使用事件委派來處理動態產生的筆記按鈕
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const btn = e.target.closest('.open-notes-btn');
         if (btn) {
@@ -284,6 +276,25 @@ function setupEventListeners() {
             openModal('notes-modal', false, { symbol });
         }
     });
+
+    // --- [新增] 股息相關事件監聽 ---
+    document.getElementById('add-dividend-btn').addEventListener('click', () => openModal('dividend-modal'));
+    document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
+    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
+    
+    // 使用事件委派處理股息列表中的按鈕
+    document.getElementById('dividends-table-body').addEventListener('click', (e) => {
+        const editBtn = e.target.closest('.edit-dividend-btn');
+        if (editBtn) {
+            handleEditDividend(editBtn);
+            return;
+        }
+        const deleteBtn = e.target.closest('.delete-dividend-btn');
+        if (deleteBtn) {
+            handleDeleteDividend(deleteBtn);
+        }
+    });
+    // --- [新增結束] ---
 
     // 通用 UI
     document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
