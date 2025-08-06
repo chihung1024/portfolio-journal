@@ -1,20 +1,15 @@
-name: Weekday Incremental Update
+name: Update Stock Prices
 
 on:
-  workflow_dispatch:     # 手動
+  workflow_dispatch:        # 允許手動執行
   schedule:
-    - cron: '0 2 * * 1-6'   # 週一至週六 02:00 UTC
+    - cron: '0 2 * * *'     # 每日 00:00 UTC 執行
 
 jobs:
   update-prices:
     runs-on: ubuntu-latest
-    env:                      # 全域環境變數
-      D1_WORKER_URL:  ${{ secrets.D1_WORKER_URL }}
-      D1_API_KEY:     ${{ secrets.D1_API_KEY }}
-      GCP_API_URL:    ${{ secrets.GCP_API_URL }}
-      INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}   # ★ 新增
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -22,10 +17,14 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install yfinance requests pandas
 
-      - name: Run incremental script
+      - name: Run price-update script
+        env:
+          D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
+          D1_API_KEY: ${{ secrets.D1_API_KEY }}
+          GCP_API_URL: ${{ secrets.GCP_API_URL }}
         run: python main.py
