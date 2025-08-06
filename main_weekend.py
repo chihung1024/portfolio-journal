@@ -15,6 +15,7 @@ D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
+INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY')
 
 def d1_query(sql, params=None):
     """通用 D1 查詢函式"""
@@ -137,6 +138,23 @@ def fetch_and_overwrite_market_data(targets):
                     time.sleep(5)
                 else:
                     print(f"FATAL: 連續 {max_retries} 次抓取 {symbol} 失敗。")
+
+def trigger_recalculation(uid):
+    payload = {
+        "action": "recalculate",
+        "data": {
+            "uid": uid
+        }
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "x-internal-key": INTERNAL_API_KEY # <--- 新增的標頭
+    }
+    response = requests.post(GCP_API_URL, json=payload, headers=headers)
+    if response.status_code == 200:
+        print(f"成功觸發 UID: {uid} 的重算。")
+    else:
+        print(f"觸發重算失敗: uid: {uid}. 狀態碼: {response.status_code}, 回應: {response.text}")
 
 
 def trigger_recalculations(uids):
