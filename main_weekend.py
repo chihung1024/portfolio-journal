@@ -1,3 +1,4 @@
+import json
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
@@ -38,14 +39,12 @@ def d1_query(sql, params=None):
         return None
 
 def get_id_token(sa_json_str, target_audience):
-    """使用服務帳戶 JSON 換取 Cloud Function 專屬 ID Token"""
-    credentials = service_account.IDTokenCredentials.from_service_account_info(
+    creds = service_account.IDTokenCredentials.from_service_account_info(
         json.loads(sa_json_str),
-        target_audience=target_audience
-    )
-    request = Request()
-    credentials.refresh(request)
-    return credentials.token
+        target_audience=target_audience)
+    creds.refresh(Request())
+    return creds.token
+
 
 
 def d1_batch(statements):
