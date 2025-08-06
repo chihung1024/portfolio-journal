@@ -722,22 +722,46 @@ async function performRecalculation(uid) {
             });
         }
         
-        const summaryData = {
+        const summaryData = {
             totalRealizedPL: portfolioResult.totalRealizedPL,
             xirr: portfolioResult.xirr,
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol,
         };
-        const finalBatch = [
+      
+        // --- [新增] 批次切割 (Chunking) 邏輯 ---
+    
+        // 1. 將固定大小的 summary 操作與可能非常大的 holdings 操作分開
+        const summaryOps = [
             { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
             {
                 sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
                 params: [uid, JSON.stringify(summaryData), JSON.stringify(dailyPortfolioValues), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString()]
-            },
-            ...dbOps
+            }
         ];
-        await d1Client.batch(finalBatch);
-        console.log(`--- [${uid}] 重新計算程序完成 ---`);
+    
+        // 先執行 summary 的更新
+        await d1Client.batch(summaryOps);
+        console.log(`[${uid}] Summary data updated successfully.`);
+    
+        // 2. 對 holdings 操作 (dbOps) 進行切割
+        const BATCH_SIZE = 900; // 設定一個安全的批次大小，略小於1000以保留緩衝
+        const dbOpsChunks = [];
+        for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
+            dbOpsChunks.push(dbOps.slice(i, i + BATCH_SIZE));
+        }
+    
+        console.log(`[${uid}] Holdings data will be updated in ${dbOpsChunks.length} batches of up to ${BATCH_SIZE} statements each.`);
+    
+        // 3. 透過 Promise.all 並行執行所有切割後的批次任務，以提升效率
+        await Promise.all(
+            dbOpsChunks.map((chunk, index) => {
+                console.log(`[${uid}] Executing holdings batch #${index + 1} with ${chunk.length} statements...`);
+                return d1Client.batch(chunk);
+            })
+        );
+        
+        console.log(`--- [${uid}] 重新計算程序完成 ---`);
     } catch (e) {
         console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
         throw e;
