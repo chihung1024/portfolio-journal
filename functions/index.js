@@ -272,7 +272,19 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
 
 
 // --- 核心計算與輔助函式 ---
-const toDate = v => v ? (v.toDate ? v.toDate() : new Date(v)) : null;
+const toDate = v => {
+    if (!v) return null;
+    // 先正常建立 Date 物件
+    const d = v.toDate ? v.toDate() : new Date(v);
+    
+    // [關鍵修正] 檢查 d 是否為一個有效的 Date 物件
+    if (d instanceof Date && !isNaN(d)) {
+      // 將此時間點的 UTC 時間強制設為午夜零時，消除本地時區造成的偏移
+      d.setUTCHours(0, 0, 0, 0);
+    }
+    
+    return d;
+};
 const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 
 const isTwStock = (symbol) => {
