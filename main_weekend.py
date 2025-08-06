@@ -139,22 +139,34 @@ def fetch_and_overwrite_market_data(targets):
                 else:
                     print(f"FATAL: 連續 {max_retries} 次抓取 {symbol} 失敗。")
 
-def trigger_recalculation(uid):
-    payload = {
-        "action": "recalculate",
-        "data": {
-            "uid": uid
-        }
-    }
+def trigger_recalculations(uids):
+    if not uids:
+        print("沒有找到需要觸發重算的使用者。")
+        return
+    if not GCP_API_URL or not D1_API_KEY or not INTERNAL_API_KEY:
+        print("警告: 缺少 GCP_API_URL / D1_API_KEY / INTERNAL_API_KEY，跳過觸發重算。")
+        return
+
     headers = {
         "Content-Type": "application/json",
-        "x-internal-key": INTERNAL_API_KEY # <--- 新增的標頭
+        "X-API-KEY": D1_API_KEY,          # Cloud Function 第一層驗證
+        "x-internal-key": INTERNAL_API_KEY  # 進入「內部通道」
     }
-    response = requests.post(GCP_API_URL, json=payload, headers=headers)
-    if response.status_code == 200:
-        print(f"成功觸發 UID: {uid} 的重算。")
-    else:
-        print(f"觸發重算失敗: uid: {uid}. 狀態碼: {response.status_code}, 回應: {response.text}")
+
+    for uid in uids:
+        try:
+            payload = {
+                "action": "recalculate",
+                "data": { "uid": uid }      # <- 必須包在 data 裡
+            }
+            resp = requests.post(GCP_API_URL, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                print(f"成功觸發重算: uid: {uid}")
+            else:
+                print(f"觸發重算失敗: uid: {uid}. 狀態碼: {resp.status_code}, 回應: {resp.text}")
+        except Exception as e:
+            print(f"觸發重算時發生錯誤: uid: {uid}. 錯誤: {e}")
+        time.sleep(1)
 
 
 def trigger_recalculations(uids):
