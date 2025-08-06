@@ -1,122 +1,96 @@
 // =========================================================================================
 // == API 通訊模組 (api.js)
 // =========================================================================================
-
-// [新增] 從 Firebase SDK 引入 getAuth，用來獲取當前使用者
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
-import { API } from './config.js';
+import { API }      from './config.js';
 import { getState, setState } from './state.js';
-import { 
-    renderHoldingsTable, 
-    renderTransactionsTable, 
-    renderSplitsTable, 
-    renderDividendsTable,
-    updateDashboard, 
-    updateAssetChart, 
-    updateTwrChart,
-    showNotification
+import {
+  renderHoldingsTable, renderTransactionsTable, renderSplitsTable,
+  renderDividendsTable, updateDashboard, updateAssetChart, updateTwrChart,
+  showNotification
 } from './ui.js';
 
-/**
- * [安全性強化版] 統一的後端 API 請求函式
- */
+/* 統一呼叫後端（自帶 Firebase Token）*/
 export async function apiRequest(action, data) {
-    const auth = getAuth();
-    const user = auth.currentUser;
+  const auth = getAuth();
+  const user = auth.currentUser;
+  if (!user) {
+    showNotification('error', '請先登入再執行操作。');
+    throw new Error('User not logged in');
+  }
 
-    if (!user) {
-        showNotification('error', '請先登入再執行操作。');
-        throw new Error('User not logged in');
-    }
-
-    try {
-        // [關鍵修改] 非同步獲取當前使用者的 Firebase ID Token
-        const token = await user.getIdToken();
-
-        // [關鍵修改] payload 中不再需要手動放入 uid
-        const payload = { action, data };
-
-        const response = await fetch(API.URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`, // [新增] 將 Token 作為 Bearer Token 加入到標頭中
-                'X-API-KEY': API.KEY
-            },
-            body: JSON.stringify(payload)
-        });
-        
-        const result = await response.json();
-        if (!response.ok) {
-            // 如果認證失敗，後端會回傳 401 或 403
-            if (response.status === 401 || response.status === 403) {
-                 throw new Error(result.message || '認證失敗，您的登入可能已過期，請嘗試重新整理頁面。');
-            }
-            throw new Error(result.message || '伺服器發生錯誤');
-        }
-        return result;
-
-    } catch (error) {
-        console.error('API 請求失敗:', error);
-        // 將錯誤直接拋出，讓呼叫它的地方 (例如 handleFormSubmit) 可以捕獲並顯示通知
-        throw error;
-    }
+  const token = await user.getIdToken();
+  const payload = { action, data };
+  const res = await fetch(API.URL, {
+    method : 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'X-API-KEY'   : API.KEY
+    },
+    body: JSON.stringify(payload)
+  });
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.message || '伺服器發生錯誤');
+  return result;
 }
 
-/**
- * 從後端載入所有投資組合資料並更新畫面
- */
+/* 一次載入所有投資組合資料（含手動股息）並刷新畫面 */
 export async function loadPortfolioData() {
-    const { currentUserId } = getState();
-    if (!currentUserId) {
-        console.log("未登入，無法載入資料。");
-        return;
-    }
-    document.getElementById('loading-overlay').style.display = 'flex';
-    try {
-        // [修改] 同時獲取主要數據和手動股息數據
-        const [mainDataResult, dividendDataResult] = await Promise.all([
-            apiRequest('get_data', {}),
-            apiRequest('get_dividend_events', {}) 
-        ]);
-        
-        const portfolioData = mainDataResult.data;
-        const manualDividends = dividendDataResult.data || [];
-        
-        const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note;
-            return map;
-        }, {});
+  const { currentUserId } = getState();
+  if (!currentUserId) return;
 
-        // [修改] 更新全域狀態
-        setState({
-            transactions: portfolioData.transactions || [],
-            userSplits: portfolioData.splits || [],
-            manualDividends: manualDividends, // <--- 儲存手動股息
-            marketDataForFrontend: portfolioData.marketData || {},
-            stockNotes: stockNotesMap
-        });
-        
-        const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
-        
-        // [修改] 呼叫新的 render 函式
-        renderHoldingsTable(holdingsObject);
-        renderTransactionsTable();
-        renderDividendsTable();
-        renderSplitsTable();
-        
-        updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
-        updateAssetChart(portfolioData.history || {});
-        const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
-        updateTwrChart(portfolioData.twrHistory || {}, portfolioData.benchmarkHistory || {}, benchmarkSymbol);
-        document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
-        showNotification('success', '資料同步完成！');
-    } catch (error) {
-        console.error('Failed to load portfolio data:', error);
-        showNotification('error', `讀取資料失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
+  document.getElementById('loading-overlay').style.display = 'flex';
+  try {
+    // 並行抓主要資料與股息
+    const [main, divs] = await Promise.all([
+      apiRequest('get_data', {}),
+      apiRequest('get_dividend_events', {})
+    ]);
+
+    const portfolioData = main.data;
+    const manualDividends = divs.data || [];
+
+    const stockNotesMap = (portfolioData.stockNotes || []).reduce((m, n) => {
+      m[n.symbol] = n; return m;
+    }, {});
+
+    /* 更新全域狀態 */
+    setState({
+      transactions     : portfolioData.transactions || [],
+      userSplits       : portfolioData.splits       || [],
+      manualDividends,                               // ← 關鍵
+      marketDataForFrontend: portfolioData.marketData || {},
+      stockNotes: stockNotesMap
+    });
+
+    /* 重新渲染所有 UI */
+    const holdingsObj = (portfolioData.holdings || []).reduce((o, h) => {
+      o[h.symbol] = h; return o;
+    }, {});
+    renderHoldingsTable(holdingsObj);
+    renderTransactionsTable();
+    renderDividendsTable();      // ← 新增
+    renderSplitsTable();
+    updateDashboard(
+      holdingsObj,
+      portfolioData.summary?.totalRealizedPL,
+      portfolioData.summary?.overallReturnRate,
+      portfolioData.summary?.xirr
+    );
+    updateAssetChart(portfolioData.history || {});
+    const benchmark = portfolioData.summary?.benchmarkSymbol || 'SPY';
+    updateTwrChart(
+      portfolioData.twrHistory    || {},
+      portfolioData.benchmarkHistory || {},
+      benchmark
+    );
+    document.getElementById('benchmark-symbol-input').value = benchmark;
+    showNotification('success', '資料同步完成！');
+  } catch (err) {
+    console.error(err);
+    showNotification('error', `讀取資料失敗: ${err.message}`);
+  } finally {
+    document.getElementById('loading-overlay').style.display = 'none';
+  }
 }
