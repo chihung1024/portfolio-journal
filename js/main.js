@@ -15,8 +15,7 @@ import {
     toggleOptionalFields, 
     showNotification,
     switchTab,
-    renderHoldingsTable,
-    renderDividendsTable
+    renderHoldingsTable // [修改] 引入 renderHoldingsTable
 } from './ui.js';
 
 // --- 事件處理函式 ---
@@ -181,48 +180,6 @@ async function handleNotesFormSubmit(e) {
     }
 }
 
-// [新增] 處理股息表單提交 (新增/編輯)
-async function handleDividendFormSubmit(e) {
-    e.preventDefault();
-    const saveBtn = document.getElementById('save-dividend-btn');
-    saveBtn.disabled = true;
-    saveBtn.textContent = '儲存中...';
-
-    const eventId = document.getElementById('dividend-id').value;
-    const isEditing = !!eventId;
-
-    const dividendData = {
-        symbol: document.getElementById('dividend-symbol').value,
-        ex_date: document.getElementById('dividend-ex-date').value,
-        pay_date: document.getElementById('dividend-pay-date').value || null,
-        amount_per_share: parseFloat(document.getElementById('dividend-amount').value),
-        currency: document.getElementById('dividend-currency').value,
-        tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value),
-        notes: document.getElementById('dividend-notes').value || null
-    };
-
-    // 如果是編輯模式，附上 id
-    if (isEditing) {
-        dividendData.id = eventId;
-    }
-    
-    // 處理稅率為空的情況
-    if (isNaN(dividendData.tax_rate)) {
-        dividendData.tax_rate = null;
-    }
-
-    try {
-        await apiRequest('save_dividend_event', dividendData);
-        closeModal('dividend-modal');
-        await loadPortfolioData(); // 重新載入所有數據並觸發重算
-        showNotification('success', '股息紀錄已儲存！');
-    } catch (error) {
-        showNotification('error', `儲存失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存股息';
-    }
-}
 
 /**
  * 集中設定所有 DOM 元素的事件監聽器
@@ -237,18 +194,30 @@ function setupEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+
+    // --- 修改前 ---
+    /*
+    document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
+        if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
+        if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
+    });
+    */
     
+    // --- 修改後 (更穩健的作法) ---
     document.getElementById('transactions-table-body').addEventListener('click', (e) => {
+        // 從點擊的元素開始，向上尋找 class 為 .edit-btn 的最近祖先
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
-            e.preventDefault();
-            handleEdit(editButton);
-            return;
+            e.preventDefault(); // 防止預設行為
+            handleEdit(editButton); // 將找到的按鈕元素傳給處理函式
+            return; // 找到就不用再往下找了
         }
+    
+        // 從點擊的元素開始，向上尋找 class 為 .delete-btn 的最近祖先
         const deleteButton = e.target.closest('.delete-btn');
         if (deleteButton) {
-            e.preventDefault();
-            handleDelete(deleteButton);
+            e.preventDefault(); // 防止預設行為
+            handleDelete(deleteButton); // 將找到的按鈕元素傳給處理函式
         }
     });
 
@@ -256,19 +225,15 @@ function setupEventListeners() {
     document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
-        const deleteBtn = e.target.closest('.delete-split-btn');
-        if (deleteBtn) {
-            handleDeleteSplit(deleteBtn);
-        }
-    });
+    document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.closest('.delete-split-btn')) { handleDeleteSplit(e.target.closest('.delete-split-btn')); } });
     
     // Benchmark
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
 
-    // 筆記相關
+    // [新增] 筆記相關
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
+    // 使用事件委派來處理動態產生的筆記按鈕
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const btn = e.target.closest('.open-notes-btn');
         if (btn) {
@@ -276,25 +241,6 @@ function setupEventListeners() {
             openModal('notes-modal', false, { symbol });
         }
     });
-
-    // --- [新增] 股息相關事件監聽 ---
-    document.getElementById('add-dividend-btn').addEventListener('click', () => openModal('dividend-modal'));
-    document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
-    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
-    
-    // 使用事件委派處理股息列表中的按鈕
-    document.getElementById('dividends-table-body').addEventListener('click', (e) => {
-        const editBtn = e.target.closest('.edit-dividend-btn');
-        if (editBtn) {
-            handleEditDividend(editBtn);
-            return;
-        }
-        const deleteBtn = e.target.closest('.delete-dividend-btn');
-        if (deleteBtn) {
-            handleDeleteDividend(deleteBtn);
-        }
-    });
-    // --- [新增結束] ---
 
     // 通用 UI
     document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
