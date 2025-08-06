@@ -20,6 +20,7 @@ try {
 // --- 平台設定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
 const D1_API_KEY = process.env.D1_API_KEY;
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 
 // --- D1 資料庫客戶端 ---
 const d1Client = {
@@ -839,6 +840,24 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     // [新增這段檢查]
     if (req.method !== 'POST') {
         return res.status(405).send('Method Not Allowed');
+    }
+
+    const { action, data } = req.body;
+
+    // [關鍵修改] 針對內部呼叫建立一個特權通道
+    // 只有內部腳本知道 INTERNAL_API_KEY，可以透過它來觸發重算
+    if (action === 'recalculate' && req.headers['x-internal-key'] === INTERNAL_API_KEY) {
+        try {
+            const { uid } = data; // 內部呼叫時，我們信任它傳來的 uid
+            if (!uid) return res.status(400).send({ success: false, message: '內部呼叫缺少 uid。' });
+            
+            console.log(`[Internal Call] 收到內部重算請求 for UID: ${uid}`);
+            await performRecalculation(uid);
+            return res.status(200).send({ success: true, message: `${uid} 的內部重算已觸發。` });
+        } catch (error) {
+            console.error(`[Internal Call] UID: ${uid} 的內部重算失敗:`, error);
+            return res.status(500).send({ success: false, message: '內部重算失敗。' });
+        }
     }
 
     // API Key 檢查仍然可以作為第一層基礎防護
