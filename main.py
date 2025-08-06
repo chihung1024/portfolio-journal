@@ -14,6 +14,7 @@ import pandas as pd
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY")
 # GCP 和 D1 Worker 使用相同的金鑰
 GCP_API_KEY = D1_API_KEY
 
