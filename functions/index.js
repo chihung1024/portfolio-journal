@@ -457,20 +457,29 @@ async function generatePendingDividends(uid, txs, market) {
 
     const newDividendsToInsert = [];
 
+    // [偵錯] 印出所有交易紀錄
+    console.log(`[${uid}] [DEBUG] 所有的交易紀錄 (txs):`, JSON.stringify(txs, null, 2));
+
     for (const globalDiv of allGlobalDividends) {
         const divDateStr = globalDiv.date.split('T')[0];
         const divDate = toDate(divDateStr);
         const sym = globalDiv.symbol.toUpperCase();
 
         if (!allSymbols.includes(sym)) {
-            continue; // 使用者未持有此股票，跳過
+            continue; 
         }
         if (existingSet.has(`${sym}|${divDateStr}`)) {
-            // console.log(`[${uid}] [DEBUG] 已存在配息紀錄，跳過: ${sym} on ${divDateStr}`);
-            continue; // 已存在，跳過
+            continue; 
         }
+        
+        // [偵錯] 印出正在檢查的配息
+        console.log(`\n[${uid}] [DEBUG] 正在檢查 ${sym} 在 ${divDateStr} 的配息...`);
 
         const stateOnDate = getPortfolioStateOnDate(txs, divDate, market);
+        
+        // [偵錯] 印出計算出的當日狀態
+        console.log(`[${uid}] [DEBUG] ${sym} 在 ${divDateStr} 的計算後狀態 (stateOnDate):`, JSON.stringify(stateOnDate[sym], null, 2));
+
         const holding = stateOnDate[sym];
         const sharesOnDate = holding ? holding.lots.reduce((sum, lot) => sum + lot.quantity, 0) : 0;
         console.log(`[${uid}] [DEBUG] 檢查 ${sym} 在 ${divDateStr} 的持股: ${sharesOnDate} 股`);
