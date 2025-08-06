@@ -34,35 +34,6 @@ function findFxRateForFrontend(currency, dateStr) {
 
 // --- 主要 UI 函式 ---
 
-// [新增] 渲染股息歷史表格
-export function renderDividendsTable() {
-    const { manualDividends } = getState();
-    const tableBody = document.getElementById('dividends-table-body');
-    tableBody.innerHTML = '';
-    if (!manualDividends || manualDividends.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="6" class="text-center py-10 text-gray-500">沒有手動建立的股息紀錄。</td></tr>`;
-        return;
-    }
-    for (const d of manualDividends) {
-        const row = document.createElement('tr');
-        row.className = "hover:bg-gray-50";
-        const taxRateText = (d.tax_rate !== null && d.tax_rate !== undefined) ? `${(d.tax_rate * 100).toFixed(2)}%` : 'N/A';
-        row.innerHTML = `
-            <td class="px-6 py-4 whitespace-nowrap">${d.ex_date.split('T')[0]}</td>
-            <td class="px-6 py-4 whitespace-nowrap font-medium">${d.symbol}</td>
-            <td class="px-6 py-4 whitespace-nowrap">${formatNumber(d.amount_per_share, 4)} <span class="text-xs text-gray-500">${d.currency}</span></td>
-            <td class="px-6 py-4 whitespace-nowrap">${taxRateText}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-xs text-gray-500">${d.source}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                <button data-id="${d.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
-                <button data-id="${d.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button>
-            </td>
-        `;
-        tableBody.appendChild(row);
-    }
-}
-
-
 export function renderHoldingsTable(currentHoldings) {
     const { stockNotes } = getState(); // [修改] 獲取筆記資料
     const container = document.getElementById('holdings-content');
@@ -272,14 +243,13 @@ export function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
 }
 
 export function openModal(modalId, isEdit = false, data = null) { 
-    // [修改] 獲取 state 時也取得 manualDividends
-    const { stockNotes, manualDividends } = getState();
+    const { stockNotes } = getState();
     const formId = modalId.replace('-modal', '-form');
     const form = document.getElementById(formId);
     if (form) form.reset();
     
     if (modalId === 'transaction-modal') {
-        // --- 交易視窗邏輯 (這部分維持不變) ---
+        // ... (原有的 transaction modal 邏輯不變)
         document.getElementById('transaction-id').value = '';
         if(isEdit && data) {
             document.getElementById('modal-title').textContent = '編輯交易紀錄'; 
@@ -297,13 +267,9 @@ export function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
-
     } else if (modalId === 'split-modal') {
-        // --- 拆股視窗邏輯 (這部分維持不變) ---
-        document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
-
-    } else if (modalId === 'notes-modal') {
-        // --- 筆記視窗邏輯 (這部分維持不變) ---
+         document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+    } else if (modalId === 'notes-modal') { // [新增] 處理筆記視窗
         const symbol = data.symbol;
         const note = stockNotes[symbol] || {};
         document.getElementById('notes-modal-title').textContent = `編輯 ${symbol} 的筆記與目標`;
@@ -311,30 +277,6 @@ export function openModal(modalId, isEdit = false, data = null) {
         document.getElementById('target-price').value = note.target_price || '';
         document.getElementById('stop-loss-price').value = note.stop_loss_price || '';
         document.getElementById('notes-content').value = note.notes || '';
-
-    } else if (modalId === 'dividend-modal') { 
-        // --- [新增] 處理股息視窗的完整邏輯 ---
-        document.getElementById('dividend-id').value = ''; // 每次打開都先清空 ID
-
-        if (isEdit && data) {
-            // 【編輯模式】
-            document.getElementById('dividend-modal-title').textContent = '編輯股息紀錄';
-            // 用傳入的 data 物件來填寫表單
-            document.getElementById('dividend-id').value = data.id;
-            document.getElementById('dividend-symbol').value = data.symbol;
-            document.getElementById('dividend-ex-date').value = data.ex_date.split('T')[0];
-            document.getElementById('dividend-pay-date').value = data.pay_date ? data.pay_date.split('T')[0] : '';
-            document.getElementById('dividend-amount').value = data.amount_per_share;
-            document.getElementById('dividend-currency').value = data.currency;
-            // 使用 '??' 運算子，確保 null 或 undefined 都會變成空字串
-            document.getElementById('dividend-tax-rate').value = data.tax_rate ?? ''; 
-            document.getElementById('dividend-notes').value = data.notes || '';
-        } else {
-            // 【新增模式】
-            document.getElementById('dividend-modal-title').textContent = '新增股息紀錄';
-            // 預設除息日為今天
-            document.getElementById('dividend-ex-date').value = new Date().toISOString().split('T')[0];
-        }
     }
     
     document.getElementById(modalId).classList.remove('hidden');
