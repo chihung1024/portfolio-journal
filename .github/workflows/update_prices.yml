@@ -1,9 +1,9 @@
-name: Weekend Full Data Refresh
+name: update_prices
 
 on:
   workflow_dispatch:           # 可於 Actions 頁手動執行
   schedule:
-    - cron: '0 0 * * *'        # 每週日 00:00 UTC（台灣 08:00）
+    - cron: '0 1 * * 0'        # 每週日 01:00 UTC（台灣 09:00）
 
 jobs:
   full-refresh:
@@ -30,4 +30,4 @@ jobs:
           pip install yfinance requests pandas
 
       - name: Run weekend full-refresh script
-        run: python main.py
+        run: python main_weekend.py
