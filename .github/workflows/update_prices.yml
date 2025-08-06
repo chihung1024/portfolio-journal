@@ -1,20 +1,13 @@
-name: update_prices
+name: Update Stock Prices
 
 on:
-  workflow_dispatch:           # 可於 Actions 頁手動執行
+  workflow_dispatch:        # 允許手動執行
   schedule:
-    - cron: '0 0 * * *'        # 每週日 00:00 UTC（台灣 08:00）
+    - cron: '0 2 * * *'     # 每日 00:00 UTC 執行
 
 jobs:
-  full-refresh:
+  update-prices:
     runs-on: ubuntu-latest
-
-    env:                       # 將 Secrets 宣告為 Job-level env
-      D1_WORKER_URL:    ${{ secrets.D1_WORKER_URL }}
-      D1_API_KEY:       ${{ secrets.D1_API_KEY }}
-      GCP_API_URL:      ${{ secrets.GCP_API_URL }}
-      INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}   # ← 關鍵
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -29,5 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance requests pandas
 
-      - name: Run weekend full-refresh script
+      - name: Run price-update script
+        env:
+          D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
+          D1_API_KEY: ${{ secrets.D1_API_KEY }}
+          GCP_API_URL: ${{ secrets.GCP_API_URL }}
         run: python main.py
