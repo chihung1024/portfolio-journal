@@ -23,15 +23,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance requests pandas
 
-      - name: Check for SERVICE_ACCOUNT_KEY
-        run: |
-          if [ -z "${{ secrets.SERVICE_ACCOUNT_KEY }}" ]; then
-            echo "SERVICE_ACCOUNT_KEY is not set!"
-            exit 1
-          else
-            echo "SERVICE_ACCOUNT_KEY is set."
-          fi
-
       - name: Run weekend full-refresh script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
