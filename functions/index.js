@@ -886,11 +886,20 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             }
 
             case '__DANGEROUSLY_CLEAR_ENTIRE_DATABASE__': {
-                console.warn(`[DANGER ZONE] 收到清空整個資料庫的請求！`);
-                if (data?.confirm !== 'DELETE_ALL_DATA_NOW') {
-                     return res.status(403).send({ success: false, message: '危險操作！請求被拒絕。請提供正確的確認訊息以清空整個資料庫。' });
+                // [關鍵安全檢查] 確保這段程式碼永遠不會在生產環境中被執行
+                if (process.env.NODE_ENV === 'production') {
+                    console.error(`[SECURITY] 偵測到在生產環境中，有對危險 API '__DANGEROUSLY_CLEAR_ENTIRE_DATABASE__' 的呼叫嘗試，已阻擋。`);
+                    // 為了不洩漏端點資訊，我們回傳與 action 不存在時相同的錯誤
+                    return res.status(400).send({ success: false, message: '未知的操作' });
                 }
-
+            
+                // --- 只有在非生產環境下 (例如開發、測試)，才會執行以下程式碼 ---
+            
+                console.warn(`[DANGER ZONE] 在非生產環境中呼叫全庫清除 API...`);
+                if (data?.confirm !== 'DELETE_ALL_DATA_NOW') {
+                    return res.status(403).send({ success: false, message: '危險操作！請求被拒絕。請提供正確的確認訊息。' });
+                }
+            
                 const allTables = [
                     'transactions', 'splits', 'holdings', 'portfolio_summary', 'controls',
                     'price_history', 'dividend_history', 'exchange_rates', 'market_data_coverage'
@@ -901,8 +910,8 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }));
                 
                 await d1Client.batch(deleteOps);
-                console.log(`[DANGER ZONE] 整個資料庫已被成功清空。`);
-                return res.status(200).send({ success: true, message: '已成功清除資料庫中的所有資料。所有資料表結構已保留。' });
+                console.log(`[DANGER ZONE] 資料庫已被成功清空。`);
+                return res.status(200).send({ success: true, message: '已成功清除資料庫中的所有資料。' });
             }
             
             case 'migrate_user_data': {
