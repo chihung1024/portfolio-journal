@@ -800,12 +800,3 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
 });
-" in the document.
-The user wants to add a new action to clear the entire database.
-
-I will add two new actions:
-1.  `clear_user_data`: Clears all data for a specific user.
-2.  `__DANGEROUSLY_CLEAR_ENTIRE_DATABASE__`: Clears all data from all tables, for all users. This is the one the user explicitly asked for.
-
-I will add these actions to the `switch` statement in `exports.unifiedPortfolioHandler`.
-I will also update the version number in the header comme
