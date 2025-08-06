@@ -855,3 +855,4 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         console.error(`[${uid || 'N/A'}] '${action}' 操作的處理程序失敗：`, errorMessage);
         return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
+});
