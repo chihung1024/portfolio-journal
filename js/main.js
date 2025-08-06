@@ -15,7 +15,8 @@ import {
     toggleOptionalFields, 
     showNotification,
     switchTab,
-    renderHoldingsTable // [修改] 引入 renderHoldingsTable
+    renderHoldingsTable,
+    renderDividendsTable
 } from './ui.js';
 
 // --- 事件處理函式 ---
@@ -180,6 +181,48 @@ async function handleNotesFormSubmit(e) {
     }
 }
 
+// [新增] 處理股息表單提交 (新增/編輯)
+async function handleDividendFormSubmit(e) {
+    e.preventDefault();
+    const saveBtn = document.getElementById('save-dividend-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '儲存中...';
+
+    const eventId = document.getElementById('dividend-id').value;
+    const isEditing = !!eventId;
+
+    const dividendData = {
+        symbol: document.getElementById('dividend-symbol').value,
+        ex_date: document.getElementById('dividend-ex-date').value,
+        pay_date: document.getElementById('dividend-pay-date').value || null,
+        amount_per_share: parseFloat(document.getElementById('dividend-amount').value),
+        currency: document.getElementById('dividend-currency').value,
+        tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value),
+        notes: document.getElementById('dividend-notes').value || null
+    };
+
+    // 如果是編輯模式，附上 id
+    if (isEditing) {
+        dividendData.id = eventId;
+    }
+    
+    // 處理稅率為空的情況
+    if (isNaN(dividendData.tax_rate)) {
+        dividendData.tax_rate = null;
+    }
+
+    try {
+        await apiRequest('save_dividend_event', dividendData);
+        closeModal('dividend-modal');
+        await loadPortfolioData(); // 重新載入所有數據並觸發重算
+        showNotification('success', '股息紀錄已儲存！');
+    } catch (error) {
+        showNotification('error', `儲存失敗: ${error.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存股息';
+    }
+}
 
 /**
  * 集中設定所有 DOM 元素的事件監聽器
