@@ -20,7 +20,6 @@ try {
 // --- 平台設定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
 const D1_API_KEY = process.env.D1_API_KEY;
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 
 // --- D1 資料庫客戶端 ---
 const d1Client = {
@@ -93,18 +92,6 @@ const splitSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必須為 YYYY-MM-DD"),
     symbol: z.string().min(1, "股票代碼為必填").transform(val => val.toUpperCase().trim()),
     ratio: z.number().positive("比例必須為正數"),
-});
-
-// [新增] 股息事件的規格
-const dividendSchema = z.object({
-    id: z.string().optional(), // 編輯時會用到
-    symbol: z.string().min(1, "股票代碼為必填").transform(val => val.toUpperCase().trim()),
-    ex_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "除息日格式必須為 YYYY-MM-DD"),
-    pay_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "發放日格式必須為 YYYY-MM-DD").optional().nullable(),
-    amount_per_share: z.number().positive("每股金額必須為正數"),
-    currency: z.enum(['USD', 'TWD', 'HKD', 'JPY']),
-    tax_rate: z.number().min(0).max(1, "稅率必須介於 0 和 1 之間").optional().nullable(),
-    notes: z.string().optional().nullable(),
 });
 
 
@@ -433,53 +420,38 @@ function dailyValue(state, market, date, allEvts) {
     }, 0);
 }
 
-// 傳入 manualDividends
-function prepareEvents(txs, splits, market, manualDividends = []) { 
+function prepareEvents(txs, splits, market) {
     const firstBuyDateMap = {};
-    // ... 計算 firstBuyDateMap 的邏輯不變 ...
+    txs.forEach(tx => {
+        if (tx.type === "buy") {
+            const sym = tx.symbol.toUpperCase();
+            const d = toDate(tx.date);
+            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) {
+                firstBuyDateMap[sym] = d;
+            }
+        }
+    });
 
     const evts = [
         ...txs.map(t => ({ ...t, eventType: "transaction" })),
         ...splits.map(s => ({ ...s, eventType: "split" }))
     ];
 
-    // --- [修改] 股息處理邏輯 ---
-    const manualDividendKeys = new Set(manualDividends.map(d => `${d.symbol}_${d.ex_date}`));
-
-    // 1. 先加入自動抓取的股息，但跳過已手動設定的
     Object.keys(market).forEach(sym => {
         if (market[sym] && market[sym].dividends) {
             Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
-                const key = `${sym}_${dateStr}`;
-                if (!manualDividendKeys.has(key)) { // 如果沒有手動設定過，才加入
-                    const dividendDate = toDate(dateStr);
-                    if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
-                        evts.push({ date: dividendDate, symbol: sym, amount, eventType: "dividend", source: 'YAHOO_FINANCE' });
-                    }
+                const dividendDate = new Date(dateStr);
+                dividendDate.setUTCHours(0, 0, 0, 0);
+                if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
+                    evts.push({ date: dividendDate, symbol: sym, amount, eventType: "dividend" });
                 }
-            });
-        }
-    });
-
-    // 2. 再加入所有手動設定的股息，它們的優先級更高
-    manualDividends.forEach(d => {
-        const dividendDate = toDate(d.ex_date);
-        if (firstBuyDateMap[d.symbol] && dividendDate >= firstBuyDateMap[d.symbol]) {
-            evts.push({
-                date: dividendDate,
-                symbol: d.symbol,
-                amount: d.amount_per_share, // 注意欄位名稱對應
-                tax_rate: d.tax_rate,      // 傳遞稅率
-                eventType: "dividend",
-                source: 'MANUAL_INPUT'
             });
         }
     });
 
     evts.sort((a, b) => toDate(a.date) - toDate(b.date));
     const firstTx = evts.find(e => e.eventType === 'transaction');
-    
-    return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null }; 
+    return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
 }
 
 function calculateDailyPortfolioValues(evts, market, startDate) {
@@ -706,12 +678,7 @@ function calculateCoreMetrics(evts, market) {
                 const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
                 if (shares > 0) {
                     const fx = findFxRate(market, pf[sym].currency, toDate(e.date));
-            
-                    // --- [修改] 稅率計算邏輯 ---
-                    // 如果事件本身帶有稅率 (來自手動輸入)，則使用它。
-                    // 否則，使用舊的預設邏輯 (來自 Yahoo Finance)。
-                    const taxRate = (e.tax_rate !== undefined && e.tax_rate !== null) ? e.tax_rate : (isTwStock(sym) ? 0.0 : 0.30);
-            
+                    const taxRate = isTwStock(sym) ? 0.0 : 0.30;
                     const postTaxAmount = e.amount * (1 - taxRate);
                     const divTWD = postTaxAmount * shares * (pf[sym].currency === "TWD" ? 1 : fx);
                     totalRealizedPL += divTWD;
@@ -734,11 +701,10 @@ function calculateCoreMetrics(evts, market) {
 async function performRecalculation(uid) {
     console.log(`--- [${uid}] 重新計算程序開始 (v2.4.0) ---`);
     try {
-        const [txs, splits, controlsData, manualDividends] = await Promise.all([
+        const [txs, splits, controlsData] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
-            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
-            d1Client.query('SELECT * FROM user_dividend_history WHERE uid = ?', [uid]) // <-- 新增這一行
+            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
         ]);
 
         if (txs.length === 0) {
@@ -842,24 +808,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         return res.status(405).send('Method Not Allowed');
     }
 
-    const { action, data } = req.body;
-
-    // [關鍵修改] 針對內部呼叫建立一個特權通道
-    // 只有內部腳本知道 INTERNAL_API_KEY，可以透過它來觸發重算
-    if (action === 'recalculate' && req.headers['x-internal-key'] === INTERNAL_API_KEY) {
-        try {
-            const { uid } = data; // 內部呼叫時，我們信任它傳來的 uid
-            if (!uid) return res.status(400).send({ success: false, message: '內部呼叫缺少 uid。' });
-            
-            console.log(`[Internal Call] 收到內部重算請求 for UID: ${uid}`);
-            await performRecalculation(uid);
-            return res.status(200).send({ success: true, message: `${uid} 的內部重算已觸發。` });
-        } catch (error) {
-            console.error(`[Internal Call] UID: ${uid} 的內部重算失敗:`, error);
-            return res.status(500).send({ success: false, message: '內部重算失敗。' });
-        }
-    }
-
     // API Key 檢查仍然可以作為第一層基礎防護
     const apiKey = req.headers['x-api-key'];
     if (apiKey !== D1_API_KEY) {
@@ -880,53 +828,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
 
             // 您的 switch 邏輯完全不需要修改，因為它們使用的 uid 變數已經是安全的了
             switch (action) {
-
-            // [新增] 獲取所有手動建立的股息事件
-            case 'get_dividend_events': {
-                const dividends = await d1Client.query('SELECT * FROM user_dividend_history WHERE uid = ? ORDER BY ex_date DESC', [uid]);
-                return res.status(200).send({ success: true, data: dividends });
-            }
-
-            // [新增] 新增或編輯股息事件
-            case 'save_dividend_event': {
-                try {
-                    const dividendData = dividendSchema.parse(data);
-                    const { id, ...eventData } = dividendData;
-                    const eventId = id || uuidv4();
-    
-                    if (id) { // 編輯模式
-                        await d1Client.query(
-                            `UPDATE user_dividend_history SET symbol=?, ex_date=?, pay_date=?, amount_per_share=?, currency=?, tax_rate=?, notes=? WHERE id=? AND uid=?`,
-                            [eventData.symbol, eventData.ex_date, eventData.pay_date, eventData.amount_per_share, eventData.currency, eventData.tax_rate, eventData.notes, id, uid]
-                        );
-                    } else { // 新增模式
-                        await d1Client.query(
-                            `INSERT INTO user_dividend_history (id, uid, symbol, ex_date, pay_date, amount_per_share, currency, tax_rate, notes, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [eventId, uid, eventData.symbol, eventData.ex_date, eventData.pay_date, eventData.amount_per_share, eventData.currency, eventData.tax_rate, eventData.notes, 'MANUAL_INPUT']
-                        );
-                    }
-                    await performRecalculation(uid);
-                    return res.status(200).send({ success: true, message: '股息紀錄已儲存。', id: eventId });
-    
-                } catch (error) {
-                    if (error instanceof z.ZodError) {
-                        return res.status(400).send({ success: false, message: "股息資料格式錯誤", errors: error.errors });
-                    }
-                    throw error;
-                }
-            }
-                
-            // [新增] 刪除股息事件
-            case 'delete_dividend_event': {
-                const { eventId } = data;
-                if (!eventId) return res.status(400).send({ success: false, message: '缺少 eventId。' });
-                
-                await d1Client.query('DELETE FROM user_dividend_history WHERE id = ? AND uid = ?', [eventId, uid]);
-                
-                await performRecalculation(uid);
-                return res.status(200).send({ success: true, message: '股息紀錄已刪除。' });
-            }
-                
             case 'get_data': {
                 if (!uid) return res.status(400).send({ success: false, message: '請求錯誤：缺少 uid。' });
                 const [txs, splits, holdingsResult, summaryResult, stockNotes] = await Promise.all([
