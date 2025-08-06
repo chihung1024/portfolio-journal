@@ -785,7 +785,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 return res.status(200).send({ success: true, message: '已成功清除資料庫中的所有資料。所有資料表結構已保留。' });
             }
             
-            // [新增] 資料轉移功能
             case 'migrate_user_data': {
                 const { sourceUid, targetUid } = data;
                 if (!sourceUid || !targetUid) {
@@ -821,3 +820,681 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         return res.status(500).send({ success: false, message: `發生內部錯誤：${errorMessage}` });
     }
 });
+```
+
+### 2. 更新您的前端 (`index.html`)
+
+請將您在 Canvas 中的 `admin_panel_html` 檔案，用以下這個 `v2.1` 版本的完整程式碼替換。它新增了臨時的管理面板。
+
+
+```html
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票交易紀錄與資產分析系統 (Firebase 整合版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); transition: all 0.3s ease-in-out; }
+        .btn { transition: all 0.2s ease-in-out; }
+        .modal-backdrop { background-color: rgba(0,0,0,0.5); transition: opacity 0.3s ease; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <div id="app" class="min-h-screen">
+        <div id="notification-area" class="fixed top-5 right-5 z-50"></div>
+
+        <header class="bg-white shadow-md sticky top-0 z-20">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <i data-lucide="line-chart" class="text-indigo-600 h-8 w-8"></i>
+                    <h1 class="text-2xl font-bold text-gray-800">交易紀錄與資產分析</h1>
+                </div>
+                <div id="auth-status-display" class="flex items-center space-x-4 text-xs text-gray-500 text-right">
+                    <div id="user-info" class="hidden">
+                        <span id="auth-status"></span>
+                        <p id="user-id" class="truncate max-w-[150px] sm:max-w-xs"></p>
+                    </div>
+                    <button id="logout-btn" class="hidden btn bg-red-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-red-600">登出</button>
+                </div>
+            </div>
+        </header>
+        
+        <div id="auth-container" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+             <div class="max-w-md mx-auto bg-white rounded-lg shadow-md p-8">
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">登入或註冊</h2>
+                <form id="auth-form">
+                    <div class="mb-4">
+                        <label for="email" class="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
+                        <input type="email" id="email" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
+                    </div>
+                    <div class="mb-6">
+                        <label for="password" class="block text-sm font-medium text-gray-700 mb-1">密碼</label>
+                        <input type="password" id="password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
+                    </div>
+                    <div class="flex items-center justify-between space-x-4">
+                        <button type="button" id="login-btn" class="w-full btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700">登入</button>
+                        <button type="button" id="register-btn" class="w-full btn bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700">註冊</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 hidden">
+            <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-40" style="display: none;">
+                <div class="flex flex-col items-center text-center p-4">
+                    <svg class="animate-spin h-10 w-10 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <p id="loading-text" class="mt-4 text-lg font-medium text-gray-700">正在驗證您的身分...</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+                <div class="card p-5 flex flex-col justify-between"><div class="flex items-center justify-between"><h3 class="text-sm font-medium text-gray-500">總資產 (TWD)</h3><i data-lucide="wallet" class="h-6 w-6 text-gray-400"></i></div><p id="total-assets" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+                <div class="card p-5 flex flex-col justify-between"><div class="flex items-center justify-between"><h3 class="text-sm font-medium text-gray-500">未實現損益 (TWD)</h3><i data-lucide="trending-up" class="h-6 w-6 text-gray-400"></i></div><p id="unrealized-pl" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+                <div class="card p-5 flex flex-col justify-between"><div class="flex items-center justify-between"><h3 class="text-sm font-medium text-gray-500">已實現損益 (TWD)</h3><i data-lucide="dollar-sign" class="h-6 w-6 text-gray-400"></i></div><p id="realized-pl" class="text-3xl font-bold text-gray-800 mt-2">0</p></div>
+                <div class="card p-5 flex flex-col justify-between"><div class="flex items-center justify-between"><h3 class="text-sm font-medium text-gray-500">總報酬率</h3><i data-lucide="percent" class="h-6 w-6 text-gray-400"></i></div><p id="total-return" class="text-3xl font-bold text-gray-800 mt-2">0.00%</p></div>
+                <div class="card p-5 flex flex-col justify-between"><div class="flex items-center justify-between"><h3 class="text-sm font-medium text-gray-500">XIRR 年化報酬率</h3><i data-lucide="calendar-check" class="h-6 w-6 text-gray-400"></i></div><p id="xirr-value" class="text-3xl font-bold text-gray-800 mt-2">0.00%</p></div>
+            </div>
+
+            <div class="card p-6 mb-8">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+                    <div class="sm:flex sm:items-center sm:space-x-4"><h2 class="text-xl font-bold text-gray-800">投資組合</h2><div class="mt-2 sm:mt-0 border-b sm:border-b-0 sm:border-l border-gray-200 sm:pl-4"><nav class="-mb-px flex space-x-6" id="tabs"><a href="#" data-tab="holdings" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-indigo-500 text-indigo-600">持股一覽</a><a href="#" data-tab="transactions" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a><a href="#" data-tab="splits" class="tab-item whitespace-nowrap border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a></nav></div></div>
+                    <div class="flex space-x-2">
+                        <button id="manage-splits-btn" class="btn bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700 flex items-center space-x-2"><i data-lucide="git-merge" class="h-5 w-5"></i><span>管理拆股</span></button>
+                        <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
+                    </div>
+                </div>
+                <div id="holdings-tab" class="tab-content overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">總成本(TWD)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">市值(TWD)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">未實現損益(TWD)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">報酬率</th></tr></thead><tbody id="holdings-table-body" class="bg-white divide-y divide-gray-200"></tbody></table></div>
+                <div id="transactions-tab" class="tab-content overflow-x-auto hidden"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th></tr></thead><tbody id="transactions-table-body" class="bg-white divide-y divide-gray-200"></tbody></table></div>
+                <div id="splits-tab" class="tab-content overflow-x-auto hidden"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">比例</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th></tr></thead><tbody id="splits-table-body" class="bg-white divide-y divide-gray-200"></tbody></table></div>
+            </div>
+            
+            <div class="card p-6 mb-8">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+                    <h3 class="text-lg font-semibold text-gray-800">時間加權報酬率 vs. Benchmark</h3>
+                    <div class="flex items-center space-x-2">
+                        <input type="text" id="benchmark-symbol-input" placeholder="e.g., SPY" class="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        <button id="update-benchmark-btn" class="btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 flex items-center space-x-2">
+                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
+                            <span>更新</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="twr-chart"></div>
+            </div>
+            
+            <div class="card p-6">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">資產成長曲線 (TWD)</h3>
+                <div id="asset-chart"></div>
+            </div>
+
+            <!-- [新增] 臨時管理面板 -->
+            <div id="admin-panel" class="card p-6 mt-8 border-2 border-red-500">
+                <h3 class="text-lg font-bold text-red-700 mb-4">⚠️ 管理員操作面板 (開發測試用)</h3>
+                <p class="text-sm text-gray-600 mb-4">轉移完成後，請務必刪除或隱藏此區塊，以策安全。</p>
+                <div class="space-y-4">
+                    <div>
+                        <label for="source-uid" class="block text-sm font-medium text-gray-700">舊測試帳號 UID (來源)</label>
+                        <input type="text" id="source-uid" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" placeholder="例如：test-user-01" value="test-user-01">
+                    </div>
+                    <div>
+                        <label for="target-uid" class="block text-sm font-medium text-gray-700">新註冊帳號 UID (目標)</label>
+                        <input type="text" id="target-uid" class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" placeholder="從 Firebase 控制台複製新使用者的 UID">
+                    </div>
+                    <div class="flex space-x-4">
+                        <button id="migrate-btn" class="btn bg-orange-500 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-orange-600">轉移資料</button>
+                        <p class="text-xs text-gray-500 self-center">此操作會將「來源 UID」的所有資料庫紀錄轉移給「目標 UID」。操作不可逆！</p>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <div id="transaction-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop" ></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 id="modal-title" class="text-2xl font-bold mb-6 text-gray-800">新增交易紀錄</h3><form id="transaction-form"><input type="hidden" id="transaction-id"><div class="mb-4"><label for="transaction-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label><input type="date" id="transaction-date" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div class="mb-4"><label for="stock-symbol" class="block text-sm font-medium text-gray-700 mb-1">股票代碼</label><input type="text" id="stock-symbol" placeholder="例如: AAPL, 2330.TW" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">交易類型</label><div class="flex space-x-4"><label class="flex items-center"><input type="radio" name="transaction-type" value="buy" class="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" checked><span class="ml-2 text-gray-700">買入</span></label><label class="flex items-center"><input type="radio" name="transaction-type" value="sell" class="h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"><span class="ml-2 text-gray-700">賣出</span></label></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="quantity" class="block text-sm font-medium text-gray-700 mb-1">股數</label><input type="number" step="any" id="quantity" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div><label for="price" class="block text-sm font-medium text-gray-700 mb-1">價格 (原幣)</label><input type="number" step="any" id="price" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div></div><div class="mb-4"><label for="currency" class="block text-sm font-medium text-gray-700 mb-1">幣別</label><select id="currency" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"><option value="USD">USD</option><option value="TWD">TWD</option><option value="HKD">HKD</option><option value="JPY">JPY</option></select></div>
+                <div id="exchange-rate-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md" style="display: none;">
+                    <label for="exchange-rate" class="block text-sm font-medium text-gray-700 mb-1">手動匯率 (選填)</label>
+                    <input type="number" step="any" id="exchange-rate" placeholder="留空則自動抓取" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div id="total-cost-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md">
+                    <label for="total-cost" class="block text-sm font-medium text-gray-700 mb-1">總成本 (含費用, 原幣, 選填)</label>
+                    <input type="number" step="any" id="total-cost" placeholder="留空則自動計算 (股數*價格)" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">取消</button><button type="submit" id="save-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center justify-center">儲存</button></div></form></div></div></div>
+        <div id="split-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 class="text-2xl font-bold mb-6 text-gray-800">新增拆股/合股事件</h3><form id="split-form"><input type="hidden" id="split-id"><div class="mb-4"><label for="split-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label><input type="date" id="split-date" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div class="mb-4"><label for="split-symbol" class="block text-sm font-medium text-gray-700 mb-1">股票代碼</label><input type="text" id="split-symbol" placeholder="例如: AAPL, 2330.TW" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div class="mb-4"><label for="split-ratio" class="block text-sm font-medium text-gray-700 mb-1">比例</label><input type="number" step="any" id="split-ratio" placeholder="1拆10, 輸入10; 10合1, 輸入0.1" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-split-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">取消</button><button type="submit" id="save-split-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700">儲存</button></div></form></div></div></div>
+        <div id="confirm-modal" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-sm mx-4"><h3 id="confirm-title" class="text-lg font-semibold mb-4 text-gray-800">確認操作</h3><p id="confirm-message" class="text-gray-600 mb-6">您確定要執行此操作嗎？</p><div class="flex justify-end space-x-4"><button id="confirm-cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-300">取消</button><button id="confirm-ok-btn" class="btn bg-red-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-red-700">確定</button></div></div></div></div>
+    </div>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
+        import { 
+            getAuth, 
+            createUserWithEmailAndPassword, 
+            signInWithEmailAndPassword, 
+            signOut, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
+
+        // =========================================================================================
+        // == 前端 JavaScript 完整程式碼 (v2.1 - 轉移功能整合版)
+        // =========================================================================================
+
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const firebaseApp = initializeApp(firebaseConfig);
+        const auth = getAuth(firebaseApp);
+
+        const API = {
+          URL: 'https://portfolio-journal-api-951186116587.asia-east1.run.app',
+          KEY: 'QqcUhBV04KciA1xeDibpOmcLpAQWDt'
+        };
+
+        let currentUserId = null;
+        let transactions = [];
+        let userSplits = [];
+        let marketDataForFrontend = {};
+        let chart, twrChart;
+        let confirmCallback = null;
+
+        // --- Firebase 認證核心邏輯 ---
+        
+        onAuthStateChanged(auth, (user) => {
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+
+            if (user) {
+                console.log("使用者已登入:", user.uid);
+                currentUserId = user.uid;
+
+                document.getElementById('auth-container').style.display = 'none';
+                document.querySelector('main').classList.remove('hidden');
+                document.getElementById('logout-btn').style.display = 'block';
+                document.getElementById('user-info').classList.remove('hidden');
+                document.getElementById('user-id').textContent = user.email;
+                document.getElementById('auth-status').textContent = '已連線';
+                
+                loadingText.textContent = '正在從雲端同步資料...';
+                loadPortfolioData();
+
+            } else {
+                console.log("使用者未登入。");
+                currentUserId = null;
+
+                document.getElementById('auth-container').style.display = 'block';
+                document.querySelector('main').classList.add('hidden');
+                document.getElementById('logout-btn').style.display = 'none';
+                document.getElementById('user-info').classList.add('hidden');
+                loadingOverlay.style.display = 'none';
+            }
+        });
+
+        async function handleRegister() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                showNotification('success', `註冊成功！歡迎 ${userCredential.user.email}`);
+            } catch (error) {
+                console.error("註冊失敗:", error);
+                showNotification('error', `註冊失敗: ${error.message}`);
+            }
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                showNotification('success', `登入成功！歡迎回來 ${userCredential.user.email}`);
+            } catch (error) {
+                console.error("登入失敗:", error);
+                showNotification('error', `登入失敗: ${error.message}`);
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                await signOut(auth);
+                showNotification('info', '您已成功登出。');
+            } catch (error) {
+                console.error("登出失敗:", error);
+                showNotification('error', `登出失敗: ${error.message}`);
+            }
+        }
+
+
+        // --- 主應用程式邏輯 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            
+            initializeChart();
+            initializeTwrChart();
+            setupEventListeners();
+            lucide.createIcons();
+        });
+
+        async function loadPortfolioData() {
+            if (!currentUserId) {
+                console.log("未登入，無法載入資料。");
+                return;
+            }
+            document.getElementById('loading-overlay').style.display = 'flex';
+            try {
+                const response = await fetch(API.URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-KEY': API.KEY },
+                    body: JSON.stringify({ action: 'get_data', uid: currentUserId })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || '伺服器發生錯誤');
+                
+                const portfolioData = result.data;
+                transactions = portfolioData.transactions || [];
+                userSplits = portfolioData.splits || [];
+                marketDataForFrontend = portfolioData.marketData || {}; 
+                
+                const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+                    obj[item.symbol] = item; return obj;
+                }, {});
+                
+                renderHoldingsTable(holdingsObject);
+                renderTransactionsTable(); 
+                renderSplitsTable();
+                updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+                updateAssetChart(portfolioData.history || {});
+                const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+                updateTwrChart(portfolioData.twrHistory || {}, portfolioData.benchmarkHistory || {}, benchmarkSymbol);
+                document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+                showNotification('success', '資料同步完成！');
+            } catch (error) {
+                console.error('Failed to load portfolio data:', error);
+                showNotification('error', `讀取資料失敗: ${error.message}`);
+            } finally {
+                document.getElementById('loading-overlay').style.display = 'none';
+            }
+        }
+
+        // --- UI 渲染函式 (無變動) ---
+        function renderHoldingsTable(currentHoldings) {
+            const tableBody = document.getElementById('holdings-table-body');
+            tableBody.innerHTML = '';
+            const holdingsArray = Object.values(currentHoldings);
+            if (holdingsArray.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="8" class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</td></tr>`;
+                return;
+            }
+            holdingsArray.sort((a,b) => b.marketValueTWD - a.marketValueTWD).forEach(h => {
+                const row = document.createElement('tr');
+                row.className = "hover:bg-gray-50";
+                const decimals = isTwStock(h.symbol) ? 0 : 2;
+                row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900">${h.symbol}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.totalCostTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'}">${formatNumber(h.unrealizedPLTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${h.returnRate >= 0 ? 'text-red-600' : 'text-green-600'}">${(h.returnRate || 0).toFixed(2)}%</td>`;
+                tableBody.appendChild(row);
+            });
+        }
+        
+        function renderTransactionsTable() {
+            const tableBody = document.getElementById('transactions-table-body');
+            tableBody.innerHTML = '';
+            if (transactions.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有交易紀錄。</td></tr>`;
+                return;
+            }
+            for (const t of transactions) {
+                const row = document.createElement('tr');
+                row.className = "hover:bg-gray-50";
+                const transactionDate = t.date.split('T')[0];
+                const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
+                const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+
+                row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td><td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
+                tableBody.appendChild(row);
+            };
+        }
+
+        const currencyToFx_FE = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
+        function findFxRateForFrontend(currency, dateStr) {
+            if (currency === 'TWD') return 1;
+            const fxSym = currencyToFx_FE[currency];
+            if (!fxSym || !marketDataForFrontend[fxSym]) return 1;
+            const rates = marketDataForFrontend[fxSym].rates || {};
+            if (rates[dateStr]) return rates[dateStr];
+            let nearestDate = null;
+            for (const rateDate in rates) {
+                if (rateDate <= dateStr && (!nearestDate || rateDate > nearestDate)) {
+                    nearestDate = rateDate;
+                }
+            }
+            return nearestDate ? rates[nearestDate] : 1;
+        }
+
+        function renderSplitsTable() {
+             const tableBody = document.getElementById('splits-table-body');
+            tableBody.innerHTML = '';
+            if (userSplits.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
+                return;
+            }
+            for (const s of userSplits) {
+                const row = document.createElement('tr');
+                row.className = "hover:bg-gray-50";
+                row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap">${s.date.split('T')[0]}</td><td class="px-6 py-4 whitespace-nowrap font-medium">${s.symbol.toUpperCase()}</td><td class="px-6 py-4 whitespace-nowrap">${s.ratio}</td><td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${s.id}" class="delete-split-btn text-red-600 hover:text-red-900">刪除</button></td>`;
+                tableBody.appendChild(row);
+            }
+        }
+        function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr) {
+            const holdingsArray = Object.values(currentHoldings);
+            const totalMarketValue = holdingsArray.reduce((sum, h) => sum + (h.marketValueTWD || 0), 0);
+            const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
+            document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
+            const unrealizedEl = document.getElementById('unrealized-pl');
+            unrealizedEl.textContent = formatNumber(totalUnrealizedPL, 0);
+            unrealizedEl.className = `text-3xl font-bold mt-2 ${totalUnrealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
+            const realizedEl = document.getElementById('realized-pl');
+            realizedEl.textContent = formatNumber(realizedPL, 0);
+            realizedEl.className = `text-3xl font-bold mt-2 ${realizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
+            const totalReturnEl = document.getElementById('total-return');
+            totalReturnEl.textContent = `${(overallReturn || 0).toFixed(2)}%`;
+            totalReturnEl.className = `text-3xl font-bold mt-2 ${overallReturn >= 0 ? 'text-red-600' : 'text-green-600'}`;
+            const xirrEl = document.getElementById('xirr-value');
+            xirrEl.textContent = `${((xirr || 0) * 100).toFixed(2)}%`;
+            xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
+        }
+        function updateAssetChart(portfolioHistory) {
+            if (!portfolioHistory || Object.keys(portfolioHistory).length === 0) { if(chart) chart.updateSeries([{ data: [] }]); return; }
+            const chartData = Object.entries(portfolioHistory).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]);
+            if(chart) chart.updateSeries([{ data: chartData }]);
+        }
+        function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
+            const formatHistory = (history) => history ? Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]) : [];
+            if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: formatHistory(twrHistory) }, { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) } ]);
+        }
+
+        async function apiRequest(action, data) {
+            if (!currentUserId && action !== 'migrate_user_data') { // 轉移功能允許在未登入時由管理者操作
+                showNotification('error', '請先登入再執行操作。');
+                throw new Error('User not logged in');
+            }
+            const payload = { action, uid: currentUserId, data };
+            console.log("即將發送到後端的完整 Payload:", JSON.stringify(payload, null, 2));
+            const response = await fetch(API.URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-KEY': API.KEY
+                },
+                body: JSON.stringify(payload)
+            });
+        
+            const result = await response.json();
+            if (!response.ok) {
+                console.error("後端返回的錯誤詳情:", result); 
+                throw new Error(result.message || '伺服器發生錯誤');
+            }
+            return result;
+        }
+        
+        // --- [新增] 資料轉移處理函式 ---
+        async function handleMigrateData() {
+            const sourceUid = document.getElementById('source-uid').value.trim();
+            const targetUid = document.getElementById('target-uid').value.trim();
+
+            if (!sourceUid || !targetUid) {
+                showNotification('error', '請同時輸入來源和目標 UID。');
+                return;
+            }
+
+            const message = `您確定要將使用者 ${sourceUid} 的所有資料轉移給 ${targetUid} 嗎？\n\n這個操作無法復原！`;
+            
+            showConfirm(message, async () => {
+                try {
+                    showNotification('info', '正在開始轉移資料...');
+                    // 注意：此處的 uid 參數在後端不會被使用，但為了共用 apiRequest 函式而傳入
+                    await apiRequest('migrate_user_data', { sourceUid, targetUid });
+                    showNotification('success', '資料轉移成功！請使用新帳號重新登入以查看資料。');
+                } catch (error) {
+                    console.error('資料轉移失敗:', error);
+                    showNotification('error', `資料轉移失敗: ${error.message}`);
+                }
+            });
+        }
+
+        function handleEdit(e) {
+            const txId = e.target.dataset.id;
+            const transaction = transactions.find(t => t.id === txId);
+            if (!transaction) return;
+            openModal('transaction-modal', true, transaction);
+        }
+        async function handleDelete(e) {
+            const txId = e.target.dataset.id;
+            showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
+                try {
+                    await apiRequest('delete_transaction', { txId });
+                    showNotification('success', '交易紀錄已刪除！');
+                    await loadPortfolioData();
+                } catch (error) {
+                    showNotification('error', `刪除失敗: ${error.message}`);
+                }
+            });
+        }
+        async function handleDeleteSplit(e) {
+            const splitId = e.target.dataset.id;
+            showConfirm('確定要刪除這個拆股事件嗎？', async () => {
+                try {
+                    await apiRequest('delete_split', { splitId });
+                    showNotification('success', '拆股事件已刪除！');
+                    await loadPortfolioData();
+                } catch (error) {
+                    showNotification('error', `刪除失敗: ${error.message}`);
+                }
+            });
+        }
+        async function handleFormSubmit(e) {
+            e.preventDefault();
+            const saveBtn = document.getElementById('save-btn');
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
+        
+            const txId = document.getElementById('transaction-id').value;
+            const isEditing = !!txId;
+        
+            const transactionData = {
+                date: document.getElementById('transaction-date').value,
+                symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+                type: document.querySelector('input[name="transaction-type"]:checked').value,
+                quantity: parseFloat(document.getElementById('quantity').value),
+                price: parseFloat(document.getElementById('price').value),
+                currency: document.getElementById('currency').value,
+                totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+                exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+            };
+        
+            if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
+                showNotification('error', '請填寫所有必填欄位。');
+                saveBtn.disabled = false;
+                saveBtn.textContent = '儲存';
+                return;
+            }
+        
+            try {
+                const action = isEditing ? 'edit_transaction' : 'add_transaction';
+                const payload = isEditing ? { txId, txData: transactionData } : transactionData;
+        
+                await apiRequest(action, payload);
+        
+                closeModal('transaction-modal');
+                await loadPortfolioData();
+                showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
+        
+            } catch (error) {
+                console.error('Failed to save transaction:', error);
+                showNotification('error', `儲存交易失敗: ${error.message}`);
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = '儲存';
+            }
+        }
+        async function handleSplitFormSubmit(e) {
+            e.preventDefault();
+            const saveBtn = document.getElementById('save-split-btn');
+            saveBtn.disabled = true;
+            const splitData = { date: document.getElementById('split-date').value, symbol: document.getElementById('split-symbol').value.toUpperCase().trim(), ratio: parseFloat(document.getElementById('split-ratio').value) };
+            if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
+                showNotification('error', '請填寫所有欄位並確保比例大於0。');
+                saveBtn.disabled = false; return;
+            }
+            try {
+                await apiRequest('add_split', splitData);
+                closeModal('split-modal');
+                await loadPortfolioData();
+            } catch (error) {
+                console.error('Failed to add split event:', error);
+                showNotification('error', `新增拆股事件失敗: ${error.message}`);
+            } finally {
+                saveBtn.disabled = false;
+            }
+        }
+        async function handleUpdateBenchmark() {
+            const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
+            if (!newBenchmark) { showNotification('error', '請輸入 Benchmark 的股票代碼。'); return; }
+            try {
+                showNotification('info', `正在更新 Benchmark 並重算...`);
+                await apiRequest('update_benchmark', { benchmarkSymbol: newBenchmark });
+                await loadPortfolioData();
+            } catch(error) {
+                showNotification('error', `更新 Benchmark 失敗: ${error.message}`);
+            }
+        }
+        function setupEventListeners() {
+            document.getElementById('login-btn').addEventListener('click', handleLogin);
+            document.getElementById('register-btn').addEventListener('click', handleRegister);
+            document.getElementById('logout-btn').addEventListener('click', handleLogout);
+            document.getElementById('migrate-btn').addEventListener('click', handleMigrateData); // [新增]
+
+            document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
+            document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
+            document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+            document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
+            document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
+                if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
+                if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
+            });
+            document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.classList.contains('delete-split-btn')) { handleDeleteSplit(e); } });
+            document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
+            document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
+            document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
+            document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+            document.getElementById('confirm-ok-btn').addEventListener('click', () => { if (confirmCallback) { confirmCallback(); } hideConfirm(); });
+            document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+            document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
+        }
+        function initializeChart() {
+            const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
+            chart = new ApexCharts(document.querySelector("#asset-chart"), options);
+            chart.render();
+        }
+        function initializeTwrChart() {
+            const options = { chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, colors: ['#4f46e5', '#f59e0b'] };
+            twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
+            twrChart.render();
+        }
+        function openModal(modalId, isEdit = false, data = null) { 
+            const formId = modalId.replace('-modal', '-form');
+            const form = document.getElementById(formId);
+            if (form) form.reset();
+            if (modalId === 'transaction-modal') {
+                document.getElementById('transaction-id').value = '';
+                if(isEdit && data) {
+                    document.getElementById('modal-title').textContent = '編輯交易紀錄'; 
+                    document.getElementById('transaction-id').value = data.id; 
+                    document.getElementById('transaction-date').value = data.date.split('T')[0];
+                    document.getElementById('stock-symbol').value = data.symbol; 
+                    document.querySelector(`input[name="transaction-type"][value="${data.type}"]`).checked = true; 
+                    document.getElementById('quantity').value = data.quantity; 
+                    document.getElementById('price').value = data.price; 
+                    document.getElementById('currency').value = data.currency;
+                    document.getElementById('exchange-rate').value = data.exchangeRate || '';
+                    document.getElementById('total-cost').value = data.totalCost || '';
+                } else {
+                    document.getElementById('modal-title').textContent = '新增交易紀錄'; 
+                    document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
+                }
+                toggleOptionalFields();
+            } else if (modalId === 'split-modal') {
+                 document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+            }
+            document.getElementById(modalId).classList.remove('hidden');
+        }
+        function closeModal(modalId) { 
+            document.getElementById(modalId).classList.add('hidden');
+        }
+        function showConfirm(message, callback) { 
+            document.getElementById('confirm-message').textContent = message; 
+            confirmCallback = callback; 
+            document.getElementById('confirm-modal').classList.remove('hidden'); 
+        }
+        function hideConfirm() { 
+            confirmCallback = null; 
+            document.getElementById('confirm-modal').classList.add('hidden'); 
+        }
+        function toggleOptionalFields() {
+            const currency = document.getElementById('currency').value;
+            const exchangeRateField = document.getElementById('exchange-rate-field');
+            if (currency === 'TWD') {
+                exchangeRateField.style.display = 'none';
+            } else {
+                exchangeRateField.style.display = 'block';
+            }
+        }
+        function isTwStock(symbol) { 
+            return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; 
+        }
+        function formatNumber(value, decimals = 2) { 
+            const num = Number(value); 
+            if (isNaN(num)) return decimals === 0 ? '0' : '0.00'; 
+            return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); 
+        }
+        function showNotification(type, message) { 
+            const area = document.getElementById('notification-area'); 
+            const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : 'bg-red-500'); 
+            const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle'); 
+            const notification = document.createElement('div'); 
+            notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`; 
+            notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`; 
+            area.appendChild(notification); 
+            lucide.createIcons({nodes: [notification.querySelector('i')]});
+            setTimeout(() => { 
+                notification.style.transition = 'opacity 0.5s ease'; 
+                notification.style.opacity = '0'; 
+                setTimeout(() => notification.remove(), 500); 
+            }, 5000); 
+        }
+        function switchTab(tabName) { 
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden')); 
+            document.getElementById(`${tabName}-tab`).classList.remove('hidden'); 
+            document.querySelectorAll('.tab-item').forEach(el => { 
+                el.classList.remove('border-indigo-500', 'text-indigo-600'); 
+                el.classList.add('border-transparent', 'text-gray-500'); 
+            }); 
+            const activeTab = document.querySelector(`[data-tab="${tabName}"]`); 
+            activeTab.classList.add('border-indigo-500', 'text-indigo-600'); 
+            activeTab.classList.remove('border-transparent', 'text-gray-500'); 
+        }
+    </script>
+</body>
+</html>
+", in the document, and I want to know:
+我該如
