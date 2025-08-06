@@ -28,5 +28,6 @@ jobs:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
           GCP_API_URL: ${{ secrets.GCP_API_URL }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
         # [核心修改] 執行新的週末專用腳本
         run: python main_weekend.py
