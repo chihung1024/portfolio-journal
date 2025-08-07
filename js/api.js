@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.4.3
+// == API 通訊模組 (api.js) v3.5.0
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -37,7 +37,7 @@ export async function apiRequest(action, data) {
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
-                'X-API-KEY': API.KEY
+                // [移除] 不再發送 X-API-KEY 標頭
             },
             body: JSON.stringify(payload)
         });
@@ -103,13 +103,10 @@ export async function loadPortfolioData() {
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        // [修改] 載入完成後，自動填入圖表的預設起迄日期
         const { portfolioHistory, twrHistory } = getState();
-
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
         document.getElementById('asset-end-date').value = assetDates.endDate;
-
         const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
