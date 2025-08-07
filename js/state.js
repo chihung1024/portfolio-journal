@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v2.8.2
+// == 狀態管理模組 (state.js) v3.1.0
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -11,10 +11,18 @@ let state = {
     marketDataForFrontend: {},
     pendingDividends: [],
     confirmedDividends: [],
-    isAppInitialized: false, // [新增] App 初始化狀態旗標
+    isAppInitialized: false,
     chart: null,
     twrChart: null,
-    confirmCallback: null
+    confirmCallback: null,
+
+    // [新增] 篩選與排序狀態
+    transactionFilter: 'all', // 'all' 或 股票代碼
+    dividendFilter: 'all',    // 'all' 或 股票代碼
+    holdingsSort: {
+        key: 'marketValueTWD', // 預設排序鍵
+        order: 'desc'          // 預設排序方向 (descending)
+    }
 };
 
 // 提供外部讀取狀態的方法
