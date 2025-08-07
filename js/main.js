@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.1.0
+// == 主程式進入點 (main.js) v3.4.0
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -19,6 +19,8 @@ import {
     renderTransactionsTable,
     renderDividendsManagementTab,
     openDividendHistoryModal,
+    updateAssetChart,
+    updateTwrChart,
 } from './ui.js';
 
 // --- 事件處理函式 ---
@@ -223,9 +225,7 @@ async function handleDividendFormSubmit(e) {
         tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value) || 0,
         notes: document.getElementById('dividend-notes').value.trim()
     };
-    if (isEditing) {
-        dividendData.id = id;
-    }
+    if (isEditing) { dividendData.id = id; }
     try {
         await apiRequest('save_user_dividend', dividendData);
         closeModal('dividend-modal');
@@ -257,6 +257,33 @@ async function handleDeleteDividend(button) {
     });
 }
 
+function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
+    const stateKey = chartType === 'twr' ? 'twrDateRange' : 'assetDateRange';
+    const controlsId = chartType === 'twr' ? 'twr-chart-controls' : 'asset-chart-controls';
+    
+    setState({ [stateKey]: { type: rangeType, start: startDate, end: endDate } });
+    
+    document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.range === rangeType) {
+            btn.classList.add('active');
+        }
+    });
+
+    if (rangeType !== 'custom') {
+        document.getElementById(`${chartType}-start-date`).value = '';
+        document.getElementById(`${chartType}-end-date`).value = '';
+    }
+    
+    if (chartType === 'twr') {
+        const { benchmarkHistory } = getState();
+        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
+        updateTwrChart(benchmarkSymbol);
+    } else {
+        updateAssetChart();
+    }
+}
+
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
@@ -270,7 +297,6 @@ function setupCommonEventListeners() {
 
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
-
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
@@ -298,7 +324,6 @@ function setupMainAppEventListeners() {
     });
     
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
-
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
     
@@ -315,7 +340,6 @@ function setupMainAppEventListeners() {
             renderHoldingsTable(holdings);
             return;
         }
-
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
             openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
@@ -367,6 +391,27 @@ function setupMainAppEventListeners() {
         }
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+
+    document.getElementById('twr-chart-controls').addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-range-btn');
+        if (btn) handleChartRangeChange('twr', btn.dataset.range);
+    });
+    document.getElementById('asset-chart-controls').addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-range-btn');
+        if (btn) handleChartRangeChange('asset', btn.dataset.range);
+    });
+    
+    ['twr', 'asset'].forEach(chartType => {
+        const startInput = document.getElementById(`${chartType}-start-date`);
+        const endInput = document.getElementById(`${chartType}-end-date`);
+        const updateFunc = () => {
+            if (startInput.value && endInput.value) {
+                handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
+            }
+        };
+        startInput.addEventListener('change', updateFunc);
+        endInput.addEventListener('change', updateFunc);
+    });
 }
 
 export function initializeAppUI() {
