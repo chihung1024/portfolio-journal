@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.4.4
+// == UI 渲染與互動模組 (ui.js) v3.4.6
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -150,62 +150,22 @@ export function renderHoldingsTable(currentHoldings) {
     const { stockNotes, holdingsSort } = getState();
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
-
     let holdingsArray = Object.values(currentHoldings);
     if (holdingsArray.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
         return;
     }
-
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
-
     holdingsArray.forEach(h => {
         h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
     });
-
     holdingsArray.sort((a, b) => {
         const valA = a[holdingsSort.key] || 0;
         const valB = b[holdingsSort.key] || 0;
-        if (holdingsSort.order === 'asc') {
-            return valA - valB;
-        } else {
-            return valB - valA;
-        }
+        return holdingsSort.order === 'asc' ? valA - valB : valB - valA;
     });
-    
-    const getSortArrow = (key) => {
-        if (holdingsSort.key === key) {
-            return holdingsSort.order === 'desc' ? '▼' : '▲';
-        }
-        return '';
-    };
-
-    const tableHtml = `
-        <div class="overflow-x-auto hidden sm:block">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="returnRate">報酬率 ${getSortArrow('returnRate')}</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    ${holdingsArray.map(h => {
-                        const note = stockNotes[h.symbol] || {};
-                        const decimals = isTwStock(h.symbol) ? 0 : 2;
-                        const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-                        
-                        let priceClass = '';
-                        if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800';
-                        else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
-
-                        return `
+    const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
+    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="returnRate">報酬率 ${getSortArrow('returnRate')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { const note = stockNotes[h.symbol] || {}; const decimals = isTwStock(h.symbol) ? 0 : 2; const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'; let priceClass = ''; if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800'; else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800'; return `
                             <tr class="hover:bg-gray-50">
                                 <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
                                     ${h.symbol}
@@ -218,36 +178,13 @@ export function renderHoldingsTable(currentHoldings) {
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</td>
                                 <td class="px-6 py-4 whitespace-nowrap">${h.portfolioPercentage.toFixed(2)}%</td>
-                            </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
-        </div>
-    `;
-
-    const cardsHtml = `
-        <div class="grid grid-cols-1 gap-4 sm:hidden">
-            ${holdingsArray.map(h => {
-                const note = stockNotes[h.symbol] || {};
-                const decimals = isTwStock(h.symbol) ? 0 : 2;
-                const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-
-                let priceClass = '';
-                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
-                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
-                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
-                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
-                }
-
-                return `
+                            </tr>`; }).join('')}</tbody></table></div>`;
+    const cardsHtml = `<div class="grid grid-cols-1 gap-4 sm:hidden">${holdingsArray.map(h => { const note = stockNotes[h.symbol] || {}; const decimals = isTwStock(h.symbol) ? 0 : 2; const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600'; let priceClass = ''; if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1'; else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1'; return `
                     <div class="bg-white rounded-lg shadow p-4 space-y-3">
                         <div class="flex justify-between items-center">
                             <div class="flex items-center">
                                 <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
-                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
-                                </button>
+                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
                             </div>
                             <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                         </div>
@@ -259,12 +196,7 @@ export function renderHoldingsTable(currentHoldings) {
                              <div><p class="text-gray-500">平均成本</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
                              <div><p class="text-gray-500">持股佔比</p><p class="font-medium text-gray-800">${h.portfolioPercentage.toFixed(2)}%</p></div>
                         </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-
+                    </div>`; }).join('')}</div>`;
     container.innerHTML = tableHtml + cardsHtml;
     lucide.createIcons();
 }
@@ -387,17 +319,32 @@ export function updateAssetChart() {
 export function updateTwrChart(benchmarkSymbol) {
     const { twrChart, twrHistory, benchmarkHistory, twrDateRange } = getState();
     if (!twrChart) return;
+    
     const filteredTwrHistory = filterHistoryByDateRange(twrHistory, twrDateRange);
     const filteredBenchmarkHistory = filterHistoryByDateRange(benchmarkHistory, twrDateRange);
+
     const rebaseSeries = (history) => {
         if (!history || Object.keys(history).length === 0) return [];
         const sortedEntries = Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0]));
         const baseValue = sortedEntries[0][1];
         return sortedEntries.map(([date, value]) => [ new Date(date).getTime(), value - baseValue ]);
     };
+    
+    const isShowingFullHistory = Object.keys(twrHistory).length === Object.keys(filteredTwrHistory).length;
+    
+    let portfolioData;
+    if (isShowingFullHistory) {
+        const sortedEntries = Object.entries(filteredTwrHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+        portfolioData = sortedEntries.map(([date, value]) => [new Date(date).getTime(), value]);
+    } else {
+        portfolioData = rebaseSeries(filteredTwrHistory);
+    }
+    
+    const rebasedBenchmarkData = rebaseSeries(filteredBenchmarkHistory);
+    
     twrChart.updateSeries([
-        { name: '投資組合', data: rebaseSeries(filteredTwrHistory) },
-        { name: `Benchmark (${benchmarkSymbol || '...'})`, data: rebaseSeries(filteredBenchmarkHistory) }
+        { name: '投資組合', data: portfolioData },
+        { name: `Benchmark (${benchmarkSymbol || '...'})`, data: rebasedBenchmarkData }
     ]);
 }
 
