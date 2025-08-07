@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v2.8.1
+// == UI 渲染與互動模組 (ui.js) v3.1.0
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -35,34 +35,58 @@ function findFxRateForFrontend(currency, dateStr) {
 // --- 主要 UI 函式 ---
 
 export function renderHoldingsTable(currentHoldings) {
-    const { stockNotes, confirmedDividends } = getState();
+    const { stockNotes, confirmedDividends, holdingsSort } = getState();
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
 
-    const holdingsArray = Object.values(currentHoldings);
+    let holdingsArray = Object.values(currentHoldings);
     if (holdingsArray.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
         return;
     }
-    holdingsArray.sort((a,b) => b.marketValueTWD - a.marketValueTWD);
+
+    const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
+
+    // 在排序前先加上 portfolioPercentage 屬性
+    holdingsArray.forEach(h => {
+        h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
+    });
+
+    holdingsArray.sort((a, b) => {
+        const valA = a[holdingsSort.key] || 0;
+        const valB = b[holdingsSort.key] || 0;
+        if (holdingsSort.order === 'asc') {
+            return valA - valB;
+        } else {
+            return valB - valA;
+        }
+    });
 
     const dividendsBySymbol = confirmedDividends.reduce((map, div) => {
         map[div.symbol] = true;
         return map;
     }, {});
+    
+    const getSortArrow = (key) => {
+        if (holdingsSort.key === key) {
+            return holdingsSort.order === 'desc' ? '▼' : '▲';
+        }
+        return '';
+    };
 
     const tableHtml = `
-        <div class="overflow-x-auto hidden sm:block">
+        <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本(原幣)</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價(原幣)</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">市值(TWD)</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">未實現損益(TWD)</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">報酬率</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="returnRate">報酬率 ${getSortArrow('returnRate')}</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
@@ -73,24 +97,15 @@ export function renderHoldingsTable(currentHoldings) {
                         const hasDividends = !!dividendsBySymbol[h.symbol];
                         
                         let priceClass = '';
-                        if (note.target_price && h.currentPriceOriginal >= note.target_price) {
-                            priceClass = 'bg-green-100 text-green-800';
-                        } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
-                            priceClass = 'bg-red-100 text-red-800';
-                        }
+                        if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800';
+                        else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
 
                         return `
                             <tr class="hover:bg-gray-50">
                                 <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
                                     ${h.symbol}
-                                    <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
-                                        <i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i>
-                                    </button>
-                                    ${hasDividends ? `
-                                    <button class="ml-1.5 open-dividend-history-btn" data-symbol="${h.symbol}">
-                                        <i data-lucide="hand-coins" class="w-4 h-4 text-gray-400 hover:text-amber-600"></i>
-                                    </button>
-                                    ` : ''}
+                                    <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
+                                    ${hasDividends ? `<button class="ml-1.5 open-dividend-history-btn" data-symbol="${h.symbol}"><i data-lucide="hand-coins" class="w-4 h-4 text-gray-400 hover:text-amber-600"></i></button>` : ''}
                                 </td>
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.quantity, decimals)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
@@ -98,6 +113,7 @@ export function renderHoldingsTable(currentHoldings) {
                                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
                                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</td>
+                                <td class="px-6 py-4 whitespace-nowrap">${h.portfolioPercentage.toFixed(2)}%</td>
                             </tr>
                         `;
                     }).join('')}
@@ -105,74 +121,42 @@ export function renderHoldingsTable(currentHoldings) {
             </table>
         </div>
     `;
-
-    const cardsHtml = `
-        <div class="grid grid-cols-1 gap-4 sm:hidden">
-            ${holdingsArray.map(h => {
-                const note = stockNotes[h.symbol] || {};
-                const decimals = isTwStock(h.symbol) ? 0 : 2;
-                const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-                const hasDividends = !!dividendsBySymbol[h.symbol];
-
-                let priceClass = '';
-                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
-                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
-                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
-                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
-                }
-
-                return `
-                    <div class="bg-white rounded-lg shadow p-4 space-y-3">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center">
-                                <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
-                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
-                                </button>
-                                ${hasDividends ? `
-                                <button class="ml-1.5 open-dividend-history-btn" data-symbol="${h.symbol}">
-                                    <i data-lucide="hand-coins" class="w-5 h-5 text-gray-400 hover:text-amber-600"></i>
-                                </button>
-                                ` : ''}
-                            </div>
-                            <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
-                        </div>
-                        <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                            <div><p class="text-gray-500">市值 (TWD)</p><p class="font-medium text-gray-800">${formatNumber(h.marketValueTWD, 0)}</p></div>
-                            <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</p></div>
-                            <div><p class="text-gray-500">股數</p><p class="font-medium text-gray-800">${formatNumber(h.quantity, decimals)}</p></div>
-                            <div><p class="text-gray-500">現價 (${h.currency})</p><p class="font-medium text-gray-800"><span class="${priceClass}">${formatNumber(h.currentPriceOriginal, 2)}</span></p></div>
-                             <div><p class="text-gray-500">平均成本</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
-                             <div><p class="text-gray-500">總成本 (TWD)</p><p class="font-medium text-gray-800">${formatNumber(h.totalCostTWD, 0)}</p></div>
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-
-    container.innerHTML = tableHtml + cardsHtml;
+    container.innerHTML = tableHtml;
     lucide.createIcons();
 }
 
 export function renderTransactionsTable() {
-    const { transactions } = getState();
-    const tableBody = document.getElementById('transactions-table-body');
-    tableBody.innerHTML = '';
-    if (transactions.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有交易紀錄。</td></tr>`;
-        return;
-    }
-    for (const t of transactions) {
-        const row = document.createElement('tr');
-        row.className = "hover:bg-gray-50";
-        const transactionDate = t.date.split('T')[0];
-        const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
-        const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+    const { transactions, transactionFilter } = getState();
+    const container = document.getElementById('transactions-tab');
 
-        row.innerHTML = `<td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td><td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td>`;
-        tableBody.appendChild(row);
-    };
+    const uniqueSymbols = ['all', ...Array.from(new Set(transactions.map(t => t.symbol)))];
+    
+    const filterHtml = `
+        <div class="mb-4 flex items-center space-x-2">
+            <label for="transaction-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label>
+            <select id="transaction-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                ${uniqueSymbols.map(s => `<option value="${s}" ${transactionFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}
+            </select>
+        </div>
+    `;
+
+    const filteredTransactions = transactionFilter === 'all' 
+        ? transactions 
+        : transactions.filter(t => t.symbol === transactionFilter);
+
+    const tableHtml = `
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">
+                ${filteredTransactions.length > 0 ? filteredTransactions.map(t => {
+                    const transactionDate = t.date.split('T')[0];
+                    const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
+                    const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+                    return `<tr class="hover:bg-gray-50"><td class="px-6 py-4">${transactionDate}</td><td class="px-6 py-4 font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`;
+                }).join('') : `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有符合條件的交易紀錄。</td></tr>`}
+            </tbody></table>
+        </div>
+    `;
+    container.innerHTML = filterHtml + tableHtml;
 }
 
 export function renderSplitsTable() {
@@ -192,11 +176,12 @@ export function renderSplitsTable() {
 }
 
 export function renderDividendsManagementTab(pending, confirmed) {
+    const { dividendFilter } = getState();
     const container = document.getElementById('dividends-tab');
     
     const pendingHtml = `
         <div class="mb-8">
-            <div class="flex justify-between items-center mb-4">
+            <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
                 <h3 class="text-lg font-semibold text-gray-800">待確認配息</h3>
                 ${pending.length > 0 ? `
                 <button id="bulk-confirm-dividends-btn" class="btn bg-teal-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-teal-700 flex items-center space-x-2">
@@ -232,9 +217,24 @@ export function renderDividendsManagementTab(pending, confirmed) {
         </div>
     `;
 
+    const confirmedSymbols = ['all', ...Array.from(new Set(confirmed.map(c => c.symbol)))];
+    const filterHtml = `
+        <div class="mb-4 flex items-center space-x-2">
+            <label for="dividend-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label>
+            <select id="dividend-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                ${confirmedSymbols.map(s => `<option value="${s}" ${dividendFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}
+            </select>
+        </div>
+    `;
+
+    const filteredConfirmed = dividendFilter === 'all'
+        ? confirmed
+        : confirmed.filter(c => c.symbol === dividendFilter);
+
     const confirmedHtml = `
         <div>
             <h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>
+            ${filterHtml}
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
                      <thead class="bg-gray-50"><tr>
@@ -245,18 +245,18 @@ export function renderDividendsManagementTab(pending, confirmed) {
                         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
                      </tr></thead>
                      <tbody class="bg-white divide-y divide-gray-200">
-                        ${confirmed.length > 0 ? confirmed.map((c, index) => `
+                        ${filteredConfirmed.length > 0 ? filteredConfirmed.map((c, index) => `
                         <tr class="hover:bg-gray-50">
                             <td class="px-4 py-4">${c.pay_date.split('T')[0]}</td>
                             <td class="px-4 py-4 font-medium">${c.symbol}</td>
                             <td class="px-4 py-4">${formatNumber(c.total_amount, 2)} <span class="text-xs text-gray-500">${c.currency}</span></td>
                             <td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td>
                             <td class="px-4 py-4 text-center">
-                                <button data-index="${index}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
+                                <button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
                                 <button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button>
                             </td>
                         </tr>
-                        `).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有已確認的配息紀錄。</td></tr>`}
+                        `).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}
                      </tbody>
                 </table>
             </div>
@@ -386,7 +386,9 @@ export function openModal(modalId, isEdit = false, data = null) {
         document.getElementById('stop-loss-price').value = note.stop_loss_price || '';
         document.getElementById('notes-content').value = note.notes || '';
     } else if (modalId === 'dividend-modal') {
-        const record = isEdit ? confirmedDividends[data.index] : pendingDividends[data.index];
+        const record = isEdit 
+            ? confirmedDividends.find(d => d.id === data.id)
+            : pendingDividends[data.index];
         if (!record) return;
 
         document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`;
@@ -471,11 +473,11 @@ export function switchTab(tabName) {
     document.getElementById(`${tabName}-tab`).classList.remove('hidden'); 
     document.querySelectorAll('.tab-item').forEach(el => { 
         el.classList.remove('border-indigo-500', 'text-indigo-600'); 
-        el.classList.add('border-transparent', 'text-gray-500'); 
+        el.classList.add('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300'); 
     }); 
     const activeTab = document.querySelector(`[data-tab="${tabName}"]`); 
     if (activeTab) {
         activeTab.classList.add('border-indigo-500', 'text-indigo-600'); 
-        activeTab.classList.remove('border-transparent', 'text-gray-500'); 
+        activeTab.classList.remove('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300'); 
     }
 }
