@@ -275,7 +275,7 @@ async function handleDeleteDividend(button) {
 }
 
 /**
- * [修改] 設置**通用**的事件監聽器 (無論登入狀態)
+ * 設置**通用**的事件監聽器 (無論登入狀態)
  */
 function setupCommonEventListeners() {
     // 登入/註冊相關 (在 #auth-container 中)
@@ -292,10 +292,10 @@ function setupCommonEventListeners() {
 }
 
 /**
- * [修改] 只有在登入後，才設置**主應用**的事件監聽器
+ * 只有在登入後，才設置**主應用**的事件監聽器
  */
 function setupMainAppEventListeners() {
-    // [修正] 將 logout-btn 的監聽移到此處
+    // 將 logout-btn 的監聽移到此處
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
@@ -316,8 +316,6 @@ function setupMainAppEventListeners() {
     const manageSplitsBtn = document.getElementById('manage-splits-btn');
     if (manageSplitsBtn) {
         manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
-    } else {
-        console.warn("Element with id 'manage-splits-btn' was not found.");
     }
     
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
