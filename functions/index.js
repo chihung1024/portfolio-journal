@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 安全性強化版 (v3.5.5 - CORS 修正完整版)
+// == GCP Cloud Function 安全性強化版 (v3.7.0 - 速率限制功能)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -15,6 +15,9 @@ try {
 } catch (e) {
   console.error('Firebase Admin SDK 初始化失敗:', e);
 }
+
+// [新增] 初始化 Realtime Database 的存取權
+const db = admin.database();
 
 // --- 平台設定 ---
 const D1_WORKER_URL = process.env.D1_WORKER_URL;
@@ -47,6 +50,41 @@ const d1Client = {
 };
 
 // --- 安全性中介軟體 (Middleware) ---
+
+// [新增] 速率限制中介軟體
+const RATE_LIMIT_COUNT = 100; // 每分鐘最多請求次數
+const RATE_LIMIT_WINDOW = 60 * 1000; // 視窗大小：60秒
+
+const rateLimiter = async (req, res, next) => {
+    // 使用驗證過的 uid 作為唯一識別碼，比 IP 更可靠
+    const identifier = req.user.uid; 
+    const now = Date.now();
+    const ref = db.ref(`rateLimits/${identifier}`);
+
+    try {
+        const snapshot = await ref.once('value');
+        const timestamps = snapshot.val() || [];
+
+        // 過濾掉時間視窗之外的舊紀錄
+        const recentTimestamps = timestamps.filter(ts => now - ts < RATE_LIMIT_WINDOW);
+
+        if (recentTimestamps.length >= RATE_LIMIT_COUNT) {
+            console.warn(`速率限制觸發: ${identifier}`);
+            return res.status(429).send({ success: false, message: '請求過於頻繁，請稍後再試。' });
+        }
+
+        // 加入本次請求的時間戳並更新回資料庫
+        recentTimestamps.push(now);
+        await ref.set(recentTimestamps);
+
+        next(); // 通過檢查，繼續執行主要邏輯
+    } catch (error) {
+        console.error("速率限制器錯誤:", error);
+        // 如果速率限制器本身出錯，為求穩定先放行請求，避免阻斷正常用戶
+        next();
+    }
+};
+
 const verifyFirebaseToken = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -93,7 +131,7 @@ const userDividendSchema = z.object({
     notes: z.string().optional().nullable(),
 });
 
-// --- 所有核心函式 ---
+// --- 所有核心函式 (fetchAndSaveMarketDataRange, ensureDataCoverage, performRecalculation 等，保持不變) ---
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         const hist = await yahooFinance.historical(symbol, { period1: startDate, period2: endDate, interval: '1d', autoAdjust: false, backAdjust: false });
@@ -201,7 +239,7 @@ function createCashflowsForXirr(evts, holdings, market) { const flows = []; evts
 function calculateXIRR(flows) { if (flows.length < 2) return null; const amounts = flows.map(f => f.amount); if (!amounts.some(v => v < 0) || !amounts.some(v => v > 0)) return null; const dates = flows.map(f => f.date); const epoch = dates[0].getTime(); const years = dates.map(d => (d.getTime() - epoch) / (365.25 * 24 * 60 * 60 * 1000)); let guess = 0.1, npv; for (let i = 0; i < 50; i++) { if (1 + guess <= 0) { guess /= -2; continue; } npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0); if (Math.abs(npv) < 1e-6) return guess; const derivative = amounts.reduce((sum, amount, j) => sum - years[j] * amount / Math.pow(1 + guess, years[j] + 1), 0); if (Math.abs(derivative) < 1e-9) break; guess -= npv / derivative; } return (npv && Math.abs(npv) < 1e-6) ? guess : null; }
 function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL = 0; for (const e of evts) { const sym = e.symbol.toUpperCase(); if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 }; switch (e.eventType) { case "transaction": { const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); if (e.type === "buy") { pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) }); } else { let sellQty = e.quantity; let costOfGoodsSoldTWD = 0; while (sellQty > 0 && pf[sym].lots.length > 0) { const lot = pf[sym].lots[0]; const qtyToSell = Math.min(sellQty, lot.quantity); costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD; lot.quantity -= qtyToSell; sellQty -= qtyToSell; if (lot.quantity < 1e-9) pf[sym].lots.shift(); } const realized = costTWD - costOfGoodsSoldTWD; totalRealizedPL += realized; pf[sym].realizedCostTWD += costOfGoodsSoldTWD; pf[sym].realizedPLTWD += realized; } break; } case "split": { pf[sym].lots.forEach(l => { l.quantity *= e.ratio; l.pricePerShareTWD /= e.ratio; l.pricePerShareOriginal /= e.ratio; }); break; } case "confirmed_dividend": { const fx = findFxRate(market, e.currency, toDate(e.date)); const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; break; } case "implicit_dividend": { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; } break; } } } const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts); const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market); const xirr = calculateXIRR(xirrFlows); const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0); const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0); const totalReturnValue = totalRealizedPL + totalUnrealizedPL; const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0; return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate }; }
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v3.5.3) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v3.7.0) ---`);
     try {
         const [txs, splits, controlsData, userDividends] = await Promise.all([ d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]), d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]), d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']), d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]), ]);
         if (txs.length === 0) { await d1Client.batch([{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }, { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] }, { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] }]); return; }
@@ -270,115 +308,116 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
 
     await verifyFirebaseToken(req, res, async () => {
-        try {
-            const uid = req.user.uid; 
-            const { action, data } = req.body;
-            if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
-
-            switch (action) {
-                case 'get_data': {
-                    const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-                        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
-                        d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid])
-                    ]);
-                    const summaryRow = summaryResult[0] || {};
-                    return res.status(200).send({ success: true, data: {
-                        summary: summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {},
-                        holdings, transactions: txs, splits, stockNotes,
-                        history: summaryRow.history ? JSON.parse(summaryRow.history) : {},
-                        twrHistory: summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {},
-                        benchmarkHistory: summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {},
-                    }});
-                }
-                case 'add_transaction': case 'edit_transaction': {
-                    const isEditing = action === 'edit_transaction';
-                    const txData = transactionSchema.parse(isEditing ? data.txData : data);
-                    const txId = isEditing ? data.txId : uuidv4();
-                    if (isEditing) await d1Client.query(`UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]);
-                    else await d1Client.query(`INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]);
-                    await performRecalculation(uid);
-                    return res.status(200).send({ success: true, message: '操作成功。', id: txId });
-                }
-                case 'delete_transaction': {
-                    await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '交易已刪除。' });
-                }
-                case 'update_benchmark': {
-                    await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '基準已更新。' });
-                }
-                case 'add_split': {
-                    const splitData = splitSchema.parse(data); const newSplitId = uuidv4();
-                    await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
-                }
-                case 'delete_split': {
-                    await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已刪除。' });
-                }
-                case 'get_dividends_for_management': {
-                    const [txs, allDividendsHistory, userDividends] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-                        d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC'),
-                        d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid])
-                    ]);
-                    if (txs.length === 0) return res.status(200).send({ success: true, data: { pendingDividends: [], confirmedDividends: userDividends } });
-                    const holdings = {}; let txIndex = 0; const confirmedKeys = new Set(userDividends.map(d => `${d.symbol}_${d.ex_dividend_date.split('T')[0]}`));
-                    const pendingDividends = []; const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol))];
-                    allDividendsHistory.forEach(histDiv => {
-                        const divSymbol = histDiv.symbol; if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
-                        const exDateStr = histDiv.date.split('T')[0]; if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
-                        const exDateMinusOne = new Date(exDateStr); exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-                        while(txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
-                            const tx = txs[txIndex]; holdings[tx.symbol] = (holdings[tx.symbol] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity); txIndex++;
-                        }
-                        const quantity = holdings[divSymbol] || 0;
-                        if (quantity > 0) {
-                             const currency = txs.find(t => t.symbol === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
-                             pendingDividends.push({ symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend, quantity_at_ex_date: quantity, currency: currency });
-                        }
-                    });
-                    return res.status(200).send({ success: true, data: { pendingDividends: pendingDividends.sort((a,b) => new Date(b.ex_dividend_date) - new Date(a.ex_dividend_date)), confirmedDividends: userDividends }});
-                }
-                case 'save_user_dividend': {
-                    const parsedData = userDividendSchema.parse(data); const { id, ...divData } = parsedData; const dividendId = id || uuidv4();
-                    if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
-                    else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
-                }
-                case 'bulk_confirm_all_dividends': {
-                    const pendingDividends = data.pendingDividends || [];
-                    if (pendingDividends.length === 0) return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
-                    const dbOps = [];
-                    for (const pending of pendingDividends) {
-                        const payDate = new Date(pending.ex_dividend_date); payDate.setMonth(payDate.getMonth() + 1); const payDateStr = payDate.toISOString().split('T')[0];
-                        const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-                        dbOps.push({ sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`, params: [uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]});
+        await rateLimiter(req, res, async () => {
+            try {
+                const uid = req.user.uid; 
+                const { action, data } = req.body;
+                if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+                switch (action) {
+                    case 'get_data': {
+                        const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
+                            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                            d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+                            d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
+                            d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
+                            d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid])
+                        ]);
+                        const summaryRow = summaryResult[0] || {};
+                        return res.status(200).send({ success: true, data: {
+                            summary: summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {},
+                            holdings, transactions: txs, splits, stockNotes,
+                            history: summaryRow.history ? JSON.parse(summaryRow.history) : {},
+                            twrHistory: summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {},
+                            benchmarkHistory: summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {},
+                        }});
                     }
-                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid); }
-                    return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
+                    case 'add_transaction': case 'edit_transaction': {
+                        const isEditing = action === 'edit_transaction';
+                        const txData = transactionSchema.parse(isEditing ? data.txData : data);
+                        const txId = isEditing ? data.txId : uuidv4();
+                        if (isEditing) await d1Client.query(`UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]);
+                        else await d1Client.query(`INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]);
+                        await performRecalculation(uid);
+                        return res.status(200).send({ success: true, message: '操作成功。', id: txId });
+                    }
+                    case 'delete_transaction': {
+                        await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '交易已刪除。' });
+                    }
+                    case 'update_benchmark': {
+                        await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '基準已更新。' });
+                    }
+                    case 'add_split': {
+                        const splitData = splitSchema.parse(data); const newSplitId = uuidv4();
+                        await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
+                    }
+                    case 'delete_split': {
+                        await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已刪除。' });
+                    }
+                    case 'get_dividends_for_management': {
+                        const [txs, allDividendsHistory, userDividends] = await Promise.all([
+                            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
+                            d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC'),
+                            d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid])
+                        ]);
+                        if (txs.length === 0) return res.status(200).send({ success: true, data: { pendingDividends: [], confirmedDividends: userDividends } });
+                        const holdings = {}; let txIndex = 0; const confirmedKeys = new Set(userDividends.map(d => `${d.symbol}_${d.ex_dividend_date.split('T')[0]}`));
+                        const pendingDividends = []; const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol))];
+                        allDividendsHistory.forEach(histDiv => {
+                            const divSymbol = histDiv.symbol; if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
+                            const exDateStr = histDiv.date.split('T')[0]; if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
+                            const exDateMinusOne = new Date(exDateStr); exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
+                            while(txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
+                                const tx = txs[txIndex]; holdings[tx.symbol] = (holdings[tx.symbol] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity); txIndex++;
+                            }
+                            const quantity = holdings[divSymbol] || 0;
+                            if (quantity > 0) {
+                                 const currency = txs.find(t => t.symbol === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
+                                 pendingDividends.push({ symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend, quantity_at_ex_date: quantity, currency: currency });
+                            }
+                        });
+                        return res.status(200).send({ success: true, data: { pendingDividends: pendingDividends.sort((a,b) => new Date(b.ex_dividend_date) - new Date(a.ex_dividend_date)), confirmedDividends: userDividends }});
+                    }
+                    case 'save_user_dividend': {
+                        const parsedData = userDividendSchema.parse(data); const { id, ...divData } = parsedData; const dividendId = id || uuidv4();
+                        if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
+                        else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
+                    }
+                    case 'bulk_confirm_all_dividends': {
+                        const pendingDividends = data.pendingDividends || [];
+                        if (pendingDividends.length === 0) return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
+                        const dbOps = [];
+                        for (const pending of pendingDividends) {
+                            const payDate = new Date(pending.ex_dividend_date); payDate.setMonth(payDate.getMonth() + 1); const payDateStr = payDate.toISOString().split('T')[0];
+                            const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
+                            dbOps.push({ sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`, params: [uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]});
+                        }
+                        if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid); }
+                        return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
+                    }
+                    case 'delete_user_dividend': {
+                        await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
+                        await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
+                    }
+                    case 'save_stock_note': {
+                        const { symbol, target_price, stop_loss_price, notes } = data;
+                        const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
+                        if (existing.length > 0) await d1Client.query('UPDATE user_stock_notes SET target_price = ?, stop_loss_price = ?, notes = ?, last_updated = ? WHERE id = ?', [target_price, stop_loss_price, notes, new Date().toISOString(), existing[0].id]);
+                        else await d1Client.query('INSERT INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)', [uuidv4(), uid, symbol, target_price, stop_loss_price, notes, new Date().toISOString()]);
+                        return res.status(200).send({ success: true, message: '筆記已儲存。' });
+                    }
+                    default:
+                        return res.status(400).send({ success: false, message: '未知的操作' });
                 }
-                case 'delete_user_dividend': {
-                    await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
-                }
-                case 'save_stock_note': {
-                    const { symbol, target_price, stop_loss_price, notes } = data;
-                    const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
-                    if (existing.length > 0) await d1Client.query('UPDATE user_stock_notes SET target_price = ?, stop_loss_price = ?, notes = ?, last_updated = ? WHERE id = ?', [target_price, stop_loss_price, notes, new Date().toISOString(), existing[0].id]);
-                    else await d1Client.query('INSERT INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)', [uuidv4(), uid, symbol, target_price, stop_loss_price, notes, new Date().toISOString()]);
-                    return res.status(200).send({ success: true, message: '筆記已儲存。' });
-                }
-                default:
-                    return res.status(400).send({ success: false, message: '未知的操作' });
+            } catch (error) {
+                console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
+                if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });
+                res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
             }
-        } catch (error) {
-            console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
-            if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });
-            res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
-        }
+        });
     });
 });
