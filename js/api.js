@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.4.0
+// == API 通訊模組 (api.js) v3.4.3
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -12,7 +12,8 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
-    showNotification
+    showNotification,
+    getDateRangeForPreset
 } from './ui.js';
 
 /**
@@ -101,6 +102,18 @@ export async function loadPortfolioData() {
         updateTwrChart(benchmarkSymbol);
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+
+        // [修改] 載入完成後，自動填入圖表的預設起迄日期
+        const { portfolioHistory, twrHistory } = getState();
+
+        const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
+        document.getElementById('asset-start-date').value = assetDates.startDate;
+        document.getElementById('asset-end-date').value = assetDates.endDate;
+
+        const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
+        document.getElementById('twr-start-date').value = twrDates.startDate;
+        document.getElementById('twr-end-date').value = twrDates.endDate;
+        
         showNotification('success', '資料同步完成！');
     } catch (error) {
         console.error('Failed to load portfolio data:', error);
