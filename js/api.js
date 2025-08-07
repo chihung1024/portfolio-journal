@@ -1,8 +1,7 @@
 // =========================================================================================
-// == API 通訊模組 (api.js)
+// == API 通訊模組 (api.js) v3.1.0
 // =========================================================================================
 
-// [新增] 從 Firebase SDK 引入 getAuth，用來獲取當前使用者
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
@@ -29,17 +28,14 @@ export async function apiRequest(action, data) {
     }
 
     try {
-        // [關鍵修改] 非同步獲取當前使用者的 Firebase ID Token
         const token = await user.getIdToken();
-
-        // [關鍵修改] payload 中不再需要手動放入 uid
         const payload = { action, data };
 
         const response = await fetch(API.URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`, // [新增] 將 Token 作為 Bearer Token 加入到標頭中
+                'Authorization': `Bearer ${token}`,
                 'X-API-KEY': API.KEY
             },
             body: JSON.stringify(payload)
@@ -47,7 +43,6 @@ export async function apiRequest(action, data) {
         
         const result = await response.json();
         if (!response.ok) {
-            // 如果認證失敗，後端會回傳 401 或 403
             if (response.status === 401 || response.status === 403) {
                  throw new Error(result.message || '認證失敗，您的登入可能已過期，請嘗試重新整理頁面。');
             }
@@ -57,7 +52,6 @@ export async function apiRequest(action, data) {
 
     } catch (error) {
         console.error('API 請求失敗:', error);
-        // 將錯誤直接拋出，讓呼叫它的地方 (例如 handleFormSubmit) 可以捕獲並顯示通知
         throw error;
     }
 }
@@ -77,23 +71,23 @@ export async function loadPortfolioData() {
         
         const portfolioData = result.data;
         
-        // [修改] 將 stockNotes 轉換為以 symbol 為 key 的物件，方便查找
         const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
             map[note.symbol] = note;
             return map;
         }, {});
 
-        // 更新全域狀態
+        const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+            obj[item.symbol] = item; return obj;
+        }, {});
+        
+        // [修改] 將持股與交易紀錄存入全域狀態
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
             marketDataForFrontend: portfolioData.marketData || {},
-            stockNotes: stockNotesMap
+            stockNotes: stockNotesMap,
+            holdings: holdingsObject // 將持股資料存起來，供排序使用
         });
-        
-        const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
         
         renderHoldingsTable(holdingsObject);
         renderTransactionsTable(); 
