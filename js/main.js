@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v2.8.2 (修正版)
+// == 主程式進入點 (main.js) v2.8.3 (最終修正版)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -20,7 +20,7 @@ import {
     openDividendHistoryModal,
 } from './ui.js';
 
-// --- 事件處理函式 (保持不變) ---
+// --- 事件處理函式 (此區塊無變更) ---
 
 function handleEdit(button) {
     const { transactions } = getState();
@@ -275,13 +275,14 @@ async function handleDeleteDividend(button) {
 }
 
 /**
- * [修改] 設置所有**非主內容**的事件監聽器
+ * [修改] 設置**通用**的事件監聽器 (無論登入狀態)
  */
 function setupCommonEventListeners() {
+    // 登入/註冊相關 (在 #auth-container 中)
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
-    document.getElementById('logout-btn').addEventListener('click', handleLogout);
-
+    
+    // 通用 Modal 相關 (總是在 DOM 中)
     document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
     document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
         const { confirmCallback } = getState();
@@ -291,9 +292,12 @@ function setupCommonEventListeners() {
 }
 
 /**
- * [新增] 只有在登入後，才設置主內容的事件監聽器
+ * [修改] 只有在登入後，才設置**主應用**的事件監聽器
  */
 function setupMainAppEventListeners() {
+    // [修正] 將 logout-btn 的監聽移到此處
+    document.getElementById('logout-btn').addEventListener('click', handleLogout);
+
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
@@ -309,12 +313,13 @@ function setupMainAppEventListeners() {
         }
     });
 
-    // The 'manage-splits-btn' was removed in a previous step, but we add it back for completeness.
-    // If you don't have this button, you can remove these lines.
     const manageSplitsBtn = document.getElementById('manage-splits-btn');
     if (manageSplitsBtn) {
         manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
+    } else {
+        console.warn("Element with id 'manage-splits-btn' was not found.");
     }
+    
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
     document.getElementById('splits-table-body').addEventListener('click', (e) => { 
@@ -382,7 +387,7 @@ function setupMainAppEventListeners() {
 // --- 應用程式初始化 ---
 
 /**
- * [新增] 主應用 UI 初始化函式，由 auth.js 呼叫
+ * 主應用 UI 初始化函式，由 auth.js 呼叫
  * 使用 isAppInitialized 旗標確保只執行一次
  */
 export function initializeAppUI() {
