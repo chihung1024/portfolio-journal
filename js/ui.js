@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.4.2
+// == UI 渲染與互動模組 (ui.js) v3.4.3
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -98,7 +98,7 @@ export function getDateRangeForPreset(history, dateRange) {
     const firstDate = sortedDates[0];
     const lastDate = sortedDates[sortedDates.length - 1];
 
-    const endDate = dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
+    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
     let startDate;
 
     switch (dateRange.type) {
@@ -145,41 +145,51 @@ export function getDateRangeForPreset(history, dateRange) {
     };
 }
 
+// [新增] 動態日期格式化函式工廠
+function createDynamicDateFormatter() {
+    let lastYear = null;
+    let lastMonth = null;
+
+    return function(value) {
+        const date = new Date(value);
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+        const day = date.getDate();
+
+        if (year !== lastYear) {
+            lastYear = year;
+            lastMonth = month;
+            return year;
+        }
+        if (month !== lastMonth) {
+            lastMonth = month;
+            return month + '月';
+        }
+        return day;
+    };
+}
+
 
 // --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
     const { stockNotes, holdingsSort } = getState();
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
-
     let holdingsArray = Object.values(currentHoldings);
     if (holdingsArray.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
         return;
     }
-
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
-
     holdingsArray.forEach(h => {
         h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
     });
-
     holdingsArray.sort((a, b) => {
         const valA = a[holdingsSort.key] || 0;
         const valB = b[holdingsSort.key] || 0;
-        if (holdingsSort.order === 'asc') {
-            return valA - valB;
-        } else {
-            return valB - valA;
-        }
+        return holdingsSort.order === 'asc' ? valA - valB : valB - valA;
     });
-    
-    const getSortArrow = (key) => {
-        if (holdingsSort.key === key) {
-            return holdingsSort.order === 'desc' ? '▼' : '▲';
-        }
-        return '';
-    };
+    const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
 
     const tableHtml = `
         <div class="overflow-x-auto hidden sm:block">
@@ -201,11 +211,9 @@ export function renderHoldingsTable(currentHoldings) {
                         const note = stockNotes[h.symbol] || {};
                         const decimals = isTwStock(h.symbol) ? 0 : 2;
                         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-                        
                         let priceClass = '';
                         if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800';
                         else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
-
                         return `
                             <tr class="hover:bg-gray-50">
                                 <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
@@ -226,29 +234,21 @@ export function renderHoldingsTable(currentHoldings) {
             </table>
         </div>
     `;
-
     const cardsHtml = `
         <div class="grid grid-cols-1 gap-4 sm:hidden">
             ${holdingsArray.map(h => {
                 const note = stockNotes[h.symbol] || {};
                 const decimals = isTwStock(h.symbol) ? 0 : 2;
                 const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-
                 let priceClass = '';
-                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
-                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
-                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
-                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
-                }
-
+                if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1';
+                else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1';
                 return `
                     <div class="bg-white rounded-lg shadow p-4 space-y-3">
                         <div class="flex justify-between items-center">
                             <div class="flex items-center">
                                 <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
-                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
-                                </button>
+                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
                             </div>
                             <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                         </div>
@@ -265,7 +265,6 @@ export function renderHoldingsTable(currentHoldings) {
             }).join('')}
         </div>
     `;
-
     container.innerHTML = tableHtml + cardsHtml;
     lucide.createIcons();
 }
@@ -273,43 +272,20 @@ export function renderHoldingsTable(currentHoldings) {
 export function renderTransactionsTable() {
     const { transactions, transactionFilter } = getState();
     const container = document.getElementById('transactions-tab');
-
     const uniqueSymbols = ['all', ...Array.from(new Set(transactions.map(t => t.symbol)))];
-    
-    const filterHtml = `
-        <div class="mb-4 flex items-center space-x-2">
-            <label for="transaction-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label>
-            <select id="transaction-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
-                ${uniqueSymbols.map(s => `<option value="${s}" ${transactionFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}
-            </select>
-        </div>
-    `;
-
-    const filteredTransactions = transactionFilter === 'all' 
-        ? transactions 
-        : transactions.filter(t => t.symbol === transactionFilter);
-
-    const tableHtml = `
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">
-                ${filteredTransactions.length > 0 ? filteredTransactions.map(t => {
-                    const transactionDate = t.date.split('T')[0];
-                    const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
-                    const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
-                    return `<tr class="hover:bg-gray-50"><td class="px-6 py-4">${transactionDate}</td><td class="px-6 py-4 font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`;
-                }).join('') : `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有符合條件的交易紀錄。</td></tr>`}
-            </tbody></table>
-        </div>
-    `;
+    const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="transaction-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="transaction-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${uniqueSymbols.map(s => `<option value="${s}" ${transactionFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
+    const filteredTransactions = transactionFilter === 'all' ? transactions : transactions.filter(t => t.symbol === transactionFilter);
+    const tableHtml = `<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${filteredTransactions.length > 0 ? filteredTransactions.map(t => { const transactionDate = t.date.split('T')[0]; const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate); const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate; return `<tr class="hover:bg-gray-50"><td class="px-6 py-4">${transactionDate}</td><td class="px-6 py-4 font-medium">${t.symbol.toUpperCase()}</td><td class="px-6 py-4 font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td><td class="px-6 py-4">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td><td class="px-6 py-4">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td><td class="px-6 py-4">${formatNumber(totalAmountTWD, 0)}</td><td class="px-6 py-4 text-center text-sm font-medium"><button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`; }).join('') : `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有符合條件的交易紀錄。</td></tr>`}</tbody></table></div>`;
     container.innerHTML = filterHtml + tableHtml;
 }
 
 export function renderSplitsTable() {
     const { userSplits } = getState();
     const tableBody = document.getElementById('splits-table-body');
+    if (!tableBody) return;
     tableBody.innerHTML = '';
     if (userSplits.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
+        tableBody.parentElement.parentElement.innerHTML = '<div id="splits-tab" class="tab-content hidden"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">比例</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody id="splits-table-body" class="bg-white divide-y divide-gray-200"><tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr></tbody></table></div>';
         return;
     }
     for (const s of userSplits) {
@@ -323,91 +299,11 @@ export function renderSplitsTable() {
 export function renderDividendsManagementTab(pending, confirmed) {
     const { dividendFilter } = getState();
     const container = document.getElementById('dividends-tab');
-    
-    const pendingHtml = `
-        <div class="mb-8">
-            <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
-                <h3 class="text-lg font-semibold text-gray-800">待確認配息</h3>
-                ${pending.length > 0 ? `
-                <button id="bulk-confirm-dividends-btn" class="btn bg-teal-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-teal-700 flex items-center space-x-2">
-                    <i data-lucide="check-check" class="h-5 w-5"></i>
-                    <span>一鍵全部以預設值確認</span>
-                </button>
-                ` : ''}
-            </div>
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                     <thead class="bg-gray-50"><tr>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">除息日</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">當時股數</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">每股配息</th>
-                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
-                     </tr></thead>
-                     <tbody class="bg-white divide-y divide-gray-200">
-                        ${pending.length > 0 ? pending.map((p, index) => `
-                        <tr class="hover:bg-gray-50">
-                            <td class="px-4 py-4 font-medium">${p.symbol}</td>
-                            <td class="px-4 py-4">${p.ex_dividend_date}</td>
-                            <td class="px-4 py-4">${formatNumber(p.quantity_at_ex_date, isTwStock(p.symbol) ? 0 : 2)}</td>
-                            <td class="px-4 py-4">${formatNumber(p.amount_per_share, 4)} <span class="text-xs text-gray-500">${p.currency}</span></td>
-                            <td class="px-4 py-4 text-center">
-                                <button data-index="${index}" class="confirm-dividend-btn text-indigo-600 hover:text-indigo-900 font-medium">確認入帳</button>
-                            </td>
-                        </tr>
-                        `).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有待處理的配息。</td></tr>`}
-                     </tbody>
-                </table>
-            </div>
-        </div>
-    `;
-
+    const pendingHtml = `<div class="mb-8"><div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4"><h3 class="text-lg font-semibold text-gray-800">待確認配息</h3>${pending.length > 0 ? `<button id="bulk-confirm-dividends-btn" class="btn bg-teal-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-teal-700 flex items-center space-x-2"><i data-lucide="check-check" class="h-5 w-5"></i><span>一鍵全部以預設值確認</span></button>` : ''}</div><div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">除息日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">當時股數</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">每股配息</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${pending.length > 0 ? pending.map((p, index) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4 font-medium">${p.symbol}</td><td class="px-4 py-4">${p.ex_dividend_date}</td><td class="px-4 py-4">${formatNumber(p.quantity_at_ex_date, isTwStock(p.symbol) ? 0 : 2)}</td><td class="px-4 py-4">${formatNumber(p.amount_per_share, 4)} <span class="text-xs text-gray-500">${p.currency}</span></td><td class="px-4 py-4 text-center"><button data-index="${index}" class="confirm-dividend-btn text-indigo-600 hover:text-indigo-900 font-medium">確認入帳</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有待處理的配息。</td></tr>`}</tbody></table></div></div>`;
     const confirmedSymbols = ['all', ...Array.from(new Set(confirmed.map(c => c.symbol)))];
-    const filterHtml = `
-        <div class="mb-4 flex items-center space-x-2">
-            <label for="dividend-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label>
-            <select id="dividend-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
-                ${confirmedSymbols.map(s => `<option value="${s}" ${dividendFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}
-            </select>
-        </div>
-    `;
-
-    const filteredConfirmed = dividendFilter === 'all'
-        ? confirmed
-        : confirmed.filter(c => c.symbol === dividendFilter);
-
-    const confirmedHtml = `
-        <div>
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>
-            ${filterHtml}
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                     <thead class="bg-gray-50"><tr>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">發放日</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">實收總額</th>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備註</th>
-                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
-                     </tr></thead>
-                     <tbody class="bg-white divide-y divide-gray-200">
-                        ${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `
-                        <tr class="hover:bg-gray-50">
-                            <td class="px-4 py-4">${c.pay_date.split('T')[0]}</td>
-                            <td class="px-4 py-4 font-medium">${c.symbol}</td>
-                            <td class="px-4 py-4">${formatNumber(c.total_amount, 2)} <span class="text-xs text-gray-500">${c.currency}</span></td>
-                            <td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td>
-                            <td class="px-4 py-4 text-center">
-                                <button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
-                                <button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button>
-                            </td>
-                        </tr>
-                        `).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}
-                     </tbody>
-                </table>
-            </div>
-        </div>
-    `;
-
+    const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="dividend-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="dividend-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${confirmedSymbols.map(s => `<option value="${s}" ${dividendFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
+    const filteredConfirmed = dividendFilter === 'all' ? confirmed : confirmed.filter(c => c.symbol === dividendFilter);
+    const confirmedHtml = `<div><h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>${filterHtml}<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">發放日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">實收總額</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備註</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4">${c.pay_date.split('T')[0]}</td><td class="px-4 py-4 font-medium">${c.symbol}</td><td class="px-4 py-4">${formatNumber(c.total_amount, 2)} <span class="text-xs text-gray-500">${c.currency}</span></td><td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td><td class="px-4 py-4 text-center"><button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}</tbody></table></div></div>`;
     container.innerHTML = pendingHtml + confirmedHtml;
     lucide.createIcons();
 }
@@ -432,14 +328,33 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
 }
 
 export function initializeChart() {
-    const options = { chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '總資產', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => { return formatNumber(value, 0) } } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, tooltip: { x: { format: 'yyyy/MM/dd' }, y: { formatter: (value) => { return formatNumber(value,0) } } }, colors: ['#4f46e5'] };
+    const options = { 
+        chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
+        series: [{ name: '總資產', data: [] }], 
+        xaxis: { type: 'datetime', labels: { datetimeUTC: false, formatter: createDynamicDateFormatter() } }, 
+        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } }, 
+        dataLabels: { enabled: false }, 
+        stroke: { curve: 'smooth', width: 2 }, 
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, 
+        tooltip: { x: { format: 'yyyy-MM-dd' }, y: { formatter: (value) => formatNumber(value,0) } }, 
+        colors: ['#4f46e5'] 
+    };
     const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
     chart.render();
     setState({ chart });
 }
 
 export function initializeTwrChart() {
-    const options = { chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], xaxis: { type: 'datetime', labels: { datetimeUTC: false, format: 'yy/MM/dd' } }, yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 }, tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, colors: ['#4f46e5', '#f59e0b'] };
+    const options = { 
+        chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
+        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], 
+        xaxis: { type: 'datetime', labels: { datetimeUTC: false, formatter: createDynamicDateFormatter() } }, 
+        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
+        dataLabels: { enabled: false }, 
+        stroke: { curve: 'smooth', width: 2 }, 
+        tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
+        colors: ['#4f46e5', '#f59e0b'] 
+    };
     const twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
     twrChart.render();
     setState({ twrChart });
