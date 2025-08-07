@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模主 (api.js) v3.4.0
+// == API 通訊模組 (api.js) v3.4.0
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -80,7 +80,6 @@ export async function loadPortfolioData() {
             obj[item.symbol] = item; return obj;
         }, {});
         
-        // [修改] 將圖表歷史數據也存入全域狀態
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
@@ -97,7 +96,6 @@ export async function loadPortfolioData() {
         renderSplitsTable();
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
-        // 首次載入時，直接使用 state 中的數據繪製圖表
         updateAssetChart(); 
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
         updateTwrChart(benchmarkSymbol);
