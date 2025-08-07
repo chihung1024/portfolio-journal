@@ -11,6 +11,7 @@ let state = {
     marketDataForFrontend: {},
     pendingDividends: [],
     confirmedDividends: [],
+    holdings: {}, // [新增] 用於儲存持股資料物件
     isAppInitialized: false,
     chart: null,
     twrChart: null,
