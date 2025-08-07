@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v2.8.1
+// == 主程式進入點 (main.js) v2.8.2 (修正版)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -158,11 +158,17 @@ async function handleNotesFormSubmit(e) {
         await apiRequest('save_stock_note', noteData);
         closeModal('notes-modal');
         
-        const { stockNotes, holdings } = getState();
-        const updatedStockNotes = { ...stockNotes, [noteData.symbol]: { ...stockNotes[noteData.symbol], ...noteData } };
-        setState({ stockNotes: updatedStockNotes });
+        // 更新本地 state 並重新渲染持股列表以顯示提示
+        const { stockNotes } = getState();
+        stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
+        setState({ stockNotes });
         
-        renderHoldingsTable(holdings);
+        // 重新渲染持股列表以更新價格提示顏色
+        const holdingsResponse = await apiRequest('get_data', {});
+        const holdingsObject = (holdingsResponse.data.holdings || []).reduce((obj, item) => {
+            obj[item.symbol] = item; return obj;
+        }, {});
+        renderHoldingsTable(holdingsObject);
 
         showNotification('success', `${noteData.symbol} 的筆記已儲存！`);
     } catch (error) {
@@ -333,14 +339,24 @@ function setupEventListeners() {
     });
 
     document.getElementById('dividends-tab').addEventListener('click', (e) => {
-        if (e.target.closest('#bulk-confirm-dividends-btn')) {
+        const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
+        if (bulkConfirmBtn) {
             handleBulkConfirm();
-        } else if (e.target.closest('.confirm-dividend-btn')) {
-            openModal('dividend-modal', false, { index: e.target.closest('.confirm-dividend-btn').dataset.index });
-        } else if (e.target.closest('.edit-dividend-btn')) {
-            openModal('dividend-modal', true, { index: e.target.closest('.edit-dividend-btn').dataset.index });
-        } else if (e.target.closest('.delete-dividend-btn')) {
-            handleDeleteDividend(e.target.closest('.delete-dividend-btn'));
+            return;
+        }
+        const confirmBtn = e.target.closest('.confirm-dividend-btn');
+        if (confirmBtn) {
+            openModal('dividend-modal', false, { index: confirmBtn.dataset.index });
+            return;
+        }
+        const editBtn = e.target.closest('.edit-dividend-btn');
+        if (editBtn) {
+            openModal('dividend-modal', true, { index: editBtn.dataset.index });
+            return;
+        }
+        const deleteBtn = e.target.closest('.delete-dividend-btn');
+        if (deleteBtn) {
+            handleDeleteDividend(deleteBtn);
         }
     });
     
@@ -363,7 +379,8 @@ function setupEventListeners() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('loading-overlay').style.display = 'flex';
+    // [修正] 刪除此行，啟動時的讀取畫面交由 auth.js 控制
+    // document.getElementById('loading-overlay').style.display = 'flex';
     
     initializeChart();
     initializeTwrChart();
