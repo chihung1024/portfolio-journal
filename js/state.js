@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js)
+// == 狀態管理模組 (state.js) v2.8.2
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -9,8 +9,9 @@ let state = {
     userSplits: [],
     stockNotes: {},
     marketDataForFrontend: {},
-    pendingDividends: [],   // [新增] 待處理配息
-    confirmedDividends: [], // [新增] 已確認配息
+    pendingDividends: [],
+    confirmedDividends: [],
+    isAppInitialized: false, // [新增] App 初始化狀態旗標
     chart: null,
     twrChart: null,
     confirmCallback: null
