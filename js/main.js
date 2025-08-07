@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.6.1
+// == 主程式進入點 (main.js) v3.4.1
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -275,8 +275,9 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
     
     if (chartType === 'twr') {
-        const { summary } = getState();
-        updateTwrChart(summary?.benchmarkSymbol || 'SPY');
+        const { benchmarkHistory } = getState();
+        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
+        updateTwrChart(benchmarkSymbol);
     } else {
         updateAssetChart();
     }
@@ -341,6 +342,7 @@ function setupMainAppEventListeners() {
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
             openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
+            return;
         }
     });
 
@@ -378,7 +380,11 @@ function setupMainAppEventListeners() {
     
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
     document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
-    
+    document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
+        if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
+            closeModal('dividend-history-modal');
+        }
+    });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
     document.getElementById('twr-chart-controls').addEventListener('click', (e) => {
