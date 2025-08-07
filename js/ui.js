@@ -36,20 +36,48 @@ function filterHistoryByDateRange(history, dateRange) {
     if (!history || Object.keys(history).length === 0) {
         return {};
     }
+
     const sortedDates = Object.keys(history).sort();
     const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(sortedDates[sortedDates.length - 1]);
     let startDate;
+
     switch (dateRange.type) {
-        case 'ytd': startDate = new Date(endDate.getFullYear(), 0, 1); break;
-        case '1m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 1); break;
-        case '3m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 3); break;
-        case '6m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 6); break;
-        case '1y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 1); break;
-        case '3y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 3); break;
-        case '5y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 5); break;
-        case 'custom': startDate = dateRange.start ? new Date(dateRange.start) : new Date(sortedDates[0]); break;
-        case 'all': default: startDate = new Date(sortedDates[0]); break;
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case '1y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'custom':
+            startDate = dateRange.start ? new Date(dateRange.start) : new Date(sortedDates[0]);
+            break;
+        case 'all':
+        default:
+            startDate = new Date(sortedDates[0]);
+            break;
     }
+
     const filteredHistory = {};
     for (const dateStr of sortedDates) {
         const currentDate = new Date(dateStr);
@@ -65,25 +93,56 @@ export function getDateRangeForPreset(history, dateRange) {
         return { startDate: '', endDate: '' };
     }
     const toYYYYMMDD = (date) => date.toISOString().split('T')[0];
+
     const sortedDates = Object.keys(history).sort();
     const firstDate = sortedDates[0];
     const lastDate = sortedDates[sortedDates.length - 1];
+
     const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
     let startDate;
+
     switch (dateRange.type) {
-        case 'ytd': startDate = new Date(endDate.getFullYear(), 0, 1); break;
-        case '1m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 1); break;
-        case '3m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 3); break;
-        case '6m': startDate = new Date(endDate); startDate.setMonth(endDate.getMonth() - 6); break;
-        case '1y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 1); break;
-        case '3y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 3); break;
-        case '5y': startDate = new Date(endDate); startDate.setFullYear(endDate.getFullYear() - 5); break;
-        case 'all': default: startDate = new Date(firstDate); break;
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case '1y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'all':
+        default:
+            startDate = new Date(firstDate);
+            break;
     }
+    
     if (startDate < new Date(firstDate)) {
         startDate = new Date(firstDate);
     }
-    return { startDate: toYYYYMMDD(startDate), endDate: toYYYYMMDD(endDate) };
+
+    return {
+        startDate: toYYYYMMDD(startDate),
+        endDate: toYYYYMMDD(endDate)
+    };
 }
 
 function createDynamicDateFormatter() {
@@ -106,6 +165,7 @@ function createDynamicDateFormatter() {
         return day;
     };
 }
+
 
 // --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
@@ -161,6 +221,7 @@ export function renderHoldingsTable(currentHoldings) {
     container.innerHTML = DOMPurify.sanitize(tableHtml + cardsHtml);
     lucide.createIcons();
 }
+
 export function renderTransactionsTable() {
     const { transactions, transactionFilter } = getState();
     const container = document.getElementById('transactions-tab');
