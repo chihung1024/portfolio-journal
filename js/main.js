@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.4.0
+// == 主程式進入點 (main.js) v3.4.1
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -21,6 +21,7 @@ import {
     openDividendHistoryModal,
     updateAssetChart,
     updateTwrChart,
+    getDateRangeForPreset,
 } from './ui.js';
 
 // --- 事件處理函式 ---
@@ -54,10 +55,8 @@ async function handleFormSubmit(e) {
     const saveBtn = document.getElementById('save-btn');
     saveBtn.disabled = true;
     saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
-
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
-
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -68,14 +67,12 @@ async function handleFormSubmit(e) {
         totalCost: parseFloat(document.getElementById('total-cost').value) || null,
         exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
     };
-
     if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
         showNotification('error', '請填寫所有必填欄位。');
         saveBtn.disabled = false;
         saveBtn.textContent = '儲存';
         return;
     }
-
     try {
         const action = isEditing ? 'edit_transaction' : 'add_transaction';
         const payload = isEditing ? { txId, txData: transactionData } : transactionData;
@@ -110,7 +107,7 @@ async function handleSplitFormSubmit(e) {
     saveBtn.disabled = true;
     const splitData = { date: document.getElementById('split-date').value, symbol: document.getElementById('split-symbol').value.toUpperCase().trim(), ratio: parseFloat(document.getElementById('split-ratio').value) };
     if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
-        showNotification('error', '請填寫所有欄位並確保比例大於0。');
+        showNotification('error', '請填寫所有欄位并確保比例大於0。');
         saveBtn.disabled = false; return;
     }
     try {
@@ -259,26 +256,28 @@ async function handleDeleteDividend(button) {
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
     const stateKey = chartType === 'twr' ? 'twrDateRange' : 'assetDateRange';
+    const historyKey = chartType === 'twr' ? 'twrHistory' : 'portfolioHistory';
     const controlsId = chartType === 'twr' ? 'twr-chart-controls' : 'asset-chart-controls';
     
-    setState({ [stateKey]: { type: rangeType, start: startDate, end: endDate } });
+    const newRange = { type: rangeType, start: startDate, end: endDate };
+    setState({ [stateKey]: newRange });
     
     document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
-        if (btn.dataset.range === rangeType) {
-            btn.classList.add('active');
-        }
+        if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
 
+    const fullHistory = getState()[historyKey];
+    const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
+
     if (rangeType !== 'custom') {
-        document.getElementById(`${chartType}-start-date`).value = '';
-        document.getElementById(`${chartType}-end-date`).value = '';
+        document.getElementById(`${chartType}-start-date`).value = finalStartDate;
+        document.getElementById(`${chartType}-end-date`).value = finalEndDate;
     }
     
     if (chartType === 'twr') {
-        const { benchmarkHistory } = getState();
-        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
-        updateTwrChart(benchmarkSymbol);
+        const { summary } = getState();
+        updateTwrChart(summary?.benchmarkSymbol || 'SPY');
     } else {
         updateAssetChart();
     }
@@ -406,6 +405,8 @@ function setupMainAppEventListeners() {
         const endInput = document.getElementById(`${chartType}-end-date`);
         const updateFunc = () => {
             if (startInput.value && endInput.value) {
+                // 當手動選擇日期時，取消所有預設按鈕的 active 狀態
+                document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
                 handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
             }
         };
