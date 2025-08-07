@@ -18,7 +18,6 @@ import {
     renderHoldingsTable,
     renderTransactionsTable,
     renderDividendsManagementTab,
-    openDividendHistoryModal,
     updateAssetChart,
     updateTwrChart,
     getDateRangeForPreset,
@@ -107,7 +106,7 @@ async function handleSplitFormSubmit(e) {
     saveBtn.disabled = true;
     const splitData = { date: document.getElementById('split-date').value, symbol: document.getElementById('split-symbol').value.toUpperCase().trim(), ratio: parseFloat(document.getElementById('split-ratio').value) };
     if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
-        showNotification('error', '請填寫所有欄位并確保比例大於0。');
+        showNotification('error', '請填寫所有欄位並確保比例大於0。');
         saveBtn.disabled = false; return;
     }
     try {
@@ -276,8 +275,9 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
     
     if (chartType === 'twr') {
-        const { summary } = getState();
-        updateTwrChart(summary?.benchmarkSymbol || 'SPY');
+        const { benchmarkHistory } = getState();
+        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
+        updateTwrChart(benchmarkSymbol);
     } else {
         updateAssetChart();
     }
@@ -344,10 +344,6 @@ function setupMainAppEventListeners() {
             openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
             return;
         }
-        const dividendBtn = e.target.closest('.open-dividend-history-btn');
-        if (dividendBtn) {
-            openDividendHistoryModal(dividendBtn.dataset.symbol);
-        }
     });
 
     document.getElementById('tabs').addEventListener('click', (e) => {
@@ -405,7 +401,6 @@ function setupMainAppEventListeners() {
         const endInput = document.getElementById(`${chartType}-end-date`);
         const updateFunc = () => {
             if (startInput.value && endInput.value) {
-                // 當手動選擇日期時，取消所有預設按鈕的 active 狀態
                 document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
                 handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
             }
