@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js)
+// == 身份驗證模組 (auth.js) v2.8.2
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -15,6 +15,7 @@ import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { loadPortfolioData } from './api.js';
 import { showNotification } from './ui.js';
+import { initializeAppUI } from './main.js'; // [修改] 引入主程式的 UI 初始化函式
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -41,20 +42,31 @@ export function initializeAuth() {
             document.getElementById('user-id').textContent = user.email;
             document.getElementById('auth-status').textContent = '已連線';
             
+            // [關鍵修改] 只有在登入成功後，才去初始化主應用的 UI
+            initializeAppUI();
+
             loadingText.textContent = '正在從雲端同步資料...';
             loadPortfolioData();
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
-            setState({ currentUserId: null });
+            // [修改] 登出時，重設 App 狀態
+            setState({ 
+                currentUserId: null,
+                isAppInitialized: false // 允許下次登入時重新初始化
+            });
 
             // 更新 UI
             document.getElementById('auth-container').style.display = 'block';
             document.querySelector('main').classList.add('hidden');
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('user-info').classList.add('hidden');
-            loadingOverlay.style.display = 'none';
+            
+            // 確保登出時隱藏讀取畫面
+            if (loadingOverlay) {
+                loadingOverlay.style.display = 'none';
+            }
         }
     });
 }
