@@ -7,8 +7,10 @@ let state = {
     currentUserId: null,
     transactions: [],
     userSplits: [],
-    stockNotes: {}, // [新增] 用於儲存股票筆記，以 symbol 為 key
+    stockNotes: {},
     marketDataForFrontend: {},
+    pendingDividends: [],   // [新增] 待處理配息
+    confirmedDividends: [], // [新增] 已確認配息
     chart: null,
     twrChart: null,
     confirmCallback: null
