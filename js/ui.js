@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.1.0
+// == UI 渲染與互動模組 (ui.js) v3.4.0
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -32,8 +32,63 @@ function findFxRateForFrontend(currency, dateStr) {
     return nearestDate ? rates[nearestDate] : 1;
 }
 
-// --- 主要 UI 函式 ---
+function filterHistoryByDateRange(history, dateRange) {
+    if (!history || Object.keys(history).length === 0) {
+        return {};
+    }
 
+    const sortedDates = Object.keys(history).sort();
+    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(sortedDates[sortedDates.length - 1]);
+    let startDate;
+
+    switch (dateRange.type) {
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case '1y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'custom':
+            startDate = dateRange.start ? new Date(dateRange.start) : new Date(sortedDates[0]);
+            break;
+        case 'all':
+        default:
+            return history;
+    }
+
+    const filteredHistory = {};
+    for (const dateStr of sortedDates) {
+        const currentDate = new Date(dateStr);
+        if (currentDate >= startDate && currentDate <= endDate) {
+            filteredHistory[dateStr] = history[dateStr];
+        }
+    }
+    return filteredHistory;
+}
+
+
+// --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
     const { stockNotes, confirmedDividends, holdingsSort } = getState();
     const container = document.getElementById('holdings-content');
@@ -47,7 +102,6 @@ export function renderHoldingsTable(currentHoldings) {
 
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
 
-    // 在排序前先加上 portfolioPercentage 屬性
     holdingsArray.forEach(h => {
         h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
     });
@@ -338,17 +392,33 @@ export function initializeTwrChart() {
     setState({ twrChart });
 }
 
-export function updateAssetChart(portfolioHistory) {
-    const { chart } = getState();
-    if (!portfolioHistory || Object.keys(portfolioHistory).length === 0) { if(chart) chart.updateSeries([{ data: [] }]); return; }
-    const chartData = Object.entries(portfolioHistory).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]);
-    if(chart) chart.updateSeries([{ data: chartData }]);
+export function updateAssetChart() {
+    const { chart, portfolioHistory, assetDateRange } = getState();
+    if (!chart) return;
+    const filteredHistory = filterHistoryByDateRange(portfolioHistory, assetDateRange);
+    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
+        chart.updateSeries([{ data: [] }]);
+        return;
+    }
+    const chartData = Object.entries(filteredHistory).map(([date, value]) => [new Date(date).getTime(), value]);
+    chart.updateSeries([{ data: chartData }]);
 }
 
-export function updateTwrChart(twrHistory, benchmarkHistory, benchmarkSymbol) {
-    const { twrChart } = getState();
-    const formatHistory = (history) => history ? Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0])).map(([date, value]) => [new Date(date).getTime(), value]) : [];
-    if(twrChart) twrChart.updateSeries([ { name: '投資組合', data: formatHistory(twrHistory) }, { name: `Benchmark (${benchmarkSymbol || '...'})`, data: formatHistory(benchmarkHistory) } ]);
+export function updateTwrChart(benchmarkSymbol) {
+    const { twrChart, twrHistory, benchmarkHistory, twrDateRange } = getState();
+    if (!twrChart) return;
+    const filteredTwrHistory = filterHistoryByDateRange(twrHistory, twrDateRange);
+    const filteredBenchmarkHistory = filterHistoryByDateRange(benchmarkHistory, twrDateRange);
+    const rebaseSeries = (history) => {
+        if (!history || Object.keys(history).length === 0) return [];
+        const sortedEntries = Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+        const baseValue = sortedEntries[0][1];
+        return sortedEntries.map(([date, value]) => [ new Date(date).getTime(), value - baseValue ]);
+    };
+    twrChart.updateSeries([
+        { name: '投資組合', data: rebaseSeries(filteredTwrHistory) },
+        { name: `Benchmark (${benchmarkSymbol || '...'})`, data: rebaseSeries(filteredBenchmarkHistory) }
+    ]);
 }
 
 export function openModal(modalId, isEdit = false, data = null) { 
@@ -392,14 +462,12 @@ export function openModal(modalId, isEdit = false, data = null) {
         if (!record) return;
 
         document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`;
-        
         document.getElementById('dividend-id').value = record.id || '';
         document.getElementById('dividend-symbol').value = record.symbol;
         document.getElementById('dividend-ex-date').value = record.ex_dividend_date;
         document.getElementById('dividend-currency').value = record.currency;
         document.getElementById('dividend-quantity').value = record.quantity_at_ex_date;
         document.getElementById('dividend-original-amount-ps').value = record.amount_per_share;
-
         document.getElementById('dividend-info-symbol').textContent = record.symbol;
         document.getElementById('dividend-info-ex-date').textContent = record.ex_dividend_date.split('T')[0];
         document.getElementById('dividend-info-quantity').textContent = formatNumber(record.quantity_at_ex_date, isTwStock(record.symbol) ? 0 : 2);
@@ -414,16 +482,13 @@ export function openModal(modalId, isEdit = false, data = null) {
             const exDate = new Date(record.ex_dividend_date);
             exDate.setMonth(exDate.getMonth() + 1);
             document.getElementById('dividend-pay-date').value = exDate.toISOString().split('T')[0];
-
             const taxRate = isTwStock(record.symbol) ? 0 : 30;
             document.getElementById('dividend-tax-rate').value = taxRate;
-
             const totalAmount = record.amount_per_share * record.quantity_at_ex_date * (1 - taxRate / 100);
             document.getElementById('dividend-total-amount').value = totalAmount.toFixed(2);
             document.getElementById('dividend-notes').value = '';
         }
     }
-    
     document.getElementById(modalId).classList.remove('hidden');
 }
 
