@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.4.3
+// == UI 渲染與互動模組 (ui.js) v3.4.4
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -145,51 +145,40 @@ export function getDateRangeForPreset(history, dateRange) {
     };
 }
 
-// [新增] 動態日期格式化函式工廠
-function createDynamicDateFormatter() {
-    let lastYear = null;
-    let lastMonth = null;
-
-    return function(value) {
-        const date = new Date(value);
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1;
-        const day = date.getDate();
-
-        if (year !== lastYear) {
-            lastYear = year;
-            lastMonth = month;
-            return year;
-        }
-        if (month !== lastMonth) {
-            lastMonth = month;
-            return month + '月';
-        }
-        return day;
-    };
-}
-
-
 // --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
     const { stockNotes, holdingsSort } = getState();
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
+
     let holdingsArray = Object.values(currentHoldings);
     if (holdingsArray.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
         return;
     }
+
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
+
     holdingsArray.forEach(h => {
         h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
     });
+
     holdingsArray.sort((a, b) => {
         const valA = a[holdingsSort.key] || 0;
         const valB = b[holdingsSort.key] || 0;
-        return holdingsSort.order === 'asc' ? valA - valB : valB - valA;
+        if (holdingsSort.order === 'asc') {
+            return valA - valB;
+        } else {
+            return valB - valA;
+        }
     });
-    const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
+    
+    const getSortArrow = (key) => {
+        if (holdingsSort.key === key) {
+            return holdingsSort.order === 'desc' ? '▼' : '▲';
+        }
+        return '';
+    };
 
     const tableHtml = `
         <div class="overflow-x-auto hidden sm:block">
@@ -211,9 +200,11 @@ export function renderHoldingsTable(currentHoldings) {
                         const note = stockNotes[h.symbol] || {};
                         const decimals = isTwStock(h.symbol) ? 0 : 2;
                         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+                        
                         let priceClass = '';
                         if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800';
                         else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
+
                         return `
                             <tr class="hover:bg-gray-50">
                                 <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
@@ -234,21 +225,29 @@ export function renderHoldingsTable(currentHoldings) {
             </table>
         </div>
     `;
+
     const cardsHtml = `
         <div class="grid grid-cols-1 gap-4 sm:hidden">
             ${holdingsArray.map(h => {
                 const note = stockNotes[h.symbol] || {};
                 const decimals = isTwStock(h.symbol) ? 0 : 2;
                 const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+
                 let priceClass = '';
-                if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1';
-                else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1';
+                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
+                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
+                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
+                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
+                }
+
                 return `
                     <div class="bg-white rounded-lg shadow p-4 space-y-3">
                         <div class="flex justify-between items-center">
                             <div class="flex items-center">
                                 <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
+                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
+                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
+                                </button>
                             </div>
                             <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                         </div>
@@ -265,6 +264,7 @@ export function renderHoldingsTable(currentHoldings) {
             }).join('')}
         </div>
     `;
+
     container.innerHTML = tableHtml + cardsHtml;
     lucide.createIcons();
 }
@@ -331,12 +331,18 @@ export function initializeChart() {
     const options = { 
         chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
         series: [{ name: '總資產', data: [] }], 
-        xaxis: { type: 'datetime', labels: { datetimeUTC: false, formatter: createDynamicDateFormatter() } }, 
+        xaxis: { 
+            type: 'datetime', 
+            labels: { 
+                datetimeUTC: false,
+                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
+            } 
+        }, 
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } }, 
         dataLabels: { enabled: false }, 
         stroke: { curve: 'smooth', width: 2 }, 
         fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, 
-        tooltip: { x: { format: 'yyyy-MM-dd' }, y: { formatter: (value) => formatNumber(value,0) } }, 
+        tooltip: { x: { format: 'yyyy-MM-dd' } }, 
         colors: ['#4f46e5'] 
     };
     const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
@@ -348,7 +354,13 @@ export function initializeTwrChart() {
     const options = { 
         chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
         series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], 
-        xaxis: { type: 'datetime', labels: { datetimeUTC: false, formatter: createDynamicDateFormatter() } }, 
+        xaxis: { 
+            type: 'datetime', 
+            labels: { 
+                datetimeUTC: false,
+                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
+            } 
+        }, 
         yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
         dataLabels: { enabled: false }, 
         stroke: { curve: 'smooth', width: 2 }, 
