@@ -7,7 +7,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -103,7 +102,10 @@
                     <h3 class="text-lg font-semibold text-gray-800">時間加權報酬率 vs. Benchmark</h3>
                     <div class="flex items-center space-x-2">
                         <input type="text" id="benchmark-symbol-input" placeholder="e.g., SPY" class="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-                        <button id="update-benchmark-btn" class="btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 flex items-center space-x-2"><i data-lucide="refresh-cw" class="h-5 w-5"></i><span>更新</span></button>
+                        <button id="update-benchmark-btn" class="btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 flex items-center space-x-2">
+                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
+                            <span>更新</span>
+                        </button>
                     </div>
                 </div>
                 <div id="twr-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="twr">
