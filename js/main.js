@@ -20,7 +20,7 @@ import {
     openDividendHistoryModal,
 } from './ui.js';
 
-// --- 事件處理函式 ---
+// --- 事件處理函式 (保持不變) ---
 
 function handleEdit(button) {
     const { transactions } = getState();
@@ -158,12 +158,10 @@ async function handleNotesFormSubmit(e) {
         await apiRequest('save_stock_note', noteData);
         closeModal('notes-modal');
         
-        // 更新本地 state 並重新渲染持股列表以顯示提示
         const { stockNotes } = getState();
         stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
         setState({ stockNotes });
         
-        // 重新渲染持股列表以更新價格提示顏色
         const holdingsResponse = await apiRequest('get_data', {});
         const holdingsObject = (holdingsResponse.data.holdings || []).reduce((obj, item) => {
             obj[item.symbol] = item; return obj;
@@ -276,11 +274,26 @@ async function handleDeleteDividend(button) {
     });
 }
 
-function setupEventListeners() {
+/**
+ * [修改] 設置所有**非主內容**的事件監聽器
+ */
+function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
+    document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+    document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
+        const { confirmCallback } = getState();
+        if (confirmCallback) { confirmCallback(); } 
+        hideConfirm(); 
+    });
+}
+
+/**
+ * [新增] 只有在登入後，才設置主內容的事件監聽器
+ */
+function setupMainAppEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
@@ -288,18 +301,20 @@ function setupEventListeners() {
     document.getElementById('transactions-table-body').addEventListener('click', (e) => {
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
-            e.preventDefault();
-            handleEdit(editButton);
-            return;
+            e.preventDefault(); handleEdit(editButton); return;
         }
         const deleteButton = e.target.closest('.delete-btn');
         if (deleteButton) {
-            e.preventDefault();
-            handleDelete(deleteButton);
+            e.preventDefault(); handleDelete(deleteButton);
         }
     });
 
-    document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
+    // The 'manage-splits-btn' was removed in a previous step, but we add it back for completeness.
+    // If you don't have this button, you can remove these lines.
+    const manageSplitsBtn = document.getElementById('manage-splits-btn');
+    if (manageSplitsBtn) {
+        manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
+    }
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
     document.getElementById('splits-table-body').addEventListener('click', (e) => { 
@@ -340,24 +355,16 @@ function setupEventListeners() {
 
     document.getElementById('dividends-tab').addEventListener('click', (e) => {
         const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
-        if (bulkConfirmBtn) {
-            handleBulkConfirm();
-            return;
-        }
+        if (bulkConfirmBtn) { handleBulkConfirm(); return; }
+
         const confirmBtn = e.target.closest('.confirm-dividend-btn');
-        if (confirmBtn) {
-            openModal('dividend-modal', false, { index: confirmBtn.dataset.index });
-            return;
-        }
+        if (confirmBtn) { openModal('dividend-modal', false, { index: confirmBtn.dataset.index }); return; }
+        
         const editBtn = e.target.closest('.edit-dividend-btn');
-        if (editBtn) {
-            openModal('dividend-modal', true, { index: editBtn.dataset.index });
-            return;
-        }
+        if (editBtn) { openModal('dividend-modal', true, { index: editBtn.dataset.index }); return; }
+        
         const deleteBtn = e.target.closest('.delete-dividend-btn');
-        if (deleteBtn) {
-            handleDeleteDividend(deleteBtn);
-        }
+        if (deleteBtn) { handleDeleteDividend(deleteBtn); }
     });
     
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
@@ -368,24 +375,33 @@ function setupEventListeners() {
             closeModal('dividend-history-modal');
         }
     });
-
-    document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-    document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
-        const { confirmCallback } = getState();
-        if (confirmCallback) { confirmCallback(); } 
-        hideConfirm(); 
-    });
+    
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    // [修正] 刪除此行，啟動時的讀取畫面交由 auth.js 控制
-    // document.getElementById('loading-overlay').style.display = 'flex';
+// --- 應用程式初始化 ---
+
+/**
+ * [新增] 主應用 UI 初始化函式，由 auth.js 呼叫
+ * 使用 isAppInitialized 旗標確保只執行一次
+ */
+export function initializeAppUI() {
+    if (getState().isAppInitialized) {
+        return;
+    }
+    console.log("Initializing Main App UI...");
     
     initializeChart();
     initializeTwrChart();
-    setupEventListeners();
-    initializeAuth(); 
+    setupMainAppEventListeners();
     
     lucide.createIcons();
+    
+    setState({ isAppInitialized: true });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // 頁面載入時，只設定通用事件監聽器並啟動認證流程
+    setupCommonEventListeners();
+    initializeAuth(); 
 });
