@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js)
+// == 主程式進入點 (main.js) v2.8.1
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -15,25 +15,23 @@ import {
     toggleOptionalFields, 
     showNotification,
     switchTab,
-    renderHoldingsTable // [修改] 引入 renderHoldingsTable
+    renderHoldingsTable,
+    renderDividendsManagementTab,
+    openDividendHistoryModal,
 } from './ui.js';
 
 // --- 事件處理函式 ---
 
-// 修改前: function handleEdit(e) { const txId = e.target.dataset.id; ... }
-// 修改後:
 function handleEdit(button) {
     const { transactions } = getState();
-    const txId = button.dataset.id; // 從傳入的按鈕元素獲取 data-id
+    const txId = button.dataset.id;
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
     openModal('transaction-modal', true, transaction);
 }
 
-// 修改前: async function handleDelete(e) { const txId = e.target.dataset.id; ... }
-// 修改後:
 async function handleDelete(button) {
-    const txId = button.dataset.id; // 從傳入的按鈕元素獲取 data-id
+    const txId = button.dataset.id;
     showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
         try {
             document.getElementById('loading-overlay').style.display = 'flex';
@@ -44,19 +42,6 @@ async function handleDelete(button) {
             showNotification('error', `刪除失敗: ${error.message}`);
         } finally {
             document.getElementById('loading-overlay').style.display = 'none';
-        }
-    });
-}
-
-async function handleDeleteSplit(e) {
-    const splitId = e.target.dataset.id;
-    showConfirm('確定要刪除這個拆股事件嗎？', async () => {
-        try {
-            await apiRequest('delete_split', { splitId });
-            showNotification('success', '拆股事件已刪除！');
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
         }
     });
 }
@@ -107,6 +92,19 @@ async function handleFormSubmit(e) {
     }
 }
 
+async function handleDeleteSplit(button) {
+    const splitId = button.dataset.id;
+    showConfirm('確定要刪除這個拆股事件嗎？', async () => {
+        try {
+            await apiRequest('delete_split', { splitId });
+            showNotification('success', '拆股事件已刪除！');
+            await loadPortfolioData();
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        }
+    });
+}
+
 async function handleSplitFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('save-split-btn');
@@ -125,6 +123,7 @@ async function handleSplitFormSubmit(e) {
         showNotification('error', `新增拆股事件失敗: ${error.message}`);
     } finally {
         saveBtn.disabled = false;
+        saveBtn.textContent = '儲存';
     }
 }
 
@@ -132,15 +131,16 @@ async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) { showNotification('error', '請輸入 Benchmark 的股票代碼。'); return; }
     try {
-        showNotification('info', `正在更新 Benchmark 並重算...`);
+        document.getElementById('loading-overlay').style.display = 'flex';
         await apiRequest('update_benchmark', { benchmarkSymbol: newBenchmark });
         await loadPortfolioData();
     } catch(error) {
         showNotification('error', `更新 Benchmark 失敗: ${error.message}`);
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
     }
 }
 
-// [新增] 處理筆記儲存
 async function handleNotesFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('save-notes-btn');
@@ -158,17 +158,11 @@ async function handleNotesFormSubmit(e) {
         await apiRequest('save_stock_note', noteData);
         closeModal('notes-modal');
         
-        // 更新本地 state 並重新渲染持股列表以顯示提示
-        const { stockNotes } = getState();
-        stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
-        setState({ stockNotes });
+        const { stockNotes, holdings } = getState();
+        const updatedStockNotes = { ...stockNotes, [noteData.symbol]: { ...stockNotes[noteData.symbol], ...noteData } };
+        setState({ stockNotes: updatedStockNotes });
         
-        // 重新渲染持股列表以更新價格提示顏色
-        const holdingsResponse = await apiRequest('get_data', {});
-        const holdingsObject = (holdingsResponse.data.holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
-        renderHoldingsTable(holdingsObject);
+        renderHoldingsTable(holdings);
 
         showNotification('success', `${noteData.symbol} 的筆記已儲存！`);
     } catch (error) {
@@ -180,70 +174,185 @@ async function handleNotesFormSubmit(e) {
     }
 }
 
+async function loadAndShowDividends() {
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.display = 'flex';
+    try {
+        const result = await apiRequest('get_dividends_for_management', {});
+        if (result.success) {
+            setState({
+                pendingDividends: result.data.pendingDividends,
+                confirmedDividends: result.data.confirmedDividends,
+            });
+            renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (error) {
+        showNotification('error', `讀取配息資料失敗: ${error.message}`);
+    } finally {
+        overlay.style.display = 'none';
+    }
+}
 
-/**
- * 集中設定所有 DOM 元素的事件監聽器
- */
+async function handleBulkConfirm() {
+    const { pendingDividends } = getState();
+    if (pendingDividends.length === 0) {
+        showNotification('info', '沒有需要確認的配息。');
+        return;
+    }
+    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
+        try {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
+            showNotification('success', '所有待確認配息已處理完畢！');
+            await loadAndShowDividends(); 
+            await loadPortfolioData(); 
+        } catch (error) {
+            showNotification('error', `批次確認失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+    });
+}
+
+async function handleDividendFormSubmit(e) {
+    e.preventDefault();
+    const saveBtn = document.getElementById('save-dividend-btn');
+    saveBtn.disabled = true;
+
+    const id = document.getElementById('dividend-id').value;
+    const isEditing = !!id;
+
+    const dividendData = {
+        symbol: document.getElementById('dividend-symbol').value,
+        ex_dividend_date: document.getElementById('dividend-ex-date').value,
+        pay_date: document.getElementById('dividend-pay-date').value,
+        currency: document.getElementById('dividend-currency').value,
+        quantity_at_ex_date: parseFloat(document.getElementById('dividend-quantity').value),
+        amount_per_share: parseFloat(document.getElementById('dividend-original-amount-ps').value),
+        total_amount: parseFloat(document.getElementById('dividend-total-amount').value),
+        tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value) || 0,
+        notes: document.getElementById('dividend-notes').value.trim()
+    };
+    if (isEditing) {
+        dividendData.id = id;
+    }
+
+    try {
+        await apiRequest('save_user_dividend', dividendData);
+        closeModal('dividend-modal');
+        showNotification('success', '配息紀錄已儲存！');
+        await loadAndShowDividends();
+        await loadPortfolioData();
+    } catch (error) {
+        showNotification('error', `儲存失敗: ${error.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存紀錄';
+    }
+}
+
+async function handleDeleteDividend(button) {
+    const dividendId = button.dataset.id;
+    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
+        try {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            await apiRequest('delete_user_dividend', { dividendId });
+            showNotification('success', '配息紀錄已刪除！');
+            await loadAndShowDividends();
+            await loadPortfolioData();
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+    });
+}
+
 function setupEventListeners() {
-    // 認證相關
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
-    // 交易相關
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
 
-    // --- 修改前 ---
-    /*
-    document.getElementById('transactions-table-body').addEventListener('click', (e) => { 
-        if (e.target.classList.contains('edit-btn')) { handleEdit(e); } 
-        if (e.target.classList.contains('delete-btn')) { handleDelete(e); } 
-    });
-    */
-    
-    // --- 修改後 (更穩健的作法) ---
     document.getElementById('transactions-table-body').addEventListener('click', (e) => {
-        // 從點擊的元素開始，向上尋找 class 為 .edit-btn 的最近祖先
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
-            e.preventDefault(); // 防止預設行為
-            handleEdit(editButton); // 將找到的按鈕元素傳給處理函式
-            return; // 找到就不用再往下找了
+            e.preventDefault();
+            handleEdit(editButton);
+            return;
         }
-    
-        // 從點擊的元素開始，向上尋找 class 為 .delete-btn 的最近祖先
         const deleteButton = e.target.closest('.delete-btn');
         if (deleteButton) {
-            e.preventDefault(); // 防止預設行為
-            handleDelete(deleteButton); // 將找到的按鈕元素傳給處理函式
+            e.preventDefault();
+            handleDelete(deleteButton);
         }
     });
 
-    // 拆股相關
     document.getElementById('manage-splits-btn').addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { if (e.target.closest('.delete-split-btn')) { handleDeleteSplit(e.target.closest('.delete-split-btn')); } });
+    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
+        const btn = e.target.closest('.delete-split-btn');
+        if(btn) handleDeleteSplit(btn);
+    });
     
-    // Benchmark
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
 
-    // [新增] 筆記相關
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
-    // 使用事件委派來處理動態產生的筆記按鈕
+    
     document.getElementById('holdings-content').addEventListener('click', (e) => {
-        const btn = e.target.closest('.open-notes-btn');
-        if (btn) {
-            const symbol = btn.dataset.symbol;
+        const notesBtn = e.target.closest('.open-notes-btn');
+        if (notesBtn) {
+            const symbol = notesBtn.dataset.symbol;
             openModal('notes-modal', false, { symbol });
+            return;
+        }
+        const dividendBtn = e.target.closest('.open-dividend-history-btn');
+        if (dividendBtn) {
+            const symbol = dividendBtn.dataset.symbol;
+            openDividendHistoryModal(symbol);
         }
     });
 
-    // 通用 UI
-    document.getElementById('tabs').addEventListener('click', (e) => { e.preventDefault(); if (e.target.matches('.tab-item')) { switchTab(e.target.dataset.tab); } });
+    document.getElementById('tabs').addEventListener('click', (e) => {
+        const tabItem = e.target.closest('.tab-item');
+        if (tabItem) {
+            e.preventDefault();
+            const tabName = tabItem.dataset.tab;
+            switchTab(tabName);
+            if (tabName === 'dividends') {
+                loadAndShowDividends();
+            }
+        }
+    });
+
+    document.getElementById('dividends-tab').addEventListener('click', (e) => {
+        if (e.target.closest('#bulk-confirm-dividends-btn')) {
+            handleBulkConfirm();
+        } else if (e.target.closest('.confirm-dividend-btn')) {
+            openModal('dividend-modal', false, { index: e.target.closest('.confirm-dividend-btn').dataset.index });
+        } else if (e.target.closest('.edit-dividend-btn')) {
+            openModal('dividend-modal', true, { index: e.target.closest('.edit-dividend-btn').dataset.index });
+        } else if (e.target.closest('.delete-dividend-btn')) {
+            handleDeleteDividend(e.target.closest('.delete-dividend-btn'));
+        }
+    });
+    
+    document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
+    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
+
+    document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
+        if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
+            closeModal('dividend-history-modal');
+        }
+    });
+
     document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
     document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
         const { confirmCallback } = getState();
@@ -253,7 +362,6 @@ function setupEventListeners() {
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 }
 
-// --- 應用程式初始化 ---
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('loading-overlay').style.display = 'flex';
     
