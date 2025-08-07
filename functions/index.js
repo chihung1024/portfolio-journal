@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 安全性強化版 (v3.5.3 - 安全策略修正完整版)
+// == GCP Cloud Function 安全性強化版 (v3.5.4 - CORS 修正完整版)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -64,7 +64,7 @@ const verifyFirebaseToken = async (req, res, next) => {
     }
 };
 
-// --- Zod Schema 定義 (此區塊無變更) ---
+// --- Zod Schema 定義 ---
 const transactionSchema = z.object({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     symbol: z.string().min(1).transform(val => val.toUpperCase().trim()),
@@ -93,7 +93,7 @@ const userDividendSchema = z.object({
     notes: z.string().optional().nullable(),
 });
 
-// --- 所有核心函式 (fetchAndSaveMarketDataRange, ensureDataCoverage, performRecalculation 等，此區塊無變更) ---
+// --- 所有核心函式 ---
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         const hist = await yahooFinance.historical(symbol, { period1: startDate, period2: endDate, interval: '1d', autoAdjust: false, backAdjust: false });
@@ -201,7 +201,7 @@ function createCashflowsForXirr(evts, holdings, market) { const flows = []; evts
 function calculateXIRR(flows) { if (flows.length < 2) return null; const amounts = flows.map(f => f.amount); if (!amounts.some(v => v < 0) || !amounts.some(v => v > 0)) return null; const dates = flows.map(f => f.date); const epoch = dates[0].getTime(); const years = dates.map(d => (d.getTime() - epoch) / (365.25 * 24 * 60 * 60 * 1000)); let guess = 0.1, npv; for (let i = 0; i < 50; i++) { if (1 + guess <= 0) { guess /= -2; continue; } npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0); if (Math.abs(npv) < 1e-6) return guess; const derivative = amounts.reduce((sum, amount, j) => sum - years[j] * amount / Math.pow(1 + guess, years[j] + 1), 0); if (Math.abs(derivative) < 1e-9) break; guess -= npv / derivative; } return (npv && Math.abs(npv) < 1e-6) ? guess : null; }
 function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL = 0; for (const e of evts) { const sym = e.symbol.toUpperCase(); if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 }; switch (e.eventType) { case "transaction": { const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); if (e.type === "buy") { pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) }); } else { let sellQty = e.quantity; let costOfGoodsSoldTWD = 0; while (sellQty > 0 && pf[sym].lots.length > 0) { const lot = pf[sym].lots[0]; const qtyToSell = Math.min(sellQty, lot.quantity); costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD; lot.quantity -= qtyToSell; sellQty -= qtyToSell; if (lot.quantity < 1e-9) pf[sym].lots.shift(); } const realized = costTWD - costOfGoodsSoldTWD; totalRealizedPL += realized; pf[sym].realizedCostTWD += costOfGoodsSoldTWD; pf[sym].realizedPLTWD += realized; } break; } case "split": { pf[sym].lots.forEach(l => { l.quantity *= e.ratio; l.pricePerShareTWD /= e.ratio; l.pricePerShareOriginal /= e.ratio; }); break; } case "confirmed_dividend": { const fx = findFxRate(market, e.currency, toDate(e.date)); const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; break; } case "implicit_dividend": { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; } break; } } } const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts); const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market); const xirr = calculateXIRR(xirrFlows); const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0); const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0); const totalReturnValue = totalRealizedPL + totalUnrealizedPL; const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0; return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate }; }
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v3.5.2) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v3.5.3) ---`);
     try {
         const [txs, splits, controlsData, userDividends] = await Promise.all([ d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]), d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]), d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']), d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]), ]);
         if (txs.length === 0) { await d1Client.batch([{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }, { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] }, { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] }]); return; }
@@ -233,13 +233,18 @@ async function performRecalculation(uid) {
 }
 
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
-    // [重要] 請務必將此處替換為您前端網站的真實網域
-    const allowedOrigin = 'https://your-frontend-domain.com'; // 例如: https://portfolio-journal-467915.firebaseapp.com
-    res.set('Access-Control-Allow-Origin', allowedOrigin);
+    const allowedOrigins = [
+        'https://portfolio-journal.pages.dev',
+        'https://portfolio-journal-467915.firebaseapp.com'
+    ];
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.set('Access-Control-Allow-Origin', origin);
+    }
 
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY');
         res.set('Access-Control-Max-Age', '3600');
         res.status(204).send('');
         return;
@@ -247,7 +252,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
     const serviceAccountKey = req.headers['x-service-account-key'];
-    if (serviceAccountKey && serviceAccountKey === process.env.SERVICE_ACCOUNT_KEY) {
+    if (serviceAccountKey) {
+        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
+            return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
+        }
+        if (req.headers['x-api-key'] !== D1_API_KEY) {
+            return res.status(401).send({ success: false, message: 'Invalid D1 API Key for Service Account' });
+        }
         if (req.body.action === 'recalculate_all_users') {
             try {
                 const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
