@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.4.0
+// == UI 渲染與互動模組 (ui.js) v3.4.1
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -74,7 +74,8 @@ function filterHistoryByDateRange(history, dateRange) {
             break;
         case 'all':
         default:
-            return history;
+            startDate = new Date(sortedDates[0]);
+            break;
     }
 
     const filteredHistory = {};
@@ -85,6 +86,64 @@ function filterHistoryByDateRange(history, dateRange) {
         }
     }
     return filteredHistory;
+}
+
+export function getDateRangeForPreset(history, dateRange) {
+    if (!history || Object.keys(history).length === 0) {
+        return { startDate: '', endDate: '' };
+    }
+    const toYYYYMMDD = (date) => date.toISOString().split('T')[0];
+
+    const sortedDates = Object.keys(history).sort();
+    const firstDate = sortedDates[0];
+    const lastDate = sortedDates[sortedDates.length - 1];
+
+    const endDate = dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
+    let startDate;
+
+    switch (dateRange.type) {
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case '1y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'all':
+        default:
+            startDate = new Date(firstDate);
+            break;
+    }
+    
+    // 確保開始日期不早於實際第一天
+    if (startDate < new Date(firstDate)) {
+        startDate = new Date(firstDate);
+    }
+
+    return {
+        startDate: toYYYYMMDD(startDate),
+        endDate: toYYYYMMDD(endDate)
+    };
 }
 
 
@@ -129,7 +188,7 @@ export function renderHoldingsTable(currentHoldings) {
     };
 
     const tableHtml = `
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto hidden sm:block">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
@@ -175,7 +234,53 @@ export function renderHoldingsTable(currentHoldings) {
             </table>
         </div>
     `;
-    container.innerHTML = tableHtml;
+
+    const cardsHtml = `
+        <div class="grid grid-cols-1 gap-4 sm:hidden">
+            ${holdingsArray.map(h => {
+                const note = stockNotes[h.symbol] || {};
+                const decimals = isTwStock(h.symbol) ? 0 : 2;
+                const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+                const hasDividends = !!dividendsBySymbol[h.symbol];
+
+                let priceClass = '';
+                if (note.target_price && h.currentPriceOriginal >= note.target_price) {
+                    priceClass = 'bg-green-100 text-green-800 rounded px-1';
+                } else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) {
+                    priceClass = 'bg-red-100 text-red-800 rounded px-1';
+                }
+
+                return `
+                    <div class="bg-white rounded-lg shadow p-4 space-y-3">
+                        <div class="flex justify-between items-center">
+                            <div class="flex items-center">
+                                <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
+                                <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}">
+                                    <i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i>
+                                </button>
+                                ${hasDividends ? `
+                                <button class="ml-1.5 open-dividend-history-btn" data-symbol="${h.symbol}">
+                                    <i data-lucide="hand-coins" class="w-5 h-5 text-gray-400 hover:text-amber-600"></i>
+                                </button>
+                                ` : ''}
+                            </div>
+                            <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                            <div><p class="text-gray-500">市值 (TWD)</p><p class="font-medium text-gray-800">${formatNumber(h.marketValueTWD, 0)}</p></div>
+                            <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</p></div>
+                            <div><p class="text-gray-500">股數</p><p class="font-medium text-gray-800">${formatNumber(h.quantity, decimals)}</p></div>
+                            <div><p class="text-gray-500">現價 (${h.currency})</p><p class="font-medium text-gray-800"><span class="${priceClass}">${formatNumber(h.currentPriceOriginal, 2)}</span></p></div>
+                             <div><p class="text-gray-500">平均成本</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
+                             <div><p class="text-gray-500">持股佔比</p><p class="font-medium text-gray-800">${h.portfolioPercentage.toFixed(2)}%</p></div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+
+    container.innerHTML = tableHtml + cardsHtml;
     lucide.createIcons();
 }
 
@@ -200,7 +305,7 @@ export function renderTransactionsTable() {
 
     const tableHtml = `
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">
+            <table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody id="transactions-table-body" class="bg-white divide-y divide-gray-200">
                 ${filteredTransactions.length > 0 ? filteredTransactions.map(t => {
                     const transactionDate = t.date.split('T')[0];
                     const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
@@ -299,7 +404,7 @@ export function renderDividendsManagementTab(pending, confirmed) {
                         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
                      </tr></thead>
                      <tbody class="bg-white divide-y divide-gray-200">
-                        ${filteredConfirmed.length > 0 ? filteredConfirmed.map((c, index) => `
+                        ${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `
                         <tr class="hover:bg-gray-50">
                             <td class="px-4 py-4">${c.pay_date.split('T')[0]}</td>
                             <td class="px-4 py-4 font-medium">${c.symbol}</td>
