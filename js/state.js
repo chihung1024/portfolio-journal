@@ -25,12 +25,12 @@ let state = {
         order: 'desc'
     },
 
-    // [新增] 圖表相關狀態
-    portfolioHistory: {}, // 儲存完整的資產成長歷史
-    twrHistory: {},       // 儲存完整的 TWR 歷史
-    benchmarkHistory: {}, // 儲存完整的 Benchmark 歷史
-    assetDateRange: { type: 'all', start: null, end: null }, // 資產圖表時間區間
-    twrDateRange: { type: 'all', start: null, end: null }    // TWR 圖表時間區間
+    // 圖表相關狀態
+    portfolioHistory: {},
+    twrHistory: {},
+    benchmarkHistory: {},
+    assetDateRange: { type: 'all', start: null, end: null },
+    twrDateRange: { type: 'all', start: null, end: null }
 };
 
 // 提供外部讀取狀態的方法
