@@ -4,8 +4,7 @@ on:
   workflow_dispatch: # 允許手動從 GitHub Actions 頁面執行
   schedule:
     # UTC 時間每週日的 01:00 執行 (相當於台灣時間的週日早上 09:00)
-    - cron: '0 22 * * *'
-    - cron: '30 3 * * *'
+    - cron: '0 1 * * 0'
 
 jobs:
   full-refresh:
@@ -22,13 +21,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance requests pandas
+          # [修改] 新增 google-cloud-pubsub 依賴
+          pip install yfinance requests pandas google-cloud-pubsub
 
       - name: Run weekend full-refresh script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
-          GCP_API_URL: ${{ secrets.GCP_API_URL }}
-          SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
-        # [核心修改] 執行新的週末專用腳本
+          # [修改] 移除 GCP_API_URL 和 SERVICE_ACCOUNT_KEY
+          # GCP_API_URL: ${{ secrets.GCP_API_URL }}
+          # SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
         run: python main_weekend.py
