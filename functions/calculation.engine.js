@@ -2,7 +2,79 @@ const yahooFinance = require("yahoo-finance2").default;
 const { d1Client } = require('./d1.client');
 
 // ==========================================================
-// == 所有核心计算与资料获取函式
+// == 股息快取模組
+// ==========================================================
+
+async function calculateAndCachePendingDividends(uid, txs, userDividends) {
+    console.log(`[${uid}] 開始計算並快取待確認股息...`);
+    
+    // 步驟 1: 清空該使用者舊的快取資料
+    await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
+
+    // 如果使用者沒有任何交易，就無需繼續
+    if (!txs || txs.length === 0) {
+        console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
+        return;
+    }
+
+    const allMarketDividends = await d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC');
+    if (!allMarketDividends || allMarketDividends.length === 0) {
+        console.log(`[${uid}] 無市場股息資料，無需快取。`);
+        return;
+    }
+
+    // 步驟 2: 執行核心過濾計算邏輯
+    const confirmedKeys = new Set(userDividends.map(d => `${d.symbol}_${d.ex_dividend_date.split('T')[0]}`));
+    
+    const holdings = {};
+    let txIndex = 0;
+    const pendingDividends = [];
+    const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+    const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
+
+    allMarketDividends.forEach(histDiv => {
+        const divSymbol = histDiv.symbol.toUpperCase();
+        if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
+
+        const exDateStr = histDiv.date.split('T')[0];
+        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
+
+        const exDateMinusOne = new Date(exDateStr);
+        exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
+
+        while(txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
+            const tx = txs[txIndex];
+            holdings[tx.symbol] = (holdings[tx.symbol] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
+            txIndex++;
+        }
+        
+        const quantity = holdings[divSymbol] || 0;
+        if (quantity > 0) {
+            const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
+            pendingDividends.push({
+                symbol: divSymbol,
+                ex_dividend_date: exDateStr,
+                amount_per_share: histDiv.dividend,
+                quantity_at_ex_date: quantity,
+                currency: currency
+            });
+        }
+    });
+
+    // 步驟 3: 將計算結果寫入新的快取表
+    if (pendingDividends.length > 0) {
+        const dbOps = pendingDividends.map(p => ({
+            sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
+            params: [uid, p.symbol, p.ex_dividend_date, p.amount_per_share, p.quantity_at_ex_date, p.currency]
+        }));
+        await d1Client.batch(dbOps);
+    }
+    console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
+}
+
+
+// ==========================================================
+// == 所有核心計算與資料獲取函式
 // ==========================================================
 
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
@@ -23,6 +95,7 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
         if (dbOps.length > 0) await d1Client.batch(dbOps);
         return hist;
     } catch (e) {
+        console.error(`Error fetching market data for ${symbol}:`, e);
         return null;
     }
 }
@@ -114,11 +187,11 @@ function calculateXIRR(flows) { if (flows.length < 2) return null; const amounts
 function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL = 0; for (const e of evts) { const sym = e.symbol.toUpperCase(); if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 }; switch (e.eventType) { case "transaction": { const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); if (e.type === "buy") { pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) }); } else { let sellQty = e.quantity; let costOfGoodsSoldTWD = 0; while (sellQty > 0 && pf[sym].lots.length > 0) { const lot = pf[sym].lots[0]; const qtyToSell = Math.min(sellQty, lot.quantity); costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD; lot.quantity -= qtyToSell; sellQty -= qtyToSell; if (lot.quantity < 1e-9) pf[sym].lots.shift(); } const realized = costTWD - costOfGoodsSoldTWD; totalRealizedPL += realized; pf[sym].realizedCostTWD += costOfGoodsSoldTWD; pf[sym].realizedPLTWD += realized; } break; } case "split": { pf[sym].lots.forEach(l => { l.quantity *= e.ratio; l.pricePerShareTWD /= e.ratio; l.pricePerShareOriginal /= e.ratio; }); break; } case "confirmed_dividend": { const fx = findFxRate(market, e.currency, toDate(e.date)); const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; break; } case "implicit_dividend": { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; } break; } } } const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts); const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market); const xirr = calculateXIRR(xirrFlows); const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0); const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0); const totalReturnValue = totalRealizedPL + totalUnrealizedPL; const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0; return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate }; }
 
 // ==========================================================
-// == 主计算函式
+// == 主計算函式
 // ==========================================================
 
 async function performRecalculation(uid) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v3.5.3) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v3.6.2 - 增加股息快取) ---`);
     try {
         const [txs, splits, controlsData, userDividends] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -126,6 +199,9 @@ async function performRecalculation(uid) {
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
         ]);
+
+        // [新增] 在每次重算時，都更新待確認股息的快取
+        await calculateAndCachePendingDividends(uid, txs, userDividends);
 
         if (txs.length === 0) {
             await d1Client.batch([
