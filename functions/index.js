@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v4.0.0 - 引入 Pub/Sub Worker)
+// == GCP Cloud Function 主入口 (v3.8.0 - 支援快照失效判斷)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -18,9 +18,6 @@ try {
   // Firebase Admin SDK already initialized
 }
 
-// ===================================================================
-// == HTTP 觸發函式 (處理前端請求)
-// ===================================================================
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
@@ -39,13 +36,26 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
-    // [修改] 移除原有服務帳號金鑰的處理邏輯，因其已被 Pub/Sub 模式取代
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
-        return res.status(400).send({ success: false, message: '此端點不再支援批次重算，請使用 Pub/Sub 觸發模式。' });
+        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
+            return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
+        }
+        if (req.body.action === 'recalculate_all_users') {
+            try {
+                const createSnapshot = req.body.createSnapshot || false;
+                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
+
+                const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
+                for (const row of allUidsResult) {
+                    await performRecalculation(row.uid, null, createSnapshot); 
+                }
+                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
+            } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
+        }
+        return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
-    // 處理來自前端使用者的請求 (邏輯不變)
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid; 
@@ -167,42 +177,3 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         }
     });
 });
-
-
-// ===================================================================
-// == [新增] Pub/Sub 觸發函式 (處理背景批次重算)
-// ===================================================================
-exports.recalculationWorker = functions.region('asia-east1')
-    .runWith({
-        timeoutSeconds: 540, // 將逾時時間設為最大值 (9分鐘)
-        memory: '1GB'        // 根據需要分配更多記憶體
-    })
-    .pubsub.topic('recalculation-topic') // 訂閱您建立的主題
-    .onPublish(async (message) => {
-        try {
-            // Pub/Sub 訊息的內容是 Base64 編碼的，需要解碼
-            const payloadStr = Buffer.from(message.data, 'base64').toString();
-            const payload = JSON.parse(payloadStr);
-
-            const { uid, createSnapshot } = payload;
-
-            if (!uid) {
-                console.error("收到的 Pub/Sub 訊息中缺少 'uid'。");
-                return; // 正常結束，避免重試
-            }
-
-            console.log(`[Worker] 開始為使用者 ${uid} 進行重新計算，是否建立快照: ${createSnapshot}`);
-            
-            // 為這一個使用者執行耗時的計算
-            await performRecalculation(uid, null, createSnapshot || false);
-
-            console.log(`[Worker] 使用者 ${uid} 的重新計算成功完成。`);
-            return;
-
-        } catch (error) {
-            const uid = message.json?.uid || '未知';
-            console.error(`[Worker] 為使用者 ${uid} 的計算失敗:`, error);
-            // 拋出錯誤以觸發 Pub/Sub 的內建重試機制
-            throw new Error(`Recalculation failed for UID: ${uid}`);
-        }
-    });
