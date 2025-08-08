@@ -7,18 +7,16 @@ import time
 import pandas as pd
 
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v1.3 - 原子性更新 + HTTP 觸發版)
+# == Python 週末完整校驗腳本 (v1.4 - 週末快照觸發版)
 # =========================================================================================
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
-# GCP 和 D1 Worker 在我們的原始設定中使用相同的金鑰
-GCP_API_KEY = D1_API_KEY 
+GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
-    """通用 D1 查詢函式"""
     if params is None:
         params = []
     if not D1_WORKER_URL or not D1_API_KEY:
@@ -34,7 +32,6 @@ def d1_query(sql, params=None):
         return None
 
 def d1_batch(statements):
-    """通用 D1 批次操作函式"""
     if not D1_WORKER_URL or not D1_API_KEY:
         print("FATAL: Missing D1_WORKER_URL or D1_API_KEY environment variables.")
         return False
@@ -48,7 +45,6 @@ def d1_batch(statements):
         return False
 
 def get_full_refresh_targets():
-    """從 D1 獲取所有需要完整刷新的標的及其日期範圍"""
     print("正在從 D1 獲取所有需要完整刷新的金融商品列表...")
     sql = "SELECT symbol, earliest_date FROM market_data_coverage"
     targets = d1_query(sql)
@@ -89,6 +85,7 @@ def fetch_and_overwrite_market_data(targets):
         price_staging_table = "exchange_rates_staging" if is_fx else "price_history_staging"
         dividend_table = "dividend_history"
         dividend_staging_table = "dividend_history_staging"
+
 
         max_retries = 3
         data_fetched_successfully = False
@@ -159,7 +156,7 @@ def fetch_and_overwrite_market_data(targets):
 
 
 def trigger_recalculations(uids):
-    """(HTTP 模式) 主動觸發所有使用者的投資組合重新計算"""
+    """(HTTP 模式) 觸發所有使用者重算，並附帶建立快照的指令"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
@@ -167,7 +164,7 @@ def trigger_recalculations(uids):
         print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
         return
 
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 (HTTP模式) ---")
+    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 (包含建立快照指令) ---")
     
     SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
     if not SERVICE_ACCOUNT_KEY:
@@ -181,18 +178,20 @@ def trigger_recalculations(uids):
     }
     
     try:
-        payload = {"action": "recalculate_all_users"}
+        payload = {
+            "action": "recalculate_all_users",
+            "createSnapshot": True 
+        }
         response = requests.post(GCP_API_URL, json=payload, headers=headers)
         if response.status_code == 200:
-            print(f"成功觸發所有使用者的重算。")
+            print(f"成功觸發所有使用者的重算與快照建立。")
         else:
-            print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
+            print(f"觸發重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
     except Exception as e:
-        print(f"觸發全部重算時發生錯誤: {e}")
-
+        print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.3) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.4) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     refresh_targets, all_uids = get_full_refresh_targets()
     
