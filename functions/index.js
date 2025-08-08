@@ -87,12 +87,21 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     const txId = isEditing ? data.txId : uuidv4();
                     if (isEditing) await d1Client.query(`UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]);
                     else await d1Client.query(`INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]);
-                    await performRecalculation(uid);
+                    
+                    // [修改] 傳入交易日期以觸發快照失效判斷
+                    await performRecalculation(uid, txData.date); 
                     return res.status(200).send({ success: true, message: '操作成功。', id: txId });
                 }
                 case 'delete_transaction': {
+                    // [修改] 刪除前需要先查出日期
+                    const txResult = await d1Client.query('SELECT date FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
+                    const txDate = txResult.length > 0 ? txResult[0].date.split('T')[0] : null;
+                    
                     await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '交易已刪除。' });
+
+                    // [修改] 傳入交易日期以觸發快照失效判斷
+                    await performRecalculation(uid, txDate); 
+                    return res.status(200).send({ success: true, message: '交易已刪除。' });
                 }
                 case 'update_benchmark': {
                     await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]);
