@@ -5,16 +5,20 @@ import json
 from datetime import datetime
 import time
 import pandas as pd
+# [新增] 引入 Pub/Sub 客戶端和 os 模組
+from google.cloud import pubsub_v1
 
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v1.4 - 週末快照觸發版)
+# == Python 週末完整校驗腳本 (v1.4 - 週末快照觸發版) -> (v2.0 - Pub/Sub 觸發版)
 # =========================================================================================
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
-GCP_API_URL = os.environ.get("GCP_API_URL")
-GCP_API_KEY = D1_API_KEY
+
+# [新增] GCP Pub/Sub 設定
+GCP_PROJECT_ID = "portfolio-journal-467915" # 您的 GCP 專案 ID
+PUB_SUB_TOPIC_ID = "recalculation-topic"    # 您建立的 Pub/Sub 主題 ID
 
 def d1_query(sql, params=None):
     if params is None:
@@ -80,7 +84,6 @@ def fetch_and_overwrite_market_data(targets):
         
         is_fx = "=" in symbol
         
-        # 假設您已為 exchange_rates 建立了 exchange_rates_staging 表
         price_table = "exchange_rates" if is_fx else "price_history"
         price_staging_table = "exchange_rates_staging" if is_fx else "price_history_staging"
         dividend_table = "dividend_history"
@@ -154,51 +157,39 @@ def fetch_and_overwrite_market_data(targets):
         else:
             print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
 
-
-def trigger_recalculations(uids):
-    """(HTTP 模式) 觸發所有使用者重算，並附帶建立快照的指令"""
+def publish_recalculation_tasks(uids, create_snapshot=False):
+    """[新增] 將重算任務作為訊息發佈到 Pub/Sub 主題"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
-        return
-
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 (包含建立快照指令) ---")
+        
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, PUB_SUB_TOPIC_ID)
     
-    SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
-    if not SERVICE_ACCOUNT_KEY:
-        print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
-        return
-
-    headers = {
-        'X-API-KEY': GCP_API_KEY, 
-        'Content-Type': 'application/json',
-        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
-    }
+    print(f"\n--- 準備為 {len(uids)} 位使用者發佈重算任務到 Pub/Sub (建立快照: {create_snapshot}) ---")
     
-    try:
-        payload = {
-            "action": "recalculate_all_users",
-            "createSnapshot": True 
+    published_count = 0
+    for uid in uids:
+        message_data = {
+            "uid": uid,
+            "createSnapshot": create_snapshot
         }
-        response = requests.post(GCP_API_URL, json=payload, headers=headers)
-        if response.status_code == 200:
-            print(f"成功觸發所有使用者的重算與快照建立。")
-        else:
-            print(f"觸發重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
-    except Exception as e:
-        print(f"觸發重算時發生錯誤: {e}")
+        # 訊息內容需為 bytes 格式
+        future = publisher.publish(topic_path, json.dumps(message_data).encode("utf-8"))
+        published_count += 1
+        
+    print(f"成功發佈 {published_count} 個任務。後端將非同步處理。")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.4) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.0 - Pub/Sub) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     refresh_targets, all_uids = get_full_refresh_targets()
     
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets)
+        # [修改] 不再呼叫 HTTP 端點，而是發佈任務
         if all_uids:
-            trigger_recalculations(all_uids)
+            publish_recalculation_tasks(all_uids, create_snapshot=True)
     else:
         print("在 market_data_coverage 表中沒有找到任何需要刷新的標的。")
         
