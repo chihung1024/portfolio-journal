@@ -155,6 +155,94 @@ def fetch_and_overwrite_market_data(targets):
             print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
 
 
+def update_benchmark_cache(all_txs):
+    """
+    計算並更新所有使用者用過的 Benchmark 的歷史報酬率快取。
+    """
+    print("\n--- 開始更新 Benchmark 報酬率快取 ---")
+    
+    # 1. 獲取所有使用者曾用過的 Benchmark 代碼
+    benchmark_symbols_results = d1_query("SELECT DISTINCT value FROM controls WHERE key = 'benchmarkSymbol'")
+    if benchmark_symbols_results is None:
+        print("無法獲取 Benchmark 列表，跳過快取更新。")
+        return
+        
+    user_benchmarks = {row['value'] for row in benchmark_symbols_results if row.get('value')}
+    # 為確保常用標的總在快取中，可以加上預設值
+    default_benchmarks = {'SPY', 'QQQ', 'VT'}
+    all_benchmarks_to_cache = list(user_benchmarks.union(default_benchmarks))
+    
+    print(f"準備為以下 Benchmark 建立快取: {all_benchmarks_to_cache}")
+
+    # 2. 獲取全局的起訖日期
+    if not all_txs:
+        print("資料庫中無任何交易，無法確定日期範圍，跳過。")
+        return
+
+    first_date_str = min(tx['date'] for tx in all_txs).split('T')[0]
+    start_date = datetime.strptime(first_date_str, '%Y-%m-%d')
+    end_date = datetime.now()
+
+    db_ops = []
+    
+    for symbol in all_benchmarks_to_cache:
+        print(f"正在處理 {symbol}...")
+        # 3. 從 D1 讀取該 Benchmark 的完整價格歷史
+        # (這是內部資料庫讀取，不是從 Yahoo Finance 抓，所以很快)
+        prices_results = d1_query(f"SELECT date, price FROM price_history WHERE symbol = ? ORDER BY date ASC", [symbol])
+        if not prices_results:
+             prices_results = d1_query(f"SELECT date, price FROM exchange_rates WHERE symbol = ? ORDER BY date ASC", [symbol]) # 也檢查匯率表
+        
+        if not prices_results:
+            print(f"找不到 {symbol} 的價格數據，跳過。")
+            continue
+
+        prices = {res['date'].split('T')[0]: res['price'] for res in prices_results}
+        
+        # 4. 計算報酬率曲線
+        history_data = {}
+        base_price = None
+        
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.strftime('%Y-%m-%d')
+            
+            # 找到當天或最近一天的價格
+            price = prices.get(date_str)
+            if price is None:
+                # 簡單向前尋找最近的有效價格（適用於假日等情況）
+                temp_date = current_date - timedelta(days=1)
+                for _ in range(7): # 最多找7天
+                    temp_date_str = temp_date.strftime('%Y-%m-%d')
+                    if prices.get(temp_date_str):
+                        price = prices.get(temp_date_str)
+                        break
+                    temp_date -= timedelta(days=1)
+
+            if price is not None:
+                if base_price is None:
+                    base_price = price
+                
+                # 計算從起點至今的報酬率
+                history_data[date_str] = ((price / base_price) - 1) * 100 if base_price > 0 else 0
+            
+            current_date += timedelta(days=1)
+            
+        # 5. 準備寫入資料庫的指令
+        db_ops.append({
+            "sql": "INSERT OR REPLACE INTO benchmark_cache (symbol, history_data, last_updated) VALUES (?, ?, ?)",
+            "params": [symbol, json.dumps(history_data), datetime.now().isoformat()]
+        })
+
+    # 6. 一次性批次寫入所有快取
+    if db_ops:
+        print(f"準備將 {len(db_ops)} 筆 Benchmark 快取寫入資料庫...")
+        if d1_batch(db_ops):
+            print("成功更新所有 Benchmark 快取！")
+        else:
+            print("更新 Benchmark 快取失敗。")
+
+
 def trigger_recalculations(uids):
     """(HTTP 模式) 觸發所有使用者重算，並附帶建立快照的指令"""
     if not uids:
