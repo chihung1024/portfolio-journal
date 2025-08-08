@@ -4,8 +4,8 @@ on:
   workflow_dispatch:        # 允許手動執行
   schedule:
     - cron: '0 0 * * *'     # 每日 00:00 UTC 執行
-    - cron: '0 14 * * *'    # 每日 14:00 UTC 執行
-    - cron: '0 22 * * *'    # 每日 22:00 UTC 執行
+    - cron: '0 14 * * *'     # 每日 00:00 UTC 執行
+    - cron: '0 22 * * *'     # 每日 00:00 UTC 執行
 
 jobs:
   update-prices:
@@ -22,12 +22,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance requests pandas google-cloud-pubsub
+          pip install yfinance requests pandas
 
       - name: Run price-update script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # 新增此行
+          GCP_API_URL: ${{ secrets.GCP_API_URL }}
           SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
         run: python main.py
