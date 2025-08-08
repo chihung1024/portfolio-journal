@@ -1,188 +1,219 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# =========================================================================================
+#  ==  Python 週末完整校驗腳本 (main_weekend.py)  v1.1 – 統一 SERVICE_API_KEY + sys 匯入 ==
+#  ==  功能：                                                         ==
+#  ==    1. 從 D1 market_data_coverage 取所有標的 → yfinance 抓取完整歷史資料              ==
+#  ==    2. 覆蓋 price_history / exchange_rates / dividend_history                         ==
+#  ==    3. 透過後端 API 觸發「所有使用者」重新計算                                       ==
+# =========================================================================================
+
 import os
-import yfinance as yf
-import requests
+import sys                         # ← 必須顯式匯入，才能在缺參數時 sys.exit(1)
 import json
-from datetime import datetime
 import time
+from datetime import datetime
+
+import requests
 import pandas as pd
+import yfinance as yf
 
-# =========================================================================================
-# == Python 週末完整校驗腳本 完整程式碼 (v1.0 - 完整覆蓋版)
-# =========================================================================================
+# -----------------------------------------------------------------------------------------
+#  一、環境變數讀取
+# -----------------------------------------------------------------------------------------
+D1_WORKER_URL   = os.environ.get("D1_WORKER_URL")
+SERVICE_API_KEY = os.environ.get("SERVICE_API_KEY")     # 取代 D1_API_KEY / GCP_API_KEY
+GCP_API_URL     = os.environ.get("GCP_API_URL")         # 後端 Cloud Function HTTP 入口
 
-# --- 從環境變數讀取設定 ---
-D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
-D1_API_KEY = os.environ.get("D1_API_KEY")
-GCP_API_URL = os.environ.get("GCP_API_URL")
-GCP_API_KEY = D1_API_KEY
+if not SERVICE_API_KEY:
+    print("FATAL: Missing SERVICE_API_KEY.")
+    sys.exit(1)
 
-def d1_query(sql, params=None):
-    """通用 D1 查詢函式"""
+# 向下相容舊程式碼的別名（如已全面替換，可刪除）
+D1_API_KEY = SERVICE_API_KEY
+GCP_API_KEY = SERVICE_API_KEY
+
+# -----------------------------------------------------------------------------------------
+#  二、與 D1 Worker 互動的共用函式
+# -----------------------------------------------------------------------------------------
+def d1_query(sql: str, params=None):
+    """對 Cloudflare D1 執行單條 SELECT / UPDATE … RETURNING 查詢，返回 list(dict)."""
     if params is None:
         params = []
-    if not D1_WORKER_URL or not D1_API_KEY:
-        print("FATAL: Missing D1_WORKER_URL or D1_API_KEY environment variables.")
+
+    if not D1_WORKER_URL:
+        print("FATAL: Missing D1_WORKER_URL.")
         return None
-    headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
+
+    headers = {
+        "X-API-KEY": SERVICE_API_KEY,
+        "Content-Type": "application/json"
+    }
+
     try:
-        response = requests.post(f"{D1_WORKER_URL}/query", json={"sql": sql, "params": params}, headers=headers)
-        response.raise_for_status()
-        return response.json().get('results', [])
-    except requests.exceptions.RequestException as e:
+        resp = requests.post(f"{D1_WORKER_URL}/query",
+                             json={"sql": sql, "params": params},
+                             headers=headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+    except requests.RequestException as e:
         print(f"FATAL: D1 查詢失敗: {e}")
         return None
 
+
 def d1_batch(statements):
-    """通用 D1 批次操作函式"""
-    if not D1_WORKER_URL or not D1_API_KEY:
-        print("FATAL: Missing D1_WORKER_URL or D1_API_KEY environment variables.")
+    """批次執行多條 INSERT/UPDATE/DELETE。"""
+    if not D1_WORKER_URL:
+        print("FATAL: Missing D1_WORKER_URL.")
         return False
-    headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
+
+    headers = {
+        "X-API-KEY": SERVICE_API_KEY,
+        "Content-Type": "application/json"
+    }
+
     try:
-        response = requests.post(f"{D1_WORKER_URL}/batch", json={"statements": statements}, headers=headers)
-        response.raise_for_status()
+        resp = requests.post(f"{D1_WORKER_URL}/batch",
+                             json={"statements": statements},
+                             headers=headers, timeout=60)
+        resp.raise_for_status()
         return True
-    except requests.exceptions.RequestException as e:
+    except requests.RequestException as e:
         print(f"FATAL: D1 批次操作失敗: {e}")
         return False
 
-def get_full_refresh_targets():
-    """從 market_data_coverage 表獲取所有需要完整刷新的標的及其日期範圍"""
-    print("正在從 D1 獲取所有需要完整刷新的金融商品列表...")
-    # [核心邏輯] 查詢 symbol 和 earliest_date
-    sql = "SELECT symbol, earliest_date FROM market_data_coverage"
-    targets = d1_query(sql)
-    if targets is None:
-        return [], []
-    
-    # 同時獲取所有活躍的使用者 ID 以便後續觸發重算
-    uid_sql = "SELECT DISTINCT uid FROM transactions"
-    uid_results = d1_query(uid_sql)
-    uids = [row['uid'] for row in uid_results if row.get('uid')]
 
-    print(f"找到 {len(targets)} 個需完整刷新的標的。")
-    print(f"找到 {len(uids)} 位活躍使用者: {uids}")
+# -----------------------------------------------------------------------------------------
+#  三、步驟 1：找出需完整刷新的標的 & 所有活躍使用者
+# -----------------------------------------------------------------------------------------
+def get_full_refresh_targets():
+    sql = "SELECT symbol, earliest_date FROM market_data_coverage"
+    targets = d1_query(sql) or []
+
+    uid_sql = "SELECT DISTINCT uid FROM transactions"
+    uids = [row["uid"] for row in (d1_query(uid_sql) or [])]
+
+    print(f"找到 {len(targets)} 個標的需完整刷新，{len(uids)} 位使用者需重算。")
     return targets, uids
 
+
+# -----------------------------------------------------------------------------------------
+#  四、步驟 2：抓取與覆蓋市場資料
+# -----------------------------------------------------------------------------------------
 def fetch_and_overwrite_market_data(targets):
-    """
-    為每個標的抓取其在 coverage 表中定義的完整日期範圍數據，並覆蓋 D1 資料庫。
-    """
     if not targets:
         print("沒有需要刷新的標的。")
         return
 
-    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
-    for target in targets:
-        symbol = target.get('symbol')
-        start_date = target.get('earliest_date')
-        
-        if not symbol or not start_date:
-            continue
-            
-        print(f"--- 正在處理完整刷新: {symbol} (從 {start_date} 開始) ---")
-        
-        is_fx = "=" in symbol
+    for tgt in targets:
+        symbol      = tgt.get("symbol")
+        start_date  = tgt.get("earliest_date")
+        is_fx       = "=" in symbol
         price_table = "exchange_rates" if is_fx else "price_history"
-        
-        max_retries = 3
-        for attempt in range(max_retries):
+
+        print(f"\n---  {symbol}  (自 {start_date} 起完整刷新) ---")
+
+        # 抓資料（最多重試 3 次）
+        for attempt in range(3):
             try:
-                stock = yf.Ticker(symbol)
-                hist = stock.history(start=start_date, interval="1d", auto_adjust=False, back_adjust=False)
-                
+                hist = yf.Ticker(symbol).history(start=start_date,
+                                                 interval="1d",
+                                                 auto_adjust=False,
+                                                 back_adjust=False)
                 if hist.empty:
-                    print(f"警告: 找不到 {symbol} 從 {start_date} 開始的歷史數據。")
+                    print(f"警告: 找不到 {symbol} 歷史資料。")
                     break
 
-                print(f"成功抓取到 {len(hist)} 筆 {symbol} 的完整歷史數據。")
-                
-                # [核心邏輯] 準備 SQL 指令，先刪除後插入
-                db_ops = []
-                
-                # 1. 刪除舊數據
-                db_ops.append({"sql": f"DELETE FROM {price_table} WHERE symbol = ?", "params": [symbol]})
+                print(f"成功抓取 {len(hist)} 筆資料。")
+
+                # 準備 SQL：先刪舊 → 再插入
+                ops = [
+                    {"sql": f"DELETE FROM {price_table} WHERE symbol = ?",
+                     "params": [symbol]}
+                ]
                 if not is_fx:
-                    db_ops.append({"sql": "DELETE FROM dividend_history WHERE symbol = ?", "params": [symbol]})
+                    ops.append({
+                        "sql": "DELETE FROM dividend_history WHERE symbol = ?",
+                        "params": [symbol]
+                    })
 
-                # 2. 插入新數據
                 for idx, row in hist.iterrows():
-                    date_str = idx.strftime('%Y-%m-%d')
-                    if pd.notna(row['Close']):
-                        db_ops.append({
-                            "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)",
-                            "params": [symbol, date_str, row['Close']]
+                    date_str = idx.strftime("%Y-%m-%d")
+                    price    = row["Close"]
+                    if pd.notna(price):
+                        ops.append({
+                            "sql": f"INSERT INTO {price_table} (symbol, date, price) "
+                                   "VALUES (?,?,?)",
+                            "params": [symbol, date_str, float(price)]
                         })
-                    if not is_fx and row.get('Dividends', 0) > 0:
-                        db_ops.append({
-                            "sql": "INSERT INTO dividend_history (symbol, date, dividend) VALUES (?, ?, ?)",
-                            "params": [symbol, date_str, row['Dividends']]
+                    if (not is_fx) and row.get("Dividends", 0) > 0:
+                        ops.append({
+                            "sql": "INSERT INTO dividend_history (symbol, date, dividend) "
+                                   "VALUES (?,?,?)",
+                            "params": [symbol, date_str, float(row["Dividends"])]
                         })
 
-                if d1_batch(db_ops):
-                    print(f"成功覆蓋 {symbol} 的數據到 D1。")
+                if d1_batch(ops):
+                    print("✅  覆蓋寫入成功")
+                    d1_query("UPDATE market_data_coverage SET last_updated = ? "
+                             "WHERE symbol = ?", [today_str, symbol])
                 else:
-                    print(f"ERROR: 覆蓋 {symbol} 的數據到 D1 失敗。")
-                
-                # 更新 coverage 表的最後更新時間
-                d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
+                    print("❌  覆蓋寫入失敗")
 
-                break # 成功後跳出重試迴圈
+                break  # 成功即跳出重試迴圈
 
             except Exception as e:
-                print(f"ERROR on attempt {attempt + 1} for {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    print("5 秒後重試...")
+                print(f"ERROR (attempt {attempt+1}/3): {e}")
+                if attempt < 2:
+                    print("5 秒後重試…")
                     time.sleep(5)
                 else:
-                    print(f"FATAL: 連續 {max_retries} 次抓取 {symbol} 失敗。")
+                    print("FATAL: 多次嘗試仍失敗，跳過。")
 
 
+# -----------------------------------------------------------------------------------------
+#  五、步驟 3：觸發所有使用者重算
+# -----------------------------------------------------------------------------------------
 def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算"""
+    if not (GCP_API_URL and SERVICE_API_KEY):
+        print("警告: 缺少 GCP_API_URL 或 SERVICE_API_KEY，跳過重算觸發。")
+        return
+
     if not uids:
-        print("沒有找到需要觸發重算的使用者。")
-        return
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
+        print("沒有使用者需要重算。")
         return
 
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    
-    # 從環境變數讀取服務帳號金鑰
-    SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
-    if not SERVICE_ACCOUNT_KEY:
-        print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
-        return
+    print(f"\n---  觸發 {len(uids)} 位使用者重算  ---")
 
+    # 與後端 Cloud Function 約定：action = recalculate_all_users
     headers = {
-        'X-API-KEY': GCP_API_KEY, 
-        'Content-Type': 'application/json',
-        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
+        "X-API-KEY": SERVICE_API_KEY,
+        "Content-Type": "application/json",
     }
-    
+
     try:
-        # 一次性觸發所有使用者的重算
-        payload = {"action": "recalculate_all_users"}
-        response = requests.post(GCP_API_URL, json=payload, headers=headers)
-        if response.status_code == 200:
-            print(f"成功觸發所有使用者的重算。")
+        resp = requests.post(GCP_API_URL,
+                             json={"action": "recalculate_all_users"},
+                             headers=headers, timeout=60)
+        if resp.ok:
+            print("✅  成功觸發重算")
         else:
-            print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
+            print(f"❌  觸發失敗: {resp.status_code}  {resp.text}")
     except Exception as e:
-        print(f"觸發全部重算時發生錯誤: {e}")
+        print(f"FATAL: 觸發重算時發生錯誤: {e}")
 
 
+# -----------------------------------------------------------------------------------------
+#  六、主程式入口
+# -----------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.0) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    refresh_targets, all_uids = get_full_refresh_targets()
-    
-    if refresh_targets:
-        fetch_and_overwrite_market_data(refresh_targets)
-        trigger_recalculations(all_uids)
-    else:
-        print("在 market_data_coverage 表中沒有找到任何需要刷新的標的。")
-        
-    print("--- 週末市場數據完整校驗腳本執行完畢 ---")
+    print(f"=== 週末市場資料完整校驗腳本啟動 "
+          f"({datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}) ===")
+
+    targets, user_ids = get_full_refresh_targets()
+    fetch_and_overwrite_market_data(targets)
+    trigger_recalculations(user_ids)
+
+    print("=== 腳本執行完畢 ===")
