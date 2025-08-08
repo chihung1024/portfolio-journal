@@ -352,8 +352,18 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
         const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
         const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
+        
         await ensureDataFreshness(allRequiredSymbols);
-        await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, txs[0].date.split('T')[0])));
+        
+        // 準備一個 map，包含每個 symbol 需要的最早日期
+        const txsBySymbol = txs.reduce((acc, tx) => {
+            const symbol = tx.symbol.toUpperCase();
+            if (!acc[symbol] || tx.date < acc[symbol]) {
+                acc[symbol] = tx.date.split('T')[0];
+            }
+            return acc;
+        }, {});
+        await ensureDataCoverage(allRequiredSymbols, txsBySymbol);
         
         // [修改] 混合計算時，傳入 calculationStartDate，只讀取小範圍的市場數據
         //        完整計算時，calculationStartDate 為第一筆交易日，行為與舊版相同
