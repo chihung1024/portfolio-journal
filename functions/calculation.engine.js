@@ -5,7 +5,9 @@
 const yahooFinance = require("yahoo-finance2").default;
 const { d1Client } = require('./d1.client');
 
-// 股息快取模組
+// ==========================================================
+// == 股息快取模組
+// ==========================================================
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
     
@@ -69,7 +71,11 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
 }
 
-// 所有核心計算與資料獲取輔助函式
+
+// ==========================================================
+// == 所有核心計算與資料獲取輔助函式
+// ==========================================================
+
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         const hist = await yahooFinance.historical(symbol, { period1: startDate, period2: endDate, interval: '1d', autoAdjust: false, backAdjust: false });
@@ -178,7 +184,9 @@ function createCashflowsForXirr(evts, holdings, market) { const flows = []; evts
 function calculateXIRR(flows) { if (flows.length < 2) return null; const amounts = flows.map(f => f.amount); if (!amounts.some(v => v < 0) || !amounts.some(v => v > 0)) return null; const dates = flows.map(f => f.date); const epoch = dates[0].getTime(); const years = dates.map(d => (d.getTime() - epoch) / (365.25 * 24 * 60 * 60 * 1000)); let guess = 0.1, npv; for (let i = 0; i < 50; i++) { if (1 + guess <= 0) { guess /= -2; continue; } npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0); if (Math.abs(npv) < 1e-6) return guess; const derivative = amounts.reduce((sum, amount, j) => sum - years[j] * amount / Math.pow(1 + guess, years[j] + 1), 0); if (Math.abs(derivative) < 1e-9) break; guess -= npv / derivative; } return (npv && Math.abs(npv) < 1e-6) ? guess : null; }
 function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL = 0; for (const e of evts) { const sym = e.symbol.toUpperCase(); if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 }; switch (e.eventType) { case "transaction": { const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); if (e.type === "buy") { pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) }); } else { let sellQty = e.quantity; let costOfGoodsSoldTWD = 0; while (sellQty > 0 && pf[sym].lots.length > 0) { const lot = pf[sym].lots[0]; const qtyToSell = Math.min(sellQty, lot.quantity); costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD; lot.quantity -= qtyToSell; sellQty -= qtyToSell; if (lot.quantity < 1e-9) pf[sym].lots.shift(); } const realized = costTWD - costOfGoodsSoldTWD; totalRealizedPL += realized; pf[sym].realizedCostTWD += costOfGoodsSoldTWD; pf[sym].realizedPLTWD += realized; } break; } case "split": { pf[sym].lots.forEach(l => { l.quantity *= e.ratio; l.pricePerShareTWD /= e.ratio; l.pricePerShareOriginal /= e.ratio; }); break; } case "confirmed_dividend": { const fx = findFxRate(market, e.currency, toDate(e.date)); const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; break; } case "implicit_dividend": { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; } break; } } } const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts); const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market); const xirr = calculateXIRR(xirrFlows); const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0); const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0); const totalReturnValue = totalRealizedPL + totalUnrealizedPL; const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0; return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate }; }
 
-// 主計算函式 (performRecalculation)
+// ==========================================================
+// == 主計算函式 (重構以整合每週快照)
+// ==========================================================
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
     console.log(`--- [${uid}] 重新計算程序開始 (v3.9.0 - 每週快照版) ---`);
     try {
@@ -201,14 +209,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             return;
         }
 
-        // 快照失效邏輯
         const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
         let latestSnapshot = latestSnapshotResult[0];
         
         if (latestSnapshot && modifiedTxDate && toDate(modifiedTxDate) <= toDate(latestSnapshot.snapshot_date)) {
             console.log(`[${uid}] 偵測到歷史交易變動 (${modifiedTxDate})，將使 ${modifiedTxDate} 之後的快照失效...`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
-            // 無需重新查詢，因為我們總是從頭計算每日價值
         }
         
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
@@ -227,20 +233,16 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             return;
         }
 
-        // 總是從頭即時計算每日價值，以供 TWR 和圖表使用
         const dailyPortfolioValues = calculateDailyPortfolioValues(evts, market, firstBuyDate);
         const { twrHistory, benchmarkHistory } = calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, firstBuyDate);
         const portfolioResult = calculateCoreMetrics(evts, market);
         
-        // 只有在接到指令時，才在計算的最後建立一筆快照
         if (createSnapshot) {
-            const todayStr = new Date().toISOString().split('T')[0];
-            // 使用 dailyPortfolioValues 的最後一筆資料作為快照值，避免重複計算
             const lastDate = Object.keys(dailyPortfolioValues).pop();
             if(lastDate) {
                 const marketValue = dailyPortfolioValues[lastDate];
                 const finalState = getPortfolioStateOnDate(evts, new Date(lastDate), market);
-                 const totalCost = Object.values(finalState).reduce((sum, stock) => {
+                const totalCost = Object.values(finalState).reduce((sum, stock) => {
                     return sum + stock.lots.reduce((lotSum, lot) => lotSum + (lot.quantity * lot.pricePerShareTWD), 0);
                 }, 0);
 
