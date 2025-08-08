@@ -235,7 +235,9 @@ async function performRecalculation(uid) {
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
-        'https://portfolio-journal-467915.firebaseapp.com'
+        'https://portfolio-journal-467915.firebaseapp.com',
+        'https://www.911330.xyz',
+        'https://911330.xyz'
     ];
     const origin = req.headers.origin;
     if (allowedOrigins.includes(origin)) {
