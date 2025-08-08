@@ -2,12 +2,12 @@ import os
 import yfinance as yf
 import requests
 import json
-from datetime import datetime, timedelta  # [修正] 在此處新增 timedelta
+from datetime import datetime
 import time
 import pandas as pd
 
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v1.5 - 修正 timedelta 錯誤)
+# == Python 週末完整校驗腳本 (v1.4 - 週末快照觸發版)
 # =========================================================================================
 
 # --- 從環境變數讀取設定 ---
@@ -80,13 +80,16 @@ def fetch_and_overwrite_market_data(targets):
         
         is_fx = "=" in symbol
         
+        # 假設您已為 exchange_rates 建立了 exchange_rates_staging 表
         price_table = "exchange_rates" if is_fx else "price_history"
         price_staging_table = "exchange_rates_staging" if is_fx else "price_history_staging"
         dividend_table = "dividend_history"
         dividend_staging_table = "dividend_history_staging"
 
+
         max_retries = 3
         data_fetched_successfully = False
+        db_ops_staging = []
         
         for attempt in range(max_retries):
             try:
@@ -99,7 +102,6 @@ def fetch_and_overwrite_market_data(targets):
 
                 print(f"成功抓取到 {len(hist)} 筆 {symbol} 的完整歷史數據。")
                 
-                db_ops_staging = []
                 db_ops_staging.append({"sql": f"DELETE FROM {price_staging_table} WHERE symbol = ?", "params": [symbol]})
                 if not is_fx:
                     db_ops_staging.append({"sql": f"DELETE FROM {dividend_staging_table} WHERE symbol = ?", "params": [symbol]})
@@ -153,84 +155,6 @@ def fetch_and_overwrite_market_data(targets):
             print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
 
 
-def update_benchmark_cache(all_txs):
-    """
-    計算並更新所有使用者用過的 Benchmark 的歷史報酬率快取。
-    """
-    print("\n--- 開始更新 Benchmark 報酬率快取 ---")
-    
-    benchmark_symbols_results = d1_query("SELECT DISTINCT value FROM controls WHERE key = 'benchmarkSymbol'")
-    if benchmark_symbols_results is None:
-        print("無法獲取 Benchmark 列表，跳過快取更新。")
-        return
-        
-    user_benchmarks = {row['value'] for row in benchmark_symbols_results if row.get('value')}
-    default_benchmarks = {'SPY', 'QQQ', 'VT'}
-    all_benchmarks_to_cache = list(user_benchmarks.union(default_benchmarks))
-    
-    print(f"準備為以下 Benchmark 建立快取: {all_benchmarks_to_cache}")
-
-    if not all_txs:
-        print("資料庫中無任何交易，無法確定日期範圍，跳過。")
-        return
-
-    first_date_str = min(tx['date'] for tx in all_txs).split('T')[0]
-    start_date = datetime.strptime(first_date_str, '%Y-%m-%d')
-    end_date = datetime.now()
-
-    db_ops = []
-    
-    for symbol in all_benchmarks_to_cache:
-        print(f"正在處理 {symbol}...")
-        
-        prices_results = d1_query(f"SELECT date, price FROM price_history WHERE symbol = ? ORDER BY date ASC", [symbol])
-        if not prices_results:
-             prices_results = d1_query(f"SELECT date, price FROM exchange_rates WHERE symbol = ? ORDER BY date ASC", [symbol])
-        
-        if not prices_results:
-            print(f"找不到 {symbol} 的價格數據，跳過。")
-            continue
-
-        prices = {res['date'].split('T')[0]: res['price'] for res in prices_results}
-        
-        history_data = {}
-        base_price = None
-        
-        current_date = start_date
-        while current_date <= end_date:
-            date_str = current_date.strftime('%Y-%m-%d')
-            
-            price = prices.get(date_str)
-            if price is None:
-                temp_date = current_date - timedelta(days=1)
-                for _ in range(7):
-                    temp_date_str = temp_date.strftime('%Y-%m-%d')
-                    if prices.get(temp_date_str):
-                        price = prices.get(temp_date_str)
-                        break
-                    temp_date -= timedelta(days=1)
-
-            if price is not None:
-                if base_price is None:
-                    base_price = price
-                
-                history_data[date_str] = ((price / base_price) - 1) * 100 if base_price > 0 else 0
-            
-            current_date += timedelta(days=1)
-            
-        db_ops.append({
-            "sql": "INSERT OR REPLACE INTO benchmark_cache (symbol, history_data, last_updated) VALUES (?, ?, ?)",
-            "params": [symbol, json.dumps(history_data), datetime.now().isoformat()]
-        })
-
-    if db_ops:
-        print(f"準備將 {len(db_ops)} 筆 Benchmark 快取寫入資料庫...")
-        if d1_batch(db_ops):
-            print("成功更新所有 Benchmark 快取！")
-        else:
-            print("更新 Benchmark 快取失敗。")
-
-
 def trigger_recalculations(uids):
     """(HTTP 模式) 觸發所有使用者重算，並附帶建立快照的指令"""
     if not uids:
@@ -266,18 +190,13 @@ def trigger_recalculations(uids):
     except Exception as e:
         print(f"觸發重算時發生錯誤: {e}")
 
-
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.5) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.4) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     refresh_targets, all_uids = get_full_refresh_targets()
     
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets)
-        
-        all_txs_for_range = d1_query("SELECT date FROM transactions")
-        update_benchmark_cache(all_txs_for_range)
-
         if all_uids:
             trigger_recalculations(all_uids)
     else:
