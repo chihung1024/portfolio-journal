@@ -127,21 +127,32 @@ async function ensureDataFreshness(symbols) {
     await Promise.all(fetchPromises);
 }
 const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
-async function getMarketDataFromDb(txs, benchmarkSymbol) {
+(txs, benchmarkSymbol, startDate = null) {
     const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
     const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
     const requiredFxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
     const requiredStockSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase()])].filter(Boolean);
+    
     const promises = [];
+    const dateFilter = startDate ? ` AND date >= '${startDate.toISOString().split('T')[0]}'` : '';
+
     if (requiredStockSymbols.length > 0) {
         const p1 = requiredStockSymbols.map(() => '?').join(',');
-        promises.push(d1Client.query(`SELECT symbol, date, price FROM price_history WHERE symbol IN (${p1})`, requiredStockSymbols));
-        promises.push(d1Client.query(`SELECT symbol, date, dividend FROM dividend_history WHERE symbol IN (${p1})`, requiredStockSymbols));
-    } else { promises.push(Promise.resolve([]), Promise.resolve([])); }
+        // [修改] 在 SQL 查詢中加入日期過濾
+        promises.push(d1Client.query(`SELECT symbol, date, price FROM price_history WHERE symbol IN (${p1})${dateFilter}`, requiredStockSymbols));
+        promises.push(d1Client.query(`SELECT symbol, date, dividend FROM dividend_history WHERE symbol IN (${p1})${dateFilter}`, requiredStockSymbols));
+    } else { 
+        promises.push(Promise.resolve([]), Promise.resolve([])); 
+    }
+
     if (requiredFxSymbols.length > 0) {
         const p2 = requiredFxSymbols.map(() => '?').join(',');
-        promises.push(d1Client.query(`SELECT symbol, date, price FROM exchange_rates WHERE symbol IN (${p2})`, requiredFxSymbols));
-    } else { promises.push(Promise.resolve([])); }
+        // [修改] 在 SQL 查詢中加入日期過濾
+        promises.push(d1Client.query(`SELECT symbol, date, price FROM exchange_rates WHERE symbol IN (${p2})${dateFilter}`, requiredFxSymbols));
+    } else { 
+        promises.push(Promise.resolve([])); 
+    }
+
     const [stockPricesFlat, stockDividendsFlat, fxRatesFlat] = await Promise.all(promises);
     const allSymbols = [...requiredStockSymbols, ...requiredFxSymbols];
     const marketData = allSymbols.reduce((acc, symbol) => ({...acc, [symbol]: { prices: {}, dividends: {} }}), {});
@@ -306,7 +317,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         await ensureDataFreshness(allRequiredSymbols);
         await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, txs[0].date.split('T')[0])));
         
-        const market = await getMarketDataFromDb(txs, benchmarkSymbol);
+        // [修改] 混合計算時，傳入 calculationStartDate，只讀取小範圍的市場數據
+        //        完整計算時，calculationStartDate 為第一筆交易日，行為與舊版相同
+        const market = await getMarketDataFromDb(txs, benchmarkSymbol, calculationStartDate);
+        
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
 
         if (!firstBuyDate) {
