@@ -243,7 +243,7 @@ function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL
 // == 主計算函式 (重構以整合混合計算)
 // ==========================================================
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v4.0.0 - 混合計算版) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v4.0.1 - 混合計算修正版) ---`);
     try {
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -284,7 +284,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             const summaryRow = summaryResult[0];
             if (summaryRow && summaryRow.history) {
                  oldHistory = JSON.parse(summaryRow.history);
-                 // 確保只保留快照日期之前的歷史
                  for (const date in oldHistory) {
                     if (toDate(date) > snapshotDate) {
                         delete oldHistory[date];
@@ -330,7 +329,20 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
         
         const newFullHistory = { ...oldHistory, ...partialHistory };
-        const { twrHistory, benchmarkHistory } = calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate);
+
+        // --- 開始偵錯與修正區塊 ---
+        console.log(`[偵錯] 即將呼叫 calculateTwrHistory...`);
+        // [修正] 加上 await 來正確等待非同步函式的結果
+        const twrResult = await calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate);
+        
+        console.log("[偵錯] calculateTwrHistory 的原始回傳結果:", JSON.stringify(twrResult, null, 2));
+        
+        const { twrHistory, benchmarkHistory } = twrResult || { twrHistory: {}, benchmarkHistory: {} }; 
+        
+        console.log("[偵錯] 解構後的 twrHistory 是否為物件:", typeof twrHistory === 'object');
+        console.log("[偵錯] 解構後的 benchmarkHistory 是否為物件:", typeof benchmarkHistory === 'object');
+        // --- 結束偵錯與修正區塊 ---
+
         const portfolioResult = calculateCoreMetrics(evts, market);
         
         if (createSnapshot) {
