@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v3.6.0 - 模組化重構版)
+// == GCP Cloud Function 主入口 (v3.7.0 - 支援快照旗標)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -7,7 +7,6 @@ const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
 
-// 引入拆分出去的模組
 const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
@@ -15,14 +14,11 @@ const { verifyFirebaseToken } = require('./middleware');
 
 try {
   admin.initializeApp();
-  console.log('Firebase Admin SDK 初始化成功。');
 } catch (e) {
-  console.error('Firebase Admin SDK 初始化失敗:', e);
+  // Firebase Admin SDK already initialized
 }
 
-// --- HTTP 請求主處理函式 ---
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
-    // CORS 設定
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
         'https://portfolio-journal-467915.firebaseapp.com'
@@ -33,14 +29,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY');
         res.set('Access-Control-Max-Age', '3600');
         res.status(204).send('');
         return;
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
-    // 檢查是否為內部服務帳號的請求 (用於排程任務)
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -48,15 +43,19 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         }
         if (req.body.action === 'recalculate_all_users') {
             try {
+                const createSnapshot = req.body.createSnapshot || false;
+                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
+
                 const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
-                for (const row of allUidsResult) { await performRecalculation(row.uid); }
+                for (const row of allUidsResult) {
+                    await performRecalculation(row.uid, null, createSnapshot); 
+                }
                 return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
             } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
         }
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
-    // 對於一般使用者請求，執行 Token 驗證
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid; 
@@ -88,36 +87,37 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     if (isEditing) await d1Client.query(`UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]);
                     else await d1Client.query(`INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]);
                     
-                    // [修改] 傳入交易日期以觸發快照失效判斷
-                    await performRecalculation(uid, txData.date); 
+                    await performRecalculation(uid, txData.date, false);
                     return res.status(200).send({ success: true, message: '操作成功。', id: txId });
                 }
                 case 'delete_transaction': {
-                    // [修改] 刪除前需要先查出日期
                     const txResult = await d1Client.query('SELECT date FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
                     const txDate = txResult.length > 0 ? txResult[0].date.split('T')[0] : null;
                     
                     await d1Client.query('DELETE FROM transactions WHERE id = ? AND uid = ?', [data.txId, uid]);
-
-                    // [修改] 傳入交易日期以觸發快照失效判斷
-                    await performRecalculation(uid, txDate); 
+                    
+                    await performRecalculation(uid, txDate, false);
                     return res.status(200).send({ success: true, message: '交易已刪除。' });
                 }
                 case 'update_benchmark': {
                     await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '基準已更新。' });
+                    await performRecalculation(uid, null, false);
+                    return res.status(200).send({ success: true, message: '基準已更新。' });
                 }
                 case 'add_split': {
                     const splitData = splitSchema.parse(data); const newSplitId = uuidv4();
                     await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
+                    await performRecalculation(uid, splitData.date, false);
+                    return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
                 }
                 case 'delete_split': {
+                    const splitResult = await d1Client.query('SELECT date FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
+                    const splitDate = splitResult.length > 0 ? splitResult[0].date.split('T')[0] : null;
                     await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已刪除。' });
+                    await performRecalculation(uid, splitDate, false);
+                    return res.status(200).send({ success: true, message: '分割事件已刪除。' });
                 }
                 case 'get_dividends_for_management': {
-                    // [簡化] 現在只需從快取表和已確認表中讀取資料
                     const [pendingDividends, confirmedDividends] = await Promise.all([
                         d1Client.query('SELECT * FROM user_pending_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid]),
                         d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date DESC', [uid])
@@ -132,10 +132,15 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     });
                 }
                 case 'save_user_dividend': {
-                    const parsedData = userDividendSchema.parse(data); const { id, ...divData } = parsedData; const dividendId = id || uuidv4();
+                    const parsedData = userDividendSchema.parse(data);
+                    await d1Client.query('DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', [uid, parsedData.symbol, parsedData.ex_dividend_date]);
+                    
+                    const { id, ...divData } = parsedData;
+                    const dividendId = id || uuidv4();
                     if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
                     else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
+                    await performRecalculation(uid, null, false);
+                    return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
                 }
                 case 'bulk_confirm_all_dividends': {
                     const pendingDividends = data.pendingDividends || [];
@@ -147,12 +152,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
                         dbOps.push({ sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`, params: [uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]});
                     }
-                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid); }
+                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
                     return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
                 }
                 case 'delete_user_dividend': {
                     await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-                    await performRecalculation(uid); return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
+                    await performRecalculation(uid, null, false);
+                    return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
                 }
                 case 'save_stock_note': {
                     const { symbol, target_price, stop_loss_price, notes } = data;
