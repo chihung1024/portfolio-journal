@@ -279,12 +279,17 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.4) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     refresh_targets, all_uids = get_full_refresh_targets()
     
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets)
+        
+        # [新增] 在完整刷新市場數據後，更新 Benchmark 快取
+        all_txs_for_range = d1_query("SELECT date FROM transactions")
+        update_benchmark_cache(all_txs_for_range)
+
         if all_uids:
             trigger_recalculations(all_uids)
     else:
