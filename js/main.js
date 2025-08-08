@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.4.1
+// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -25,6 +25,23 @@ import {
 
 // --- 事件處理函式 ---
 
+// [新增] 一個帶有鎖定機制的數據同步請求函式
+async function requestDataSync() {
+    if (getState().isSyncing) {
+        console.log("數據同步中，已忽略本次請求。");
+        return;
+    }
+    try {
+        setState({ isSyncing: true });
+        await loadPortfolioData();
+    } catch (error) {
+        console.error("請求同步時發生錯誤:", error);
+    } finally {
+        setState({ isSyncing: false });
+    }
+}
+
+
 function handleEdit(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
@@ -33,29 +50,45 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
+// [優化] 使用樂觀更新重構 handleDelete
 async function handleDelete(button) {
+    const { transactions } = getState();
     const txId = button.dataset.id;
-    showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('delete_transaction', { txId });
-            showNotification('success', '交易紀錄已刪除！');
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
+    
+    const transactionToDelete = transactions.find(t => t.id === txId);
+    if (!transactionToDelete) return;
+
+    showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
+        const originalTransactions = [...transactions];
+        const updatedTransactions = transactions.filter(t => t.id !== txId);
+        setState({ transactions: updatedTransactions });
+
+        renderTransactionsTable();
+        showNotification('info', '交易已於介面移除，正在同步至雲端...');
+
+        apiRequest('delete_transaction', { txId })
+            .then(result => {
+                showNotification('success', '交易紀錄已成功從雲端刪除！');
+                requestDataSync(); // [修改] 使用新的同步函式
+            })
+            .catch(error => {
+                showNotification('error', `刪除失敗: ${error.message}`);
+                setState({ transactions: originalTransactions });
+                renderTransactionsTable();
+            });
     });
 }
 
+// [優化] 使用樂觀更新重構 handleFormSubmit
 async function handleFormSubmit(e) {
     e.preventDefault();
-    const saveBtn = document.getElementById('save-btn');
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
+    
+    const { transactions } = getState();
+    const originalTransactions = [...transactions];
+
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
+
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -66,27 +99,45 @@ async function handleFormSubmit(e) {
         totalCost: parseFloat(document.getElementById('total-cost').value) || null,
         exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
     };
+
     if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
         showNotification('error', '請填寫所有必填欄位。');
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存';
         return;
     }
-    try {
-        const action = isEditing ? 'edit_transaction' : 'add_transaction';
-        const payload = isEditing ? { txId, txData: transactionData } : transactionData;
-        await apiRequest(action, payload);
-        closeModal('transaction-modal');
-        await loadPortfolioData();
-        showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
-    } catch (error) {
-        showNotification('error', `儲存交易失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存';
+    
+    closeModal('transaction-modal');
+
+    if (isEditing) {
+        const updatedTransactions = transactions.map(t => 
+            t.id === txId ? { ...t, ...transactionData, id: txId } : t
+        );
+        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
+    } else {
+        const tempId = `temp_${Date.now()}`;
+        const newTransaction = { id: tempId, ...transactionData };
+        const updatedTransactions = [newTransaction, ...transactions];
+        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
     }
+
+    renderTransactionsTable();
+    showNotification('info', '交易已更新於介面，正在同步至雲端...');
+
+    const action = isEditing ? 'edit_transaction' : 'add_transaction';
+    const payload = isEditing ? { txId, txData: transactionData } : transactionData;
+
+    apiRequest(action, payload)
+        .then(result => {
+            showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
+            requestDataSync(); // [修改] 使用新的同步函式
+        })
+        .catch(error => {
+            showNotification('error', `儲存交易失敗: ${error.message}`);
+            setState({ transactions: originalTransactions });
+            renderTransactionsTable();
+        });
 }
 
+// 以下為其他未變動的函式...
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     showConfirm('確定要刪除這個拆股事件嗎？', async () => {
