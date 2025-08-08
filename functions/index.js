@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v3.8.0 - 支援快照失效判斷)
+// == GCP Cloud Function 主入口 (v4.0.0 - 引入 Pub/Sub Worker)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -18,6 +18,9 @@ try {
   // Firebase Admin SDK already initialized
 }
 
+// ===================================================================
+// == HTTP 觸發函式 (處理前端請求)
+// ===================================================================
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
@@ -36,26 +39,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     
+    // [修改] 移除原有服務帳號金鑰的處理邏輯，因其已被 Pub/Sub 模式取代
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
-        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
-            return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
-        }
-        if (req.body.action === 'recalculate_all_users') {
-            try {
-                const createSnapshot = req.body.createSnapshot || false;
-                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
-
-                const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
-                for (const row of allUidsResult) {
-                    await performRecalculation(row.uid, null, createSnapshot); 
-                }
-                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
-            } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
-        }
-        return res.status(400).send({ success: false, message: '無效的服務操作。' });
+        return res.status(400).send({ success: false, message: '此端點不再支援批次重算，請使用 Pub/Sub 觸發模式。' });
     }
 
+    // 處理來自前端使用者的請求 (邏輯不變)
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid; 
@@ -133,35 +123,18 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }
                 case 'save_user_dividend': {
                     const parsedData = userDividendSchema.parse(data);
-                    // [修正] 在執行資料庫操作前，先取得日期
-                    const eventDate = parsedData.pay_date; 
-                
-                    // 刪除對應的待確認股息 (這會影響後續的股息快取計算)
                     await d1Client.query('DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', [uid, parsedData.symbol, parsedData.ex_dividend_date]);
-                
+                    
                     const { id, ...divData } = parsedData;
                     const dividendId = id || uuidv4();
-                    if (id) {
-                        await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
-                    } else {
-                        await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    }
-                
-                    // [修正] 傳入正確的配息發放日期
-                    await performRecalculation(uid, eventDate, false);
+                    if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
+                    else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
+                    await performRecalculation(uid, null, false);
                     return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
                 }
                 case 'bulk_confirm_all_dividends': {
                     const pendingDividends = data.pendingDividends || [];
                     if (pendingDividends.length === 0) return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
-                
-                    // [修正] 取得所有變動日期中最舊的一個，作為失效判斷的依據
-                    const oldestPayDate = pendingDividends.reduce((oldest, p) => {
-                        const payDate = new Date(p.ex_dividend_date);
-                        payDate.setMonth(payDate.getMonth() + 1);
-                        return payDate < oldest ? payDate : oldest;
-                    }, new Date());
-                
                     const dbOps = [];
                     const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
                     for (const pending of pendingDividends) {
@@ -169,22 +142,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
                         dbOps.push({ sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`, params: [uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]});
                     }
-                    if (dbOps.length > 0) { 
-                        await d1Client.batch(dbOps); 
-                        // [修正] 傳入最舊的日期
-                        await performRecalculation(uid, oldestPayDate.toISOString().split('T')[0], false);
-                    }
+                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
                     return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
                 }
                 case 'delete_user_dividend': {
-                    // [修正] 刪除前需要先查出日期
-                    const divResult = await d1Client.query('SELECT pay_date FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-                    const divDate = divResult.length > 0 ? divResult[0].pay_date.split('T')[0] : null;
-                
                     await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-                
-                    // [修正] 傳入正確的配息發放日期
-                    await performRecalculation(uid, divDate, false);
+                    await performRecalculation(uid, null, false);
                     return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
                 }
                 case 'save_stock_note': {
@@ -204,3 +167,42 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         }
     });
 });
+
+
+// ===================================================================
+// == [新增] Pub/Sub 觸發函式 (處理背景批次重算)
+// ===================================================================
+exports.recalculationWorker = functions.region('asia-east1')
+    .runWith({
+        timeoutSeconds: 540, // 將逾時時間設為最大值 (9分鐘)
+        memory: '1GB'        // 根據需要分配更多記憶體
+    })
+    .pubsub.topic('recalculation-topic') // 訂閱您建立的主題
+    .onPublish(async (message) => {
+        try {
+            // Pub/Sub 訊息的內容是 Base64 編碼的，需要解碼
+            const payloadStr = Buffer.from(message.data, 'base64').toString();
+            const payload = JSON.parse(payloadStr);
+
+            const { uid, createSnapshot } = payload;
+
+            if (!uid) {
+                console.error("收到的 Pub/Sub 訊息中缺少 'uid'。");
+                return; // 正常結束，避免重試
+            }
+
+            console.log(`[Worker] 開始為使用者 ${uid} 進行重新計算，是否建立快照: ${createSnapshot}`);
+            
+            // 為這一個使用者執行耗時的計算
+            await performRecalculation(uid, null, createSnapshot || false);
+
+            console.log(`[Worker] 使用者 ${uid} 的重新計算成功完成。`);
+            return;
+
+        } catch (error) {
+            const uid = message.json?.uid || '未知';
+            console.error(`[Worker] 為使用者 ${uid} 的計算失敗:`, error);
+            // 拋出錯誤以觸發 Pub/Sub 的內建重試機制
+            throw new Error(`Recalculation failed for UID: ${uid}`);
+        }
+    });
