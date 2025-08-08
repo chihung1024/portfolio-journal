@@ -5,20 +5,17 @@ import json
 from datetime import datetime, timedelta
 import time
 import pandas as pd
-# [新增] 引入 Pub/Sub 客戶端和 os 模組以讀取專案ID
-from google.cloud import pubsub_v1
 
 # =========================================================================================
-# == Python 每日增量更新腳本 完整程式碼 (v3.0 - 增量更新版) -> (v4.0 - Pub/Sub 觸發版)
+# == Python 每日增量更新腳本 完整程式碼 (v3.0 - 增量更新版)
 # =========================================================================================
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
-
-# [新增] GCP Pub/Sub 設定
-GCP_PROJECT_ID = "portfolio-journal-467915"  # 您的 GCP 專案 ID
-PUB_SUB_TOPIC_ID = "recalculation-topic"    # 您建立的 Pub/Sub 主題 ID
+GCP_API_URL = os.environ.get("GCP_API_URL")
+# GCP 和 D1 Worker 使用相同的金鑰
+GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
     """通用 D1 查詢函式"""
@@ -88,6 +85,8 @@ def fetch_and_append_market_data(symbols):
         if result and result[0].get('latest_date'):
             latest_date_str = result[0]['latest_date'].split('T')[0]
         
+        # 如果找不到日期，可能是一個全新的標的，但理論上 coverage 表應該要有
+        # 為求穩健，我們從一個較早的日期開始
         if not latest_date_str:
             print(f"警告: 在 {price_table} 中找不到 {symbol} 的任何紀錄，將從 2000-01-01 開始抓取。")
             start_date = "2000-01-01"
@@ -121,6 +120,7 @@ def fetch_and_append_market_data(symbols):
                 for idx, row in hist.iterrows():
                     date_str = idx.strftime('%Y-%m-%d')
                     if pd.notna(row['Close']):
+                        # 使用 INSERT OR IGNORE 避免因重複執行腳本而導致錯誤
                         db_ops.append({
                             "sql": f"INSERT OR IGNORE INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)",
                             "params": [symbol, date_str, row['Close']]
@@ -137,9 +137,10 @@ def fetch_and_append_market_data(symbols):
                     else:
                         print(f"ERROR: 寫入 {symbol} 的新紀錄到 D1 失敗。")
                 
+                # 更新 coverage 表的最後更新時間
                 d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
 
-                break 
+                break # 成功後跳出重試迴圈
 
             except Exception as e:
                 print(f"ERROR on attempt {attempt + 1} for {symbol}: {e}")
@@ -150,42 +151,49 @@ def fetch_and_append_market_data(symbols):
                     print(f"FATAL: 連續 {max_retries} 次抓取 {symbol} 失敗。")
 
 
-def publish_recalculation_tasks(uids, create_snapshot=False):
-    """[新增] 將重算任務作為訊息發佈到 Pub/Sub 主題"""
+def trigger_recalculations(uids):
+    """主動觸發所有使用者的投資組合重新計算"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
-        
-    publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(GCP_PROJECT_ID, PUB_SUB_TOPIC_ID)
+    if not GCP_API_URL or not GCP_API_KEY:
+        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
+        return
+
+    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
     
-    print(f"\n--- 準備為 {len(uids)} 位使用者發佈重算任務到 Pub/Sub ---")
+    # 從環境變數讀取服務帳號金鑰
+    SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
+    if not SERVICE_ACCOUNT_KEY:
+        print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
+        return
+
+    headers = {
+        'X-API-KEY': GCP_API_KEY, 
+        'Content-Type': 'application/json',
+        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
+    }
     
-    published_count = 0
-    for uid in uids:
-        message_data = {
-            "uid": uid,
-            "createSnapshot": create_snapshot
-        }
-        # 訊息內容需為 bytes 格式
-        future = publisher.publish(topic_path, json.dumps(message_data).encode("utf-8"))
-        # .result() 會等待發佈完成，但通常非同步發送即可
-        # print(f"Published message ID: {future.result()}")
-        published_count += 1
-        
-    print(f"成功發佈 {published_count} 個任務。後端將非同步處理。")
+    try:
+        # 一次性觸發所有使用者的重算
+        payload = {"action": "recalculate_all_users"}
+        response = requests.post(GCP_API_URL, json=payload, headers=headers)
+        if response.status_code == 200:
+            print(f"成功觸發所有使用者的重算。")
+        else:
+            print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
+    except Exception as e:
+        print(f"觸發全部重算時發生錯誤: {e}")
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.0 - Pub/Sub) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v3.0) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     update_symbols, all_uids = get_update_targets()
     
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
-        # [修改] 不再呼叫 HTTP 端點，而是發佈任務
-        if all_uids:
-            publish_recalculation_tasks(all_uids, create_snapshot=False)
+        trigger_recalculations(all_uids)
     else:
         print("在 market_data_coverage 表中沒有找到任何需要更新的標的。")
         
