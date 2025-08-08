@@ -1,17 +1,31 @@
 name: Weekend Full Data Refresh
 
 on:
-  workflow_dispatch: # 允許手動從 GitHub Actions 頁面執行
+  workflow_dispatch:
   schedule:
-    # UTC 時間每週日的 01:00 執行 (相當於台灣時間的週日早上 09:00)
     - cron: '0 1 * * 0'
 
 jobs:
   full-refresh:
+    # 🚨 檢查此區塊：身份驗證需要此權限設定
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+
+      # 🚨 檢查此步驟：整個區塊都必須存在且內容正確
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          # 將此處替換為您的實際專案編號
+          workload_identity_provider: 'projects/YOUR_PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          # 將此處替換為您的服務帳號 Email
+          service_account: 'YOUR_SERVICE_ACCOUNT_EMAIL'
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,10 +37,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance requests pandas google-cloud-pubsub
 
+      # 注意：現在 env 區塊更簡潔了
       - name: Run weekend full-refresh script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # 新增此行
-          SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
         run: python main_weekend.py
