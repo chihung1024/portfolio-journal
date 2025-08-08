@@ -21,14 +21,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # [修改] 新增 google-cloud-pubsub 依賴
-          pip install yfinance requests pandas google-cloud-pubsub
+          pip install yfinance requests pandas
 
       - name: Run weekend full-refresh script
         env:
           D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
           D1_API_KEY: ${{ secrets.D1_API_KEY }}
-          # [修改] 移除 GCP_API_URL 和 SERVICE_ACCOUNT_KEY
-          # GCP_API_URL: ${{ secrets.GCP_API_URL }}
-          # SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+          GCP_API_URL: ${{ secrets.GCP_API_URL }}
+          SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+        # [核心修改] 執行新的週末專用腳本
         run: python main_weekend.py
