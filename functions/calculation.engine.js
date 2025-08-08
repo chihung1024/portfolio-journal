@@ -80,52 +80,90 @@ async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
         return null;
     }
 }
-async function ensureDataCoverage(symbol, requiredStartDate) {
-    if (!symbol || !requiredStartDate) return;
-    const coverageData = await d1Client.query('SELECT earliest_date FROM market_data_coverage WHERE symbol = ?', [symbol]);
-    const today = new Date().toISOString().split('T')[0];
-    if (coverageData.length === 0) {
-        const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
-        if (fetchedData && fetchedData.length > 0) {
-            const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
-            await d1Client.query('INSERT INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)', [symbol, actualEarliestDate, today]);
+
+// [重構] 使用批次化查詢來優化 ensureDataCoverage
+async function ensureDataCoverage(symbols, txsBySymbol) {
+    if (!symbols || symbols.length === 0) return;
+
+    const placeholders = symbols.map(() => '?').join(',');
+    const coverageResults = await d1Client.query(`SELECT symbol, earliest_date FROM market_data_coverage WHERE symbol IN (${placeholders})`, symbols);
+    
+    const coverageMap = new Map();
+    coverageResults.forEach(row => {
+        coverageMap.set(row.symbol, row.earliest_date);
+    });
+
+    const updatePromises = symbols.map(symbol => {
+        const requiredStartDate = txsBySymbol[symbol];
+        if (!requiredStartDate) return Promise.resolve();
+
+        const currentEarliestDate = coverageMap.get(symbol);
+
+        if (!currentEarliestDate || requiredStartDate < currentEarliestDate) {
+            console.log(`[Data Coverage] ${symbol} has insufficient coverage. Required: ${requiredStartDate}, Has: ${currentEarliestDate || 'None'}. Triggering full refresh...`);
+            const today = new Date().toISOString().split('T')[0];
+            const isFx = symbol.includes("=");
+            const priceTable = isFx ? "exchange_rates" : "price_history";
+            const deleteOps = [{ sql: `DELETE FROM ${priceTable} WHERE symbol = ?`, params: [symbol] }];
+            if (!isFx) deleteOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
+            
+            // 為了避免與下方 fetchAndSaveMarketDataRange 的 batch 衝突，這裡先 await
+            return d1Client.batch(deleteOps).then(async () => {
+                const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
+                if (fetchedData && fetchedData.length > 0) {
+                    const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
+                    await d1Client.query('INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)', [symbol, actualEarliestDate, today]);
+                }
+            });
         }
-        return;
-    }
-    const currentEarliestDate = coverageData[0].earliest_date;
-    if (requiredStartDate < currentEarliestDate) {
-        const isFx = symbol.includes("=");
-        const priceTable = isFx ? "exchange_rates" : "price_history";
-        const deleteOps = [{ sql: `DELETE FROM ${priceTable} WHERE symbol = ?`, params: [symbol] }];
-        if (!isFx) deleteOps.push({ sql: `DELETE FROM dividend_history WHERE symbol = ?`, params: [symbol] });
-        await d1Client.batch(deleteOps);
-        const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
-        if (fetchedData && fetchedData.length > 0) {
-            const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
-            await d1Client.query('UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?', [actualEarliestDate, today, symbol]);
-        }
-    }
+        return Promise.resolve();
+    });
+
+    await Promise.all(updatePromises);
 }
+
 async function ensureDataFreshness(symbols) {
     if (!symbols || symbols.length === 0) return;
+
     const today = new Date();
     const targetDate = new Date(today);
     targetDate.setDate(today.getDate() - 1);
     const targetDateStr = targetDate.toISOString().split('T')[0];
-    const fetchPromises = symbols.map(async (symbol) => {
-        const isFx = symbol.includes("=");
-        const tableName = isFx ? "exchange_rates" : "price_history";
-        const result = await d1Client.query(`SELECT MAX(date) as latest_date FROM ${tableName} WHERE symbol = ?`, [symbol]);
-        const latestDateStr = result?.[0]?.latest_date?.split('T')[0];
+
+    const stockSymbols = symbols.filter(s => !s.includes("="));
+    const fxSymbols = symbols.filter(s => s.includes("="));
+
+    const checks = [];
+    if (stockSymbols.length > 0) {
+        const placeholders = stockSymbols.map(() => '?').join(',');
+        checks.push(d1Client.query(`SELECT symbol, MAX(date) as latest_date FROM price_history WHERE symbol IN (${placeholders}) GROUP BY symbol`, stockSymbols));
+    }
+    if (fxSymbols.length > 0) {
+        const placeholders = fxSymbols.map(() => '?').join(',');
+        checks.push(d1Client.query(`SELECT symbol, MAX(date) as latest_date FROM exchange_rates WHERE symbol IN (${placeholders}) GROUP BY symbol`, fxSymbols));
+    }
+
+    const results = await Promise.all(checks);
+    const latestDatesMap = new Map();
+    results.flat().forEach(row => {
+        latestDatesMap.set(row.symbol, row.latest_date.split('T')[0]);
+    });
+
+    const fetchPromises = symbols.map(symbol => {
+        const latestDateStr = latestDatesMap.get(symbol);
         if (!latestDateStr || latestDateStr < targetDateStr) {
             const startDate = new Date(latestDateStr || '2000-01-01');
             startDate.setDate(startDate.getDate() + 1);
             const startDateStr = startDate.toISOString().split('T')[0];
+            console.log(`[Data Freshness] ${symbol} is stale. Fetching from ${startDateStr}...`);
             return fetchAndSaveMarketDataRange(symbol, startDateStr, today.toISOString().split('T')[0]);
         }
+        return Promise.resolve();
     });
+
     await Promise.all(fetchPromises);
 }
+
 const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 (txs, benchmarkSymbol, startDate = null) {
     const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
