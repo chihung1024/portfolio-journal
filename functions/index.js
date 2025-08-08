@@ -108,29 +108,19 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     await performRecalculation(uid); return res.status(200).send({ success: true, message: '分割事件已刪除。' });
                 }
                 case 'get_dividends_for_management': {
-                    const [txs, allDividendsHistory, userDividends] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-                        d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC'),
-                        d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid])
+                    // [簡化] 現在只需從快取表和已確認表中讀取資料
+                    const [pendingDividends, confirmedDividends] = await Promise.all([
+                        d1Client.query('SELECT * FROM user_pending_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid]),
+                        d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date DESC', [uid])
                     ]);
-                    if (txs.length === 0) return res.status(200).send({ success: true, data: { pendingDividends: [], confirmedDividends: userDividends } });
-                    const holdings = {}; let txIndex = 0; const confirmedKeys = new Set(userDividends.map(d => `${d.symbol}_${d.ex_dividend_date.split('T')[0]}`));
-                    const pendingDividends = []; const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol))];
-                    const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
-                    allDividendsHistory.forEach(histDiv => {
-                        const divSymbol = histDiv.symbol; if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
-                        const exDateStr = histDiv.date.split('T')[0]; if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
-                        const exDateMinusOne = new Date(exDateStr); exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-                        while(txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
-                            const tx = txs[txIndex]; holdings[tx.symbol] = (holdings[tx.symbol] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity); txIndex++;
-                        }
-                        const quantity = holdings[divSymbol] || 0;
-                        if (quantity > 0) {
-                             const currency = txs.find(t => t.symbol === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
-                             pendingDividends.push({ symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend, quantity_at_ex_date: quantity, currency: currency });
+                    
+                    return res.status(200).send({ 
+                        success: true, 
+                        data: { 
+                            pendingDividends: pendingDividends || [], 
+                            confirmedDividends: confirmedDividends || [] 
                         }
                     });
-                    return res.status(200).send({ success: true, data: { pendingDividends: pendingDividends.sort((a,b) => new Date(b.ex_dividend_date) - new Date(a.ex_dividend_date)), confirmedDividends: userDividends }});
                 }
                 case 'save_user_dividend': {
                     const parsedData = userDividendSchema.parse(data); const { id, ...divData } = parsedData; const dividendId = id || uuidv4();
