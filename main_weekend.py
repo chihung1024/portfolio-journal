@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import time
 import pandas as pd
+from google.cloud import pubsub_v1
 
 # =========================================================================================
 # == Python 週末完整校驗腳本 完整程式碼 (v1.0 - 完整覆蓋版)
@@ -13,8 +14,8 @@ import pandas as pd
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
-GCP_API_URL = os.environ.get("GCP_API_URL")
-GCP_API_KEY = D1_API_KEY
+GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
+PUB_SUB_TOPIC_ID = "recalculation-topic"
 
 def d1_query(sql, params=None):
     """通用 D1 查詢函式"""
@@ -47,15 +48,13 @@ def d1_batch(statements):
         return False
 
 def get_full_refresh_targets():
-    """從 market_data_coverage 表獲取所有需要完整刷新的標的及其日期範圍"""
+    """從 D1 獲取所有需要完整刷新的標的及其日期範圍"""
     print("正在從 D1 獲取所有需要完整刷新的金融商品列表...")
-    # [核心邏輯] 查詢 symbol 和 earliest_date
     sql = "SELECT symbol, earliest_date FROM market_data_coverage"
     targets = d1_query(sql)
     if targets is None:
         return [], []
     
-    # 同時獲取所有活躍的使用者 ID 以便後續觸發重算
     uid_sql = "SELECT DISTINCT uid FROM transactions"
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')]
@@ -65,9 +64,7 @@ def get_full_refresh_targets():
     return targets, uids
 
 def fetch_and_overwrite_market_data(targets):
-    """
-    為每個標的抓取其在 coverage 表中定義的完整日期範圍數據，並覆蓋 D1 資料庫。
-    """
+    """為每個標的抓取完整日期範圍數據並覆蓋 D1 資料庫"""
     if not targets:
         print("沒有需要刷新的標的。")
         return
@@ -98,15 +95,11 @@ def fetch_and_overwrite_market_data(targets):
 
                 print(f"成功抓取到 {len(hist)} 筆 {symbol} 的完整歷史數據。")
                 
-                # [核心邏輯] 準備 SQL 指令，先刪除後插入
                 db_ops = []
-                
-                # 1. 刪除舊數據
                 db_ops.append({"sql": f"DELETE FROM {price_table} WHERE symbol = ?", "params": [symbol]})
                 if not is_fx:
                     db_ops.append({"sql": "DELETE FROM dividend_history WHERE symbol = ?", "params": [symbol]})
 
-                # 2. 插入新數據
                 for idx, row in hist.iterrows():
                     date_str = idx.strftime('%Y-%m-%d')
                     if pd.notna(row['Close']):
@@ -125,11 +118,8 @@ def fetch_and_overwrite_market_data(targets):
                 else:
                     print(f"ERROR: 覆蓋 {symbol} 的數據到 D1 失敗。")
                 
-                # 更新 coverage 表的最後更新時間
                 d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
-
-                break # 成功後跳出重試迴圈
-
+                break
             except Exception as e:
                 print(f"ERROR on attempt {attempt + 1} for {symbol}: {e}")
                 if attempt < max_retries - 1:
@@ -140,42 +130,34 @@ def fetch_and_overwrite_market_data(targets):
 
 
 def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算"""
+    """將需要重算的使用者 ID 發布到 Pub/Sub"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
-    if not GCP_API_URL or not GCP_API_KEY:
-        print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
+    if not GCP_PROJECT_ID:
+        print("FATAL: 缺少 GCP_PROJECT_ID 環境變數，無法發布到 Pub/Sub。")
         return
 
-    print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, PUB_SUB_TOPIC_ID)
     
-    # 從環境變數讀取服務帳號金鑰
-    SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
-    if not SERVICE_ACCOUNT_KEY:
-        print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
-        return
+    print(f"\n--- 準備為 {len(uids)} 位使用者發布重算任務到 Pub/Sub ---")
+    
+    for uid in uids:
+        try:
+            # 將 uid 編碼為 bytes
+            data = uid.encode("utf-8")
+            # 發布訊息
+            future = publisher.publish(topic_path, data)
+            # 您可以 await future.result() 來確認發布成功，但在腳本中通常直接發布即可
+        except Exception as e:
+            print(f"為 UID {uid} 發布訊息時發生錯誤: {e}")
 
-    headers = {
-        'X-API-KEY': GCP_API_KEY, 
-        'Content-Type': 'application/json',
-        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
-    }
-    
-    try:
-        # 一次性觸發所有使用者的重算
-        payload = {"action": "recalculate_all_users"}
-        response = requests.post(GCP_API_URL, json=payload, headers=headers)
-        if response.status_code == 200:
-            print(f"成功觸發所有使用者的重算。")
-        else:
-            print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
-    except Exception as e:
-        print(f"觸發全部重算時發生錯誤: {e}")
+    print("所有重算任務已成功發布到 Pub/Sub。")
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.0) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.1) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     refresh_targets, all_uids = get_full_refresh_targets()
     
