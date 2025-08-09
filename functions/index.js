@@ -11,6 +11,7 @@ const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
+const { performRecalculation, getHistoricalHoldingsAnalysis } = require('./calculation.engine');
 
 try {
   admin.initializeApp();
@@ -201,6 +202,17 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 
                     return;
                 }
+
+                case 'get_historical_analysis': {
+                    const { targetDate } = data;
+                    // 伺服器端基本驗證
+                    if (!targetDate || !/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+                        return res.status(400).send({ success: false, message: '無效或缺失的日期參數 (targetDate)。' });
+                    }
+                    const analysisData = await getHistoricalHoldingsAnalysis(uid, targetDate);
+                    return res.status(200).send({ success: true, data: analysisData });
+                }
+                
                 case 'save_stock_note': {
                     const { symbol, target_price, stop_loss_price, notes } = data;
                     const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
