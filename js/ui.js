@@ -406,9 +406,7 @@ export function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('dividend-total-amount').value = record.total_amount;
             document.getElementById('dividend-notes').value = record.notes || '';
         } else {
-            const exDate = new Date(record.ex_dividend_date);
-            exDate.setMonth(exDate.getMonth() + 1);
-            document.getElementById('dividend-pay-date').value = exDate.toISOString().split('T')[0];
+            document.getElementById('dividend-pay-date').value = record.ex_dividend_date.split('T')[0];
             const taxRate = isTwStock(record.symbol) ? 0 : 30;
             document.getElementById('dividend-tax-rate').value = taxRate;
             const totalAmount = record.amount_per_share * record.quantity_at_ex_date * (1 - taxRate / 100);
