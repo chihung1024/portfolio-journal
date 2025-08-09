@@ -329,11 +329,14 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
 
     const { stateKey, historyKey, updateFunc } = config;
     const controlsId = `${chartType}-chart-controls`;
+    const controlsContainer = document.getElementById(controlsId); // 【新增】先找到控制項的容器
+
+    if (!controlsContainer) return; // 如果容器不存在，直接返回
 
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
 
-    document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
+    controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
@@ -342,8 +345,9 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
     if (rangeType !== 'custom') {
-        const startDateInput = document.getElementById(`${chartType}-start-date`);
-        const endDateInput = document.getElementById(`${chartType}-end-date`);
+        // 【修改】從容器內部尋找元素，而不是從全域 document 尋找
+        const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
+        const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
         if (startDateInput && endDateInput) {
             startDateInput.value = finalStartDate;
             endDateInput.value = finalEndDate;
