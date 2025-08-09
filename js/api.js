@@ -12,7 +12,7 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
-    updateNetProfitChart, // Add this line
+    updateNetProfitChart, // 【新增此行】
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
