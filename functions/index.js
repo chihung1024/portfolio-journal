@@ -161,9 +161,20 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         // 【修改】直接使用除息日作為預設的發放日
                         const payDateStr = pending.ex_dividend_date.split('T')[0]; 
                         const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-                        dbOps.push({ 
-                            sql: `INSERT INTO user_dividends (...) VALUES (...)`, 
-                            params: [uuidv4(), uid, ..., payDateStr, ...] // <-- 這一行是無效的語法
+                        dbOps.push({
+                            sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`,
+                            params: [
+                                uuidv4(),
+                                uid,
+                                pending.symbol,
+                                pending.ex_dividend_date,
+                                payDateStr, // 我們修改過的變數
+                                pending.amount_per_share,
+                                pending.quantity_at_ex_date,
+                                totalAmount,
+                                taxRate * 100,
+                                pending.currency
+                            ]
                         });
                     }
                     if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
