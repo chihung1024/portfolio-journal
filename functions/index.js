@@ -161,7 +161,10 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         // 【修改】直接使用除息日作為預設的發放日
                         const payDateStr = pending.ex_dividend_date.split('T')[0]; 
                         const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-                        dbOps.push({ sql: `INSERT INTO user_dividends (...) VALUES (...)`, params: [uuidv4(), uid, ..., payDateStr, ...]});
+                        dbOps.push({ 
+                            sql: `INSERT INTO user_dividends (...) VALUES (...)`, 
+                            params: [uuidv4(), uid, ..., payDateStr, ...] // <-- 這一行是無效的語法
+                        });
                     }
                     if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
                     return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
