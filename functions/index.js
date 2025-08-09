@@ -133,23 +133,29 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }
                 case 'save_user_dividend': {
                     const parsedData = userDividendSchema.parse(data);
+                    // 這一步是針對從「待確認」轉過來的操作，對於直接編輯「已確認」的紀錄沒有影響，可以保留
                     await d1Client.query('DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', [uid, parsedData.symbol, parsedData.ex_dividend_date]);
-                    
+                
                     const { id, ...divData } = parsedData;
                     const dividendId = id || uuidv4();
-                    if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
-                    else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    
-                    // 【修改】立即回傳成功訊息，讓前端可以繼續操作
-                    res.status(200).send({ success: true, message: '配息紀錄已儲存，後端將在背景進行數據更新。' });
                 
-                    // 【修改】在背景觸發重新計算，不等待其完成，並捕捉潛在錯誤
+                    if (id) {
+                        // 執行編輯（更新）資料庫
+                        await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
+                    } else {
+                        // 執行新增資料庫
+                        await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
+                    }
+                
+                    // 【修改】將樂觀模式的邏輯應用於整個 case
+                    // 立即回傳成功訊息
+                    res.status(200).send({ success: true, message: '配息紀錄已儲存，後端將在背景更新數據。' });
+                
+                    // 在背景觸發重新計算，不等待其完成
                     performRecalculation(uid, null, false).catch(err => {
-                        // 建議加入日誌記錄，以便追蹤背景任務失敗的情況
-                        console.error(`[${uid}] UID 的背景配息重算失敗:`, err);
+                        console.error(`[${uid}] UID 的背景儲存/編輯配息重算失敗:`, err);
                     });
-                    
-                    // 不需要再 return，因為已經發送過回應
+                
                     return;
                 }
                 case 'bulk_confirm_all_dividends': {
