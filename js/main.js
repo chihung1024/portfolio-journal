@@ -302,7 +302,7 @@ async function handleDeleteDividend(button) {
     });
 }
 
-//【修正】恢復為明確的、非數據驅動的函式，以確保穩定性
+// 【最終修正版】handleChartRangeChange 函式
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
     let stateKey, historyKey, updateFunc, controlsId;
 
@@ -340,8 +340,9 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const fullHistory = getState()[historyKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
+    // 【關鍵修正】使用 setTimeout 將 DOM 更新操作推遲到下一個事件循環
+    // 這樣可以確保即使是新加入的圖表元素，也有足夠的時間被瀏覽器渲染完成
     if (rangeType !== 'custom') {
-        // 【關鍵修正】使用 setTimeout 將 DOM 更新操作推遲到下一個事件循環
         setTimeout(() => {
             const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
             const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
@@ -352,6 +353,7 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
         }, 0);
     }
 
+    // 更新圖表本身的數據
     updateFunc();
 }
 
