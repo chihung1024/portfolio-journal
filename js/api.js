@@ -12,6 +12,7 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
+    updateNetProfitChart, // Add this line
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
