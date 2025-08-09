@@ -304,53 +304,55 @@ async function handleDeleteDividend(button) {
 
 // 【恢復】明確、獨立的 handleChartRangeChange 函式
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    let stateKey, historyKey, updateFunc, controlsId;
-
-    // 根據圖表類型，設定對應的變數
-    if (chartType === 'twr') {
-        stateKey = 'twrDateRange';
-        historyKey = 'twrHistory';
-        updateFunc = () => updateTwrChart(document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY');
-        controlsId = 'twr-chart-controls';
-    } else if (chartType === 'asset') {
-        stateKey = 'assetDateRange';
-        historyKey = 'portfolioHistory';
-        updateFunc = updateAssetChart;
-        controlsId = 'asset-chart-controls';
-    } else if (chartType === 'netProfit') {
-        stateKey = 'netProfitDateRange';
-        historyKey = 'netProfitHistory';
-        updateFunc = updateNetProfitChart;
-        controlsId = 'net-profit-chart-controls';
-    } else {
+    const config = chartConfig[chartType];
+    if (!config) {
         console.error(`未知的圖表類型: ${chartType}`);
         return;
     }
 
+    const { stateKey, historyKey, updateFunc } = config;
+    const controlsId = `${chartType}-chart-controls`;
     const controlsContainer = document.getElementById(controlsId);
-    if (!controlsContainer) return;
 
+    if (!controlsContainer) {
+        console.error(`找不到圖表控制項容器: #${controlsId}`);
+        return;
+    }
+
+    // 更新 state 中的日期範圍設定
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
 
+    // 更新按鈕的啟用狀態
     controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => {
         btn.classList.remove('active');
-        if (btn.dataset.range === rangeType) btn.classList.add('active');
+        if (btn.dataset.range === rangeType) {
+            btn.classList.add('active');
+        }
     });
 
     const fullHistory = getState()[historyKey];
+    // 根據點擊的按鈕，計算出正確的起訖日期字串
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
+    // 【關鍵修正】確保在點擊預設按鈕時，無論如何都更新日期輸入框
     if (rangeType !== 'custom') {
         const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
         const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
+        
         if (startDateInput && endDateInput) {
             startDateInput.value = finalStartDate;
             endDateInput.value = finalEndDate;
         }
     }
 
-    updateFunc();
+    // 根據設定檔呼叫對應的圖表更新函式
+    if (chartType === 'twr') {
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
+        updateFunc(benchmarkSymbol);
+    } else {
+        updateFunc();
+    }
 }
 
 function setupCommonEventListeners() {
