@@ -22,40 +22,10 @@ import {
     updateAssetChart,
     updateTwrChart,
     updateNetProfitChart, // 【新增】
-    renderHistoricalAnalysisModal, // 【新增】
     getDateRangeForPreset,
 } from './ui.js';
 
 // --- 事件處理函式 ---
-
-// 【新增】處理圖表點擊事件的函式
-async function handleNetProfitChartClick(event, chartContext, config) {
-    // 確保是點擊在資料點上
-    if (config.dataPointIndex < 0) return;
-    const timestamp = config.w.globals.seriesX[0][config.dataPointIndex];
-    if (!timestamp) return;
-
-    const date = new Date(timestamp);
-    const dateString = date.toISOString().split('T')[0];
-
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingText = document.getElementById('loading-text');
-    loadingText.textContent = `正在取得 ${dateString} 的持股分析...`;
-    loadingOverlay.style.display = 'flex';
-
-    try {
-        const result = await apiRequest('get_historical_analysis', { targetDate: dateString });
-        if (result.success) {
-            renderHistoricalAnalysisModal(dateString, result.data);
-        } else {
-            throw new Error(result.message || '無法取得分析資料');
-        }
-    } catch (error) {
-        showNotification('error', `取得歷史分析失敗: ${error.message}`);
-    } finally {
-        loadingOverlay.style.display = 'none';
-    }
-}
 
 // [新增] 一個帶有鎖定機制的數據同步請求函式
 async function requestDataSync() {
@@ -412,12 +382,6 @@ function setupMainAppEventListeners() {
             renderTransactionsTable();
         }
     });
-
-    document.getElementById('historical-analysis-modal').addEventListener('click', (e) => {
-        if (e.target.closest('#close-historical-analysis-btn') || !e.target.closest('#historical-analysis-content')) {
-            closeModal('historical-analysis-modal');
-        }
-    });
     
     const manageSplitsBtn = document.getElementById('manage-splits-btn');
     if(manageSplitsBtn) manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
@@ -559,9 +523,9 @@ export function initializeAppUI() {
     console.log("Initializing Main App UI...");
     initializeChart();
     initializeTwrChart();
-    // 【修改】將點擊處理函式傳遞給圖表初始化函式
-    initializeNetProfitChart(handleNetProfitChartClick);
+    initializeNetProfitChart();
     
+    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
     setTimeout(() => {
         setupMainAppEventListeners();
         lucide.createIcons();
