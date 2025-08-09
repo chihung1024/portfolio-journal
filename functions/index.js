@@ -8,7 +8,6 @@ const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
 
 const { d1Client } = require('./d1.client');
-const { performRecalculation } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
 const { performRecalculation, getHistoricalHoldingsAnalysis } = require('./calculation.engine');
