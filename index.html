@@ -125,7 +125,27 @@
                 </div>
                 <div id="twr-chart"></div>
             </div>
-            
+
+            <div class="card p-6 mb-8">
+                            <h3 class="text-lg font-semibold text-gray-800 mb-4">累積淨利走勢 (TWD)</h3>
+                             <div id="net-profit-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="netProfit">
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="ytd">今年以來</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1m">1個月</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3m">3個月</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="6m">6個月</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1y">1年</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3y">3年</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="5y">5年</button>
+                                <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 active" data-range="all">全部</button>
+                                <div class="flex items-center gap-2 ml-auto">
+                                    <input type="date" id="net-profit-start-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                                    <span class="text-gray-500">-</span>
+                                    <input type="date" id="net-profit-end-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                                </div>
+                            </div>
+                            <div id="net-profit-chart"></div>
+                        </div>
+
             <div class="card p-6">
                 <h3 class="text-lg font-semibold text-gray-800 mb-4">資產成長曲線 (TWD)</h3>
                  <div id="asset-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="asset">
