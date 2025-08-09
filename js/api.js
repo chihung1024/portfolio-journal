@@ -101,6 +101,7 @@ export async function loadPortfolioData() {
         updateTwrChart(benchmarkSymbol);
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+            setState({ currentBenchmark: benchmarkSymbol });   // <─ 新增
 
         const { portfolioHistory, twrHistory } = getState();
 
