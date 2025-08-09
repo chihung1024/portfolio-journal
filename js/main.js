@@ -361,7 +361,7 @@ function setupCommonEventListeners() {
 }
 
 function setupMainAppEventListeners() {
-    // --- 上方非圖表的事件監聽器維持不變 ---
+    // --- 這部分是非圖表相關的事件監聽，維持不變 ---
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
@@ -454,33 +454,61 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    // 【重構】將所有圖表控制項的事件監聽整合到此單一迴圈中
-    ['twr', 'asset', 'netProfit'].forEach(chartType => {
-        const controlsContainer = document.getElementById(`${chartType}-chart-controls`);
-
-        if (controlsContainer) {
-            // 使用事件委派處理所有點擊
-            controlsContainer.addEventListener('click', (e) => {
-                const button = e.target.closest('.chart-range-btn');
-                if (button) {
-                    handleChartRangeChange(chartType, button.dataset.range);
+    // 【修改】恢復原本的獨立事件監聽結構，並為新圖表複製此模式
+    const twrControls = document.getElementById('twr-chart-controls');
+    if (twrControls) {
+        twrControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('twr', btn.dataset.range);
+        });
+        twrControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = twrControls.querySelector('#twr-start-date');
+                const endInput = twrControls.querySelector('#twr-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    twrControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('twr', 'custom', startInput.value, endInput.value);
                 }
-            });
+            }
+        });
+    }
 
-            // 使用事件委派處理所有日期變更
-            controlsContainer.addEventListener('change', (e) => {
-                if (e.target.matches('.chart-date-input')) {
-                    const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
-                    const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
-
-                    if (startDateInput && endDateInput && startDateInput.value && endDateInput.value) {
-                        controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                        handleChartRangeChange(chartType, 'custom', startDateInput.value, endDateInput.value);
-                    }
+    const assetControls = document.getElementById('asset-chart-controls');
+    if (assetControls) {
+        assetControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('asset', btn.dataset.range);
+        });
+        assetControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = assetControls.querySelector('#asset-start-date');
+                const endInput = assetControls.querySelector('#asset-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    assetControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('asset', 'custom', startInput.value, endInput.value);
                 }
-            });
-        }
-    });
+            }
+        });
+    }
+    
+    // 【新增】為淨利圖表複製完全相同的、獨立的處理模式
+    const netProfitControls = document.getElementById('net-profit-chart-controls');
+    if (netProfitControls) {
+        netProfitControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('netProfit', btn.dataset.range);
+        });
+        netProfitControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = netProfitControls.querySelector('#net-profit-start-date');
+                const endInput = netProfitControls.querySelector('#net-profit-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('netProfit', 'custom', startInput.value, endInput.value);
+                }
+            }
+        });
+    }
 }
 
 export function initializeAppUI() {
