@@ -326,8 +326,8 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
     
     if (chartType === 'twr') {
-        const { benchmarkHistory } = getState();
-        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
+            .value.toUpperCase().trim() || 'SPY';
         updateTwrChart(benchmarkSymbol);
     } else {
         updateAssetChart();
