@@ -489,20 +489,33 @@ function setupMainAppEventListeners() {
         }
     });
 
-    // 統一處理所有圖表的「日期變更」事件
+    // 【修改】為「日期變更」事件處理加上詳細的 console.log
     mainContent.addEventListener('change', (e) => {
+        console.log('[偵錯] Change 事件被觸發，來源:', e.target);
+
         if (e.target.matches('.chart-date-input')) {
+            console.log('[偵錯] 來源確認是 .chart-date-input');
+            
             const controlsContainer = e.target.closest('.chart-controls');
             if (controlsContainer && controlsContainer.dataset.chart) {
                 const chartType = controlsContainer.dataset.chart;
+                console.log(`[偵錯] 找到圖表類型: ${chartType}`);
+
                 const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
                 const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
 
                 if (startDateInput && endDateInput && startDateInput.value && endDateInput.value) {
+                    console.log('[偵錯] 所有條件滿足，準備呼叫 handleChartRangeChange');
                     controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
                     handleChartRangeChange(chartType, 'custom', startDateInput.value, endDateInput.value);
+                } else {
+                    console.log('[偵錯] 未滿足呼叫條件 (可能僅選擇了單一日期)');
                 }
+            } else {
+                console.error('[偵錯] 找不到父層 .chart-controls 或 data-chart 屬性');
             }
+        } else {
+            console.log('[偵錯] 來源不是 .chart-date-input，忽略此事件');
         }
     });
 }
