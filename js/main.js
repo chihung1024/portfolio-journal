@@ -539,3 +539,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
     initializeAuth();
 });
+
+// --- 偵錯用，將 getState() 附加到 window 物件上 ---
+window.debugState = getState;
