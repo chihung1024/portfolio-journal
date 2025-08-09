@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.2 - 最終穩定版
+// == 主程式進入點 (main.js) v3.5.3 - 最終穩定正確版
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -302,9 +302,27 @@ async function handleDeleteDividend(button) {
     });
 }
 
-// 【恢復】明確、獨立的 handleChartRangeChange 函式
+// 【新增】補上遺漏的 chartConfig 常數定義
+const chartConfig = {
+    twr: {
+        stateKey: 'twrDateRange',
+        historyKey: 'twrHistory',
+        updateFunc: (benchmarkSymbol) => updateTwrChart(benchmarkSymbol || 'SPY')
+    },
+    asset: {
+        stateKey: 'assetDateRange',
+        historyKey: 'portfolioHistory',
+        updateFunc: () => updateAssetChart()
+    },
+    netProfit: {
+        stateKey: 'netProfitDateRange',
+        historyKey: 'netProfitHistory',
+        updateFunc: () => updateNetProfitChart()
+    }
+};
+
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const config = chartConfig[chartType];
+    const config = chartConfig[chartType]; // 這行現在可以正常運作了
     if (!config) {
         console.error(`未知的圖表類型: ${chartType}`);
         return;
@@ -314,39 +332,28 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const controlsId = `${chartType}-chart-controls`;
     const controlsContainer = document.getElementById(controlsId);
 
-    if (!controlsContainer) {
-        console.error(`找不到圖表控制項容器: #${controlsId}`);
-        return;
-    }
+    if (!controlsContainer) return;
 
-    // 更新 state 中的日期範圍設定
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
 
-    // 更新按鈕的啟用狀態
     controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => {
         btn.classList.remove('active');
-        if (btn.dataset.range === rangeType) {
-            btn.classList.add('active');
-        }
+        if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
 
     const fullHistory = getState()[historyKey];
-    // 根據點擊的按鈕，計算出正確的起訖日期字串
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
-    // 【關鍵修正】確保在點擊預設按鈕時，無論如何都更新日期輸入框
     if (rangeType !== 'custom') {
         const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
         const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
-        
         if (startDateInput && endDateInput) {
             startDateInput.value = finalStartDate;
             endDateInput.value = finalEndDate;
         }
     }
 
-    // 根據設定檔呼叫對應的圖表更新函式
     if (chartType === 'twr') {
         const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
         updateFunc(benchmarkSymbol);
@@ -366,7 +373,6 @@ function setupCommonEventListeners() {
     });
 }
 
-// 【恢復】明確、獨立的 setupMainAppEventListeners 函式
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
@@ -460,6 +466,7 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
+    // 恢復為穩定、獨立的事件監聽區塊
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
