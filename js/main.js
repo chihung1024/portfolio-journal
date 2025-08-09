@@ -486,9 +486,14 @@ export function initializeAppUI() {
     console.log("Initializing Main App UI...");
     initializeChart();
     initializeTwrChart();
-    initializeNetProfitChart(); // 【新增】初始化新圖表
-    setupMainAppEventListeners();
-    lucide.createIcons();
+    initializeNetProfitChart();
+    
+    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
+    setTimeout(() => {
+        setupMainAppEventListeners();
+        lucide.createIcons();
+    }, 0);
+
     setState({ isAppInitialized: true });
 }
 
