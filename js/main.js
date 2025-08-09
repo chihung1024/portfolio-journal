@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖
+// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖 (穩定修正版)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -8,7 +8,7 @@ import { initializeAuth, handleRegister, handleLogin, handleLogout } from './aut
 import { 
     initializeChart, 
     initializeTwrChart, 
-    initializeNetProfitChart, // 【新增】
+    initializeNetProfitChart,
     openModal, 
     closeModal, 
     showConfirm, 
@@ -21,13 +21,12 @@ import {
     renderDividendsManagementTab,
     updateAssetChart,
     updateTwrChart,
-    updateNetProfitChart, // 【新增】
+    updateNetProfitChart,
     getDateRangeForPreset,
 } from './ui.js';
 
 // --- 事件處理函式 ---
 
-// [新增] 一個帶有鎖定機制的數據同步請求函式
 async function requestDataSync() {
     if (getState().isSyncing) {
         console.log("數據同步中，已忽略本次請求。");
@@ -52,7 +51,6 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
-// [優化] 使用樂觀更新重構 handleDelete
 async function handleDelete(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
@@ -71,7 +69,7 @@ async function handleDelete(button) {
         apiRequest('delete_transaction', { txId })
             .then(result => {
                 showNotification('success', '交易紀錄已成功從雲端刪除！');
-                requestDataSync(); // [修改] 使用新的同步函式
+                requestDataSync();
             })
             .catch(error => {
                 showNotification('error', `刪除失敗: ${error.message}`);
@@ -81,7 +79,6 @@ async function handleDelete(button) {
     });
 }
 
-// [優化] 使用樂觀更新重構 handleFormSubmit
 async function handleFormSubmit(e) {
     e.preventDefault();
     
@@ -130,7 +127,7 @@ async function handleFormSubmit(e) {
     apiRequest(action, payload)
         .then(result => {
             showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            requestDataSync(); // [修改] 使用新的同步函式
+            requestDataSync();
         })
         .catch(error => {
             showNotification('error', `儲存交易失敗: ${error.message}`);
@@ -139,7 +136,6 @@ async function handleFormSubmit(e) {
         });
 }
 
-// 以下為其他未變動的函式...
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     showConfirm('確定要刪除這個拆股事件嗎？', async () => {
@@ -306,7 +302,6 @@ async function handleDeleteDividend(button) {
     });
 }
 
-// 【新增】圖表設定檔物件
 const chartConfig = {
     twr: {
         stateKey: 'twrDateRange',
@@ -326,19 +321,18 @@ const chartConfig = {
 };
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const stateKey = chartType === 'twr' ? 'twrDateRange' 
-                   : chartType === 'asset' ? 'assetDateRange' 
-                   : 'netProfitDateRange';
-    const historyKey = chartType === 'twr' ? 'twrHistory' 
-                     : chartType === 'asset' ? 'portfolioHistory' 
-                     : 'netProfitHistory';
-    const controlsId = chartType === 'twr' ? 'twr-chart-controls' 
-                     : chartType === 'asset' ? 'asset-chart-controls' 
-                     : 'net-profit-chart-controls';
-    
+    const config = chartConfig[chartType];
+    if (!config) {
+        console.error(`未知的圖表類型: ${chartType}`);
+        return;
+    }
+
+    const { stateKey, historyKey, updateFunc } = config;
+    const controlsId = `${chartType}-chart-controls`;
+
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
-    
+
     document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
@@ -347,7 +341,6 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const fullHistory = getState()[historyKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
-    // 【修改】在設定 .value 前，先檢查元素是否存在
     if (rangeType !== 'custom') {
         const startDateInput = document.getElementById(`${chartType}-start-date`);
         const endDateInput = document.getElementById(`${chartType}-end-date`);
@@ -356,15 +349,12 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
             endDateInput.value = finalEndDate;
         }
     }
-    
+
     if (chartType === 'twr') {
-        const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
-            .value.toUpperCase().trim() || 'SPY';
-        updateTwrChart(benchmarkSymbol);
-    } else if (chartType === 'asset') {
-        updateAssetChart();
-    } else if (chartType === 'netProfit') {
-        updateNetProfitChart();
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
+        updateFunc(benchmarkSymbol);
+    } else {
+        updateFunc();
     }
 }
 
@@ -380,7 +370,6 @@ function setupCommonEventListeners() {
 }
 
 function setupMainAppEventListeners() {
-    // --- 這部分是非圖表相關的事件監聽，維持不變 ---
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
@@ -473,51 +462,59 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    // 【重構】將所有圖表的事件監聽，全部委派給它們共同的父層 <main> 元素
-    const mainContent = document.querySelector('main');
-    if (!mainContent) return;
-
-    // 統一處理所有圖表的「按鈕點擊」事件
-    mainContent.addEventListener('click', (e) => {
-        const button = e.target.closest('.chart-range-btn');
-        if (button) {
-            const controlsContainer = button.closest('.chart-controls');
-            if (controlsContainer && controlsContainer.dataset.chart) {
-                const chartType = controlsContainer.dataset.chart;
-                handleChartRangeChange(chartType, button.dataset.range);
-            }
-        }
-    });
-
-    // 【修改】為「日期變更」事件處理加上詳細的 console.log
-    mainContent.addEventListener('change', (e) => {
-        console.log('[偵錯] Change 事件被觸發，來源:', e.target);
-
-        if (e.target.matches('.chart-date-input')) {
-            console.log('[偵錯] 來源確認是 .chart-date-input');
-            
-            const controlsContainer = e.target.closest('.chart-controls');
-            if (controlsContainer && controlsContainer.dataset.chart) {
-                const chartType = controlsContainer.dataset.chart;
-                console.log(`[偵錯] 找到圖表類型: ${chartType}`);
-
-                const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
-                const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
-
-                if (startDateInput && endDateInput && startDateInput.value && endDateInput.value) {
-                    console.log('[偵錯] 所有條件滿足，準備呼叫 handleChartRangeChange');
-                    controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    handleChartRangeChange(chartType, 'custom', startDateInput.value, endDateInput.value);
-                } else {
-                    console.log('[偵錯] 未滿足呼叫條件 (可能僅選擇了單一日期)');
+    const twrControls = document.getElementById('twr-chart-controls');
+    if (twrControls) {
+        twrControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('twr', btn.dataset.range);
+        });
+        twrControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = twrControls.querySelector('#twr-start-date');
+                const endInput = twrControls.querySelector('#twr-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    twrControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('twr', 'custom', startInput.value, endInput.value);
                 }
-            } else {
-                console.error('[偵錯] 找不到父層 .chart-controls 或 data-chart 屬性');
             }
-        } else {
-            console.log('[偵錯] 來源不是 .chart-date-input，忽略此事件');
-        }
-    });
+        });
+    }
+
+    const assetControls = document.getElementById('asset-chart-controls');
+    if (assetControls) {
+        assetControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('asset', btn.dataset.range);
+        });
+        assetControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = assetControls.querySelector('#asset-start-date');
+                const endInput = assetControls.querySelector('#asset-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    assetControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('asset', 'custom', startInput.value, endInput.value);
+                }
+            }
+        });
+    }
+    
+    const netProfitControls = document.getElementById('net-profit-chart-controls');
+    if (netProfitControls) {
+        netProfitControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('netProfit', btn.dataset.range);
+        });
+        netProfitControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = netProfitControls.querySelector('#net-profit-start-date');
+                const endInput = netProfitControls.querySelector('#net-profit-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('netProfit', 'custom', startInput.value, endInput.value);
+                }
+            }
+        });
+    }
 }
 
 export function initializeAppUI() {
@@ -528,20 +525,12 @@ export function initializeAppUI() {
     initializeChart();
     initializeTwrChart();
     initializeNetProfitChart();
+    setupMainAppEventListeners();
     lucide.createIcons();
-    // 【修改】移除 setupMainAppEventListeners() 的呼叫
     setState({ isAppInitialized: true });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
-    initializeAuth(); 
-    
-    // 【修改】將事件監聽的設定延遲到下一個事件循環
-    // 確保所有 DOM 渲染和圖表初始化都完成後才執行
-    setTimeout(() => {
-        if (getState().isAppInitialized) {
-            setupMainAppEventListeners();
-        }
-    }, 0);
+    initializeAuth();
 });
