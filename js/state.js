@@ -32,6 +32,7 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
+    currentBenchmark: 'SPY',   // <─ 新增，集中存放目前使用的 Benchmark
     assetDateRange: { type: 'all', start: null, end: null },
     twrDateRange: { type: 'all', start: null, end: null }
 };
