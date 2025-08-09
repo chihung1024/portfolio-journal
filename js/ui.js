@@ -304,6 +304,7 @@ export function initializeTwrChart() {
     setState({ twrChart });
 }
 
+// 【新增】初始化累積淨利圖表
 export function initializeNetProfitChart() {
     const options = {
         chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
