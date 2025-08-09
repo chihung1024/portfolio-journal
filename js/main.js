@@ -453,39 +453,92 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    document.getElementById('twr-chart-controls').addEventListener('click', (e) => {
-        const btn = e.target.closest('.chart-range-btn');
-        if (btn) handleChartRangeChange('twr', btn.dataset.range);
+    document.getElementById('holdings-content').addEventListener('click', (e) => {
+        const sortHeader = e.target.closest('[data-sort-key]');
+        if (sortHeader) {
+            const newSortKey = sortHeader.dataset.sortKey;
+            const { holdingsSort, holdings } = getState();
+            let newOrder = 'desc';
+            if (holdingsSort.key === newSortKey && holdingsSort.order === 'desc') {
+                newOrder = 'asc';
+            }
+            setState({ holdingsSort: { key: newSortKey, order: newOrder } });
+            renderHoldingsTable(holdings);
+            return;
+        }
+        const notesBtn = e.target.closest('.open-notes-btn');
+        if (notesBtn) {
+            openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
+            return;
+        }
     });
-    document.getElementById('asset-chart-controls').addEventListener('click', (e) => {
-        const btn = e.target.closest('.chart-range-btn');
-        if (btn) handleChartRangeChange('asset', btn.dataset.range);
-    });
-    
-    // 【新增】為新圖表加入事件監聽
-    document.getElementById('net-profit-chart-controls').addEventListener('click', (e) => {
-        const btn = e.target.closest('.chart-range-btn');
-        if (btn) handleChartRangeChange('netProfit', btn.dataset.range);
-    });
-    
-    // 【修改】將 chartType 迴圈擴展到包含 'netProfit'
-    ['twr', 'asset', 'netProfit'].forEach(chartType => {
-        const startInput = document.getElementById(`${chartType}-start-date`);
-        const endInput = document.getElementById(`${chartType}-end-date`);
 
-        // 【修改】在新增監聽器前，先檢查元素是否存在
-        if (startInput && endInput) {
-            const updateFunc = () => {
-                if (startInput.value && endInput.value) {
-                    document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
-                    handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
+    document.getElementById('tabs').addEventListener('click', (e) => {
+        const tabItem = e.target.closest('.tab-item');
+        if (tabItem) {
+            e.preventDefault();
+            const tabName = tabItem.dataset.tab;
+            switchTab(tabName);
+            if (tabName === 'dividends') {
+                loadAndShowDividends();
+            } else if (tabName === 'transactions') {
+                renderTransactionsTable();
+            }
+        }
+    });
+
+    document.getElementById('dividends-tab').addEventListener('click', (e) => {
+        const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
+        if (bulkConfirmBtn) { handleBulkConfirm(); return; }
+        const editBtn = e.target.closest('.edit-dividend-btn');
+        if (editBtn) { openModal('dividend-modal', true, { id: editBtn.dataset.id }); return; }
+        const confirmBtn = e.target.closest('.confirm-dividend-btn');
+        if (confirmBtn) { openModal('dividend-modal', false, { index: confirmBtn.dataset.index }); return; }
+        const deleteBtn = e.target.closest('.delete-dividend-btn');
+        if (deleteBtn) { handleDeleteDividend(deleteBtn); }
+    });
+     document.getElementById('dividends-tab').addEventListener('change', (e) => {
+        if (e.target.id === 'dividend-symbol-filter') {
+            setState({ dividendFilter: e.target.value });
+            const { pendingDividends, confirmedDividends } = getState();
+            renderDividendsManagementTab(pendingDividends, confirmedDividends);
+        }
+    });
+    
+    document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
+    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
+    document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
+        if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
+            closeModal('dividend-history-modal');
+        }
+    });
+    document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+
+    // 【重構】將所有圖表控制項的事件監聽整合到此迴圈中
+    ['twr', 'asset', 'netProfit'].forEach(chartType => {
+        const controlsContainer = document.getElementById(`${chartType}-chart-controls`);
+
+        if (controlsContainer) {
+            // 處理預設區間按鈕的點擊
+            controlsContainer.addEventListener('click', (e) => {
+                const button = e.target.closest('.chart-range-btn');
+                if (button) {
+                    handleChartRangeChange(chartType, button.dataset.range);
                 }
-            };
-            startInput.addEventListener('change', updateFunc);
-            endInput.addEventListener('change', updateFunc);
-        } else {
-            // 【新增】如果元素缺失，則在控制台印出錯誤，方便未來除錯
-            console.error(`無法找到圖表類型為: ${chartType} 的日期選擇器元素`);
+            });
+
+            // 處理自訂日期輸入框的變更
+            controlsContainer.addEventListener('change', (e) => {
+                if (e.target.matches('.chart-date-input')) {
+                    const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
+                    const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
+
+                    if (startDateInput && endDateInput && startDateInput.value && endDateInput.value) {
+                        controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                        handleChartRangeChange(chartType, 'custom', startDateInput.value, endDateInput.value);
+                    }
+                }
+            });
         }
     });
 }
