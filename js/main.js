@@ -1,19 +1,19 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.3 - 最終穩定正確版
+// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
-import {
-    initializeChart,
-    initializeTwrChart,
-    initializeNetProfitChart,
-    openModal,
-    closeModal,
-    showConfirm,
-    hideConfirm,
-    toggleOptionalFields,
+import { 
+    initializeChart, 
+    initializeTwrChart, 
+    initializeNetProfitChart, // 【新增】
+    openModal, 
+    closeModal, 
+    showConfirm, 
+    hideConfirm, 
+    toggleOptionalFields, 
     showNotification,
     switchTab,
     renderHoldingsTable,
@@ -21,12 +21,13 @@ import {
     renderDividendsManagementTab,
     updateAssetChart,
     updateTwrChart,
-    updateNetProfitChart,
+    updateNetProfitChart, // 【新增】
     getDateRangeForPreset,
 } from './ui.js';
 
 // --- 事件處理函式 ---
 
+// [新增] 一個帶有鎖定機制的數據同步請求函式
 async function requestDataSync() {
     if (getState().isSyncing) {
         console.log("數據同步中，已忽略本次請求。");
@@ -51,10 +52,11 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
+// [優化] 使用樂觀更新重構 handleDelete
 async function handleDelete(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
-
+    
     const transactionToDelete = transactions.find(t => t.id === txId);
     if (!transactionToDelete) return;
 
@@ -69,7 +71,7 @@ async function handleDelete(button) {
         apiRequest('delete_transaction', { txId })
             .then(result => {
                 showNotification('success', '交易紀錄已成功從雲端刪除！');
-                requestDataSync();
+                requestDataSync(); // [修改] 使用新的同步函式
             })
             .catch(error => {
                 showNotification('error', `刪除失敗: ${error.message}`);
@@ -79,9 +81,10 @@ async function handleDelete(button) {
     });
 }
 
+// [優化] 使用樂觀更新重構 handleFormSubmit
 async function handleFormSubmit(e) {
     e.preventDefault();
-
+    
     const { transactions } = getState();
     const originalTransactions = [...transactions];
 
@@ -103,11 +106,11 @@ async function handleFormSubmit(e) {
         showNotification('error', '請填寫所有必填欄位。');
         return;
     }
-
+    
     closeModal('transaction-modal');
 
     if (isEditing) {
-        const updatedTransactions = transactions.map(t =>
+        const updatedTransactions = transactions.map(t => 
             t.id === txId ? { ...t, ...transactionData, id: txId } : t
         );
         setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
@@ -127,7 +130,7 @@ async function handleFormSubmit(e) {
     apiRequest(action, payload)
         .then(result => {
             showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            requestDataSync();
+            requestDataSync(); // [修改] 使用新的同步函式
         })
         .catch(error => {
             showNotification('error', `儲存交易失敗: ${error.message}`);
@@ -136,6 +139,7 @@ async function handleFormSubmit(e) {
         });
 }
 
+// 以下為其他未變動的函式...
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     showConfirm('確定要刪除這個拆股事件嗎？', async () => {
@@ -243,8 +247,8 @@ async function handleBulkConfirm() {
             document.getElementById('loading-overlay').style.display = 'flex';
             await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
             showNotification('success', '所有待確認配息已處理完畢！');
-            await loadAndShowDividends();
-            await loadPortfolioData();
+            await loadAndShowDividends(); 
+            await loadPortfolioData(); 
         } catch (error) {
             showNotification('error', `批次確認失敗: ${error.message}`);
         } finally {
@@ -302,37 +306,21 @@ async function handleDeleteDividend(button) {
     });
 }
 
-// 【最終修正版】handleChartRangeChange 函式
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    let stateKey, historyKey, updateFunc, controlsId;
-
-    if (chartType === 'twr') {
-        stateKey = 'twrDateRange';
-        historyKey = 'twrHistory';
-        updateFunc = () => updateTwrChart(document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY');
-        controlsId = 'twr-chart-controls';
-    } else if (chartType === 'asset') {
-        stateKey = 'assetDateRange';
-        historyKey = 'portfolioHistory';
-        updateFunc = updateAssetChart;
-        controlsId = 'asset-chart-controls';
-    } else if (chartType === 'netProfit') {
-        stateKey = 'netProfitDateRange';
-        historyKey = 'netProfitHistory';
-        updateFunc = updateNetProfitChart;
-        controlsId = 'net-profit-chart-controls';
-    } else {
-        console.error(`未知的圖表類型: ${chartType}`);
-        return;
-    }
-
-    const controlsContainer = document.getElementById(controlsId);
-    if (!controlsContainer) return;
-
+    const stateKey = chartType === 'twr' ? 'twrDateRange' 
+                   : chartType === 'asset' ? 'assetDateRange' 
+                   : 'netProfitDateRange';
+    const historyKey = chartType === 'twr' ? 'twrHistory' 
+                     : chartType === 'asset' ? 'portfolioHistory' 
+                     : 'netProfitHistory';
+    const controlsId = chartType === 'twr' ? 'twr-chart-controls' 
+                     : chartType === 'asset' ? 'asset-chart-controls' 
+                     : 'net-profit-chart-controls';
+    
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
-
-    controlsContainer.querySelectorAll('.chart-range-btn').forEach(btn => {
+    
+    document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
@@ -340,36 +328,40 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const fullHistory = getState()[historyKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
-    // 【關鍵修正】使用 setTimeout 將 DOM 更新操作推遲到下一個事件循環
-    // 這樣可以確保即使是新加入的圖表元素，也有足夠的時間被瀏覽器渲染完成
+    // 【修改】在設定 .value 前，先檢查元素是否存在
     if (rangeType !== 'custom') {
-        setTimeout(() => {
-            const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
-            const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
-            if (startDateInput && endDateInput) {
-                startDateInput.value = finalStartDate;
-                endDateInput.value = finalEndDate;
-            }
-        }, 0);
+        const startDateInput = document.getElementById(`${chartType}-start-date`);
+        const endDateInput = document.getElementById(`${chartType}-end-date`);
+        if (startDateInput && endDateInput) {
+            startDateInput.value = finalStartDate;
+            endDateInput.value = finalEndDate;
+        }
     }
-
-    // 更新圖表本身的數據
-    updateFunc();
+    
+    if (chartType === 'twr') {
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
+            .value.toUpperCase().trim() || 'SPY';
+        updateTwrChart(benchmarkSymbol);
+    } else if (chartType === 'asset') {
+        updateAssetChart();
+    } else if (chartType === 'netProfit') {
+        updateNetProfitChart();
+    }
 }
 
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
     document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-    document.getElementById('confirm-ok-btn').addEventListener('click', () => {
+    document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
         const { confirmCallback } = getState();
-        if (confirmCallback) { confirmCallback(); }
-        hideConfirm();
+        if (confirmCallback) { confirmCallback(); } 
+        hideConfirm(); 
     });
 }
 
-//【修正】恢復為明確、獨立的事件監聽區塊，以確保穩定性
 function setupMainAppEventListeners() {
+    // --- 這部分是非圖表相關的事件監聽，維持不變 ---
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
@@ -387,20 +379,20 @@ function setupMainAppEventListeners() {
             renderTransactionsTable();
         }
     });
-
+    
     const manageSplitsBtn = document.getElementById('manage-splits-btn');
     if(manageSplitsBtn) manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => {
+    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
         const btn = e.target.closest('.delete-split-btn');
         if(btn) handleDeleteSplit(btn);
     });
-
+    
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
-
+    
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const sortHeader = e.target.closest('[data-sort-key]');
         if (sortHeader) {
@@ -452,7 +444,7 @@ function setupMainAppEventListeners() {
             renderDividendsManagementTab(pendingDividends, confirmedDividends);
         }
     });
-
+    
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
     document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
     document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
@@ -462,6 +454,7 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
+    // 【修改】恢復原本的獨立事件監聽結構，並為新圖表複製此模式
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
@@ -497,7 +490,8 @@ function setupMainAppEventListeners() {
             }
         });
     }
-
+    
+    // 【新增】為淨利圖表複製完全相同的、獨立的處理模式
     const netProfitControls = document.getElementById('net-profit-chart-controls');
     if (netProfitControls) {
         netProfitControls.addEventListener('click', (e) => {
@@ -525,12 +519,17 @@ export function initializeAppUI() {
     initializeChart();
     initializeTwrChart();
     initializeNetProfitChart();
-    setupMainAppEventListeners(); // Restored to original call order
-    lucide.createIcons();
+    
+    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
+    setTimeout(() => {
+        setupMainAppEventListeners();
+        lucide.createIcons();
+    }, 0);
+
     setState({ isAppInitialized: true });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
-    initializeAuth();
+    initializeAuth(); 
 });
