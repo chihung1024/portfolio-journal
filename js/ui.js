@@ -306,12 +306,17 @@ export function initializeTwrChart() {
 }
 
 // 淨利圖表 (initializeNetProfitChart)
-export function initializeNetProfitChart() {
+export function initializeNetProfitChart(onClickHandler) { // 【新增】接收一個點擊處理函式作為參數
     const options = {
-        ...baseChartOptions, // 展開載入基礎設定
+        ...baseChartOptions,
         series: [{ name: '累積淨利', data: [] }],
+        chart: { // 【新增】chart specific options
+            ...baseChartOptions.chart,
+            events: {
+                click: onClickHandler // 【新增】綁定點擊事件
+            }
+        },
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
-        // 【修改】將 fill 設定加回來
         fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
         tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
         colors: ['#10b981']
@@ -510,4 +515,46 @@ export function switchTab(tabName) {
         activeTab.classList.add('border-indigo-500', 'text-indigo-600'); 
         activeTab.classList.remove('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300'); 
     }
+}
+
+export function renderHistoricalAnalysisModal(dateString, analysisData) {
+    const modalTitle = document.getElementById('historical-analysis-title');
+    const tableBody = document.getElementById('historical-analysis-table-body');
+    if (!modalTitle || !tableBody) return;
+
+    modalTitle.textContent = `${dateString} 持股損益分析`;
+    tableBody.innerHTML = ''; // 清除舊資料
+
+    if (!analysisData || analysisData.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="7" class="text-center py-10 text-gray-500">該日無持股紀錄。</td></tr>`;
+        openModal('historical-analysis-modal');
+        lucide.createIcons();
+        return;
+    }
+
+    const totalProfit = analysisData.reduce((sum, item) => sum + item.totalContribution, 0);
+
+    analysisData.sort((a, b) => b.totalContribution - a.totalContribution);
+
+    analysisData.forEach(item => {
+        const contributionPercent = totalProfit !== 0 ? (item.totalContribution / Math.abs(totalProfit)) * 100 : 0;
+        const row = document.createElement('tr');
+        const totalContribClass = item.totalContribution >= 0 ? 'text-red-600' : 'text-green-600';
+        const unrealizedClass = item.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+        const realizedClass = item.realizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+
+        row.innerHTML = `
+            <td class="px-4 py-4 whitespace-nowrap font-medium">${item.symbol}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right">${formatNumber(item.quantity, isTwStock(item.symbol) ? 0 : 2)}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right">${formatNumber(item.marketValueTWD, 0)}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right font-semibold ${unrealizedClass}">${formatNumber(item.unrealizedPLTWD, 0)}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right font-semibold ${realizedClass}">${formatNumber(item.realizedPLTWD, 0)}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right font-bold ${totalContribClass}">${formatNumber(item.totalContribution, 0)}</td>
+            <td class="px-4 py-4 whitespace-nowrap text-right font-semibold ${totalContribClass}">${contributionPercent.toFixed(2)}%</td>
+        `;
+        tableBody.appendChild(row);
+    });
+
+    openModal('historical-analysis-modal');
+    lucide.createIcons(); // 確保新加入的 icon (如關閉按鈕) 能被渲染
 }
