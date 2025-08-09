@@ -174,8 +174,37 @@
         <div id="dividend-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="dividend-modal-title" class="text-2xl font-bold mb-6">確認配息入帳</h3><form id="dividend-form"><input type="hidden" id="dividend-id"><input type="hidden" id="dividend-symbol"><input type="hidden" id="dividend-ex-date"><input type="hidden" id="dividend-currency"><input type="hidden" id="dividend-quantity"><input type="hidden" id="dividend-original-amount-ps"><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4 p-4 bg-gray-50 rounded-lg"><div><p class="text-sm text-gray-500">股票代碼</p><p id="dividend-info-symbol" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日</p><p id="dividend-info-ex-date" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日持股</p><p id="dividend-info-quantity" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">每股配息(原幣)</p><p id="dividend-info-amount-ps" class="font-semibold"></p></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4"><div><label for="dividend-pay-date" class="block text-sm font-medium mb-1">實際發放日</label><input type="date" id="dividend-pay-date" class="w-full px-3 py-2 border rounded-md" required></div><div><label for="dividend-tax-rate" class="block text-sm font-medium mb-1">稅率 (%)</label><input type="number" step="any" id="dividend-tax-rate" placeholder="例如: 30" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="dividend-total-amount" class="block text-sm font-medium mb-1">稅後實收總額 (原幣)</label><input type="number" step="any" id="dividend-total-amount" class="w-full px-3 py-2 border rounded-md" required><p class="text-xs text-gray-500 mt-1">此為計算已實現損益的最終依據。</p></div><div class="mb-4"><label for="dividend-notes" class="block text-sm font-medium mb-1">備註 (選填)</label><textarea id="dividend-notes" rows="3" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-dividend-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-dividend-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存紀錄</button></div></form></div></div></div>
         <div id="dividend-history-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div id="dividend-history-content" class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-2xl mx-4"></div></div></div>
 
+        <div id="historical-analysis-modal" class="fixed inset-0 z-40 overflow-y-auto hidden">
+            <div class="flex items-center justify-center min-h-screen px-4">
+                <div class="fixed inset-0 modal-backdrop"></div>
+                <div id="historical-analysis-content" class="bg-white rounded-lg shadow-xl p-6 sm:p-8 z-50 w-full max-w-4xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 id="historical-analysis-title" class="text-xl sm:text-2xl font-bold text-gray-800">持股分析</h3>
+                        <button id="close-historical-analysis-btn" class="text-gray-400 hover:text-gray-600">
+                            <i data-lucide="x" class="h-6 w-6"></i>
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">當時股數</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">市值(TWD)</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">未實現損益</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">已實現損益</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">總貢獻(TWD)</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">貢獻佔比</th>
+                                </tr>
+                            </thead>
+                            <tbody id="historical-analysis-table-body" class="bg-white divide-y divide-gray-200">
+                                </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script type="module" src="./js/main.js"></script>
-</body>
 </html>
