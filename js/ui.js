@@ -4,6 +4,22 @@
 
 import { getState, setState } from './state.js';
 
+// 【新增】一個包含所有圖表共用設定的基礎物件
+const baseChartOptions = {
+    chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
+    dataLabels: { enabled: false },
+    stroke: { curve: 'smooth', width: 2 },
+    fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
+    xaxis: {
+        type: 'datetime',
+        labels: {
+            datetimeUTC: false,
+            datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
+        }
+    },
+    tooltip: { x: { format: 'yyyy-MM-dd' } }
+};
+
 // --- 輔助函式 ---
 function isTwStock(symbol) { 
     return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; 
@@ -259,76 +275,42 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
 }
 
+// 資產成長圖表 (initializeChart)
 export function initializeChart() {
-    const options = { 
-        chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
-        series: [{ name: '總資產', data: [] }], 
-        xaxis: { 
-            type: 'datetime', 
-            labels: { 
-                datetimeUTC: false,
-                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-            } 
-        }, 
-        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } }, 
-        dataLabels: { enabled: false }, 
-        stroke: { curve: 'smooth', width: 2 }, 
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, 
-        tooltip: { x: { format: 'yyyy-MM-dd' } }, 
-        colors: ['#4f46e5'] 
+    const options = {
+        ...baseChartOptions, // 展開載入基礎設定
+        series: [{ name: '總資產', data: [] }],
+        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        colors: ['#4f46e5']
     };
     const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
     chart.render();
     setState({ chart });
 }
 
+// TWR 圖表 (initializeTwrChart)
 export function initializeTwrChart() {
-    const options = { 
-        chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
-        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], 
-        xaxis: { 
-            type: 'datetime', 
-            labels: { 
-                datetimeUTC: false,
-                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-            } 
-        }, 
-        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
-        dataLabels: { enabled: false }, 
-        stroke: { curve: 'smooth', width: 2 }, 
-        tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
-        colors: ['#4f46e5', '#f59e0b'] 
+    const options = {
+        ...baseChartOptions, // 展開載入基礎設定
+        chart: { ...baseChartOptions.chart, type: 'line' }, // 覆蓋基礎設定中的圖表類型
+        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
+        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+        colors: ['#4f46e5', '#f59e0b']
     };
     const twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
     twrChart.render();
     setState({ twrChart });
 }
 
-// 【新增】初始化累積淨利圖表
+// 淨利圖表 (initializeNetProfitChart)
 export function initializeNetProfitChart() {
     const options = {
-        chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
+        ...baseChartOptions, // 展開載入基礎設定
         series: [{ name: '累積淨利', data: [] }],
-        xaxis: {
-            type: 'datetime',
-            labels: {
-                datetimeUTC: false,
-                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-            }
-        },
-        yaxis: { 
-            labels: { 
-                formatter: (value) => formatNumber(value, 0) // 格式化為整數
-            }
-        },
-        dataLabels: { enabled: false },
-        stroke: { curve: 'smooth', width: 2 },
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
-        tooltip: { 
-            x: { format: 'yyyy-MM-dd' },
-            y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` }
-        },
-        colors: ['#10b981'] // 使用綠色系
+        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
+        colors: ['#10b981']
     };
     const netProfitChart = new ApexCharts(document.querySelector("#net-profit-chart"), options);
     netProfitChart.render();
