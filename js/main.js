@@ -528,17 +528,20 @@ export function initializeAppUI() {
     initializeChart();
     initializeTwrChart();
     initializeNetProfitChart();
-    
-    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
-    setTimeout(() => {
-        setupMainAppEventListeners();
-        lucide.createIcons();
-    }, 0);
-
+    lucide.createIcons();
+    // 【修改】移除 setupMainAppEventListeners() 的呼叫
     setState({ isAppInitialized: true });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
     initializeAuth(); 
+    
+    // 【修改】將事件監聽的設定延遲到下一個事件循環
+    // 確保所有 DOM 渲染和圖表初始化都完成後才執行
+    setTimeout(() => {
+        if (getState().isAppInitialized) {
+            setupMainAppEventListeners();
+        }
+    }, 0);
 });
