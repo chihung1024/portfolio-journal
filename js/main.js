@@ -469,7 +469,7 @@ function setupMainAppEventListeners() {
         const startInput = document.getElementById(`${chartType}-start-date`);
         const endInput = document.getElementById(`${chartType}-end-date`);
 
-        // Add a check to ensure the elements exist before adding listeners
+        // 【修改】在新增監聽器前，先檢查元素是否存在
         if (startInput && endInput) {
             const updateFunc = () => {
                 if (startInput.value && endInput.value) {
@@ -480,8 +480,8 @@ function setupMainAppEventListeners() {
             startInput.addEventListener('change', updateFunc);
             endInput.addEventListener('change', updateFunc);
         } else {
-            // Log an error if an element is missing, which helps with future debugging
-            console.error(`Could not find date input elements for chart type: ${chartType}`);
+            // 【新增】如果元素缺失，則在控制台印出錯誤，方便未來除錯
+            console.error(`無法找到圖表類型為: ${chartType} 的日期選擇器元素`);
         }
     });
 }
