@@ -8,6 +8,7 @@ import { initializeAuth, handleRegister, handleLogin, handleLogout } from './aut
 import { 
     initializeChart, 
     initializeTwrChart, 
+    initializeNetProfitChart, // 【新增】
     openModal, 
     closeModal, 
     showConfirm, 
@@ -20,6 +21,7 @@ import {
     renderDividendsManagementTab,
     updateAssetChart,
     updateTwrChart,
+    updateNetProfitChart, // 【新增】
     getDateRangeForPreset,
 } from './ui.js';
 
@@ -305,9 +307,16 @@ async function handleDeleteDividend(button) {
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const stateKey = chartType === 'twr' ? 'twrDateRange' : 'assetDateRange';
-    const historyKey = chartType === 'twr' ? 'twrHistory' : 'portfolioHistory';
-    const controlsId = chartType === 'twr' ? 'twr-chart-controls' : 'asset-chart-controls';
+    // 【修改】加入 netProfit 的 case
+    const stateKey = chartType === 'twr' ? 'twrDateRange' 
+                   : chartType === 'asset' ? 'assetDateRange' 
+                   : 'netProfitDateRange';
+    const historyKey = chartType === 'twr' ? 'twrHistory' 
+                     : chartType === 'asset' ? 'portfolioHistory' 
+                     : 'netProfitHistory';
+    const controlsId = chartType === 'twr' ? 'twr-chart-controls' 
+                     : chartType === 'asset' ? 'asset-chart-controls' 
+                     : 'net-profit-chart-controls';
     
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
@@ -329,8 +338,10 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
         const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
             .value.toUpperCase().trim() || 'SPY';
         updateTwrChart(benchmarkSymbol);
-    } else {
+    } else if (chartType === 'asset') { // 【修改】使用 else if
         updateAssetChart();
+    } else if (chartType === 'netProfit') { // 【新增】處理淨利圖表的更新
+        updateNetProfitChart();
     }
 }
 
@@ -447,7 +458,14 @@ function setupMainAppEventListeners() {
         if (btn) handleChartRangeChange('asset', btn.dataset.range);
     });
     
-    ['twr', 'asset'].forEach(chartType => {
+    // 【新增】為新圖表加入事件監聽
+    document.getElementById('net-profit-chart-controls').addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-range-btn');
+        if (btn) handleChartRangeChange('netProfit', btn.dataset.range);
+    });
+    
+    // 【修改】將 chartType 迴圈擴展到包含 'netProfit'
+    ['twr', 'asset', 'netProfit'].forEach(chartType => {
         const startInput = document.getElementById(`${chartType}-start-date`);
         const endInput = document.getElementById(`${chartType}-end-date`);
         const updateFunc = () => {
@@ -468,6 +486,7 @@ export function initializeAppUI() {
     console.log("Initializing Main App UI...");
     initializeChart();
     initializeTwrChart();
+    initializeNetProfitChart(); // 【新增】初始化新圖表
     setupMainAppEventListeners();
     lucide.createIcons();
     setState({ isAppInitialized: true });
