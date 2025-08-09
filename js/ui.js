@@ -304,6 +304,62 @@ export function initializeTwrChart() {
     setState({ twrChart });
 }
 
+export function initializeNetProfitChart() {
+    const options = {
+        chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
+        series: [{ name: '累積淨利', data: [] }],
+        xaxis: {
+            type: 'datetime',
+            labels: {
+                datetimeUTC: false,
+                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
+            }
+        },
+        yaxis: { 
+            labels: { 
+                formatter: (value) => formatNumber(value, 0) // 格式化為整數
+            },
+            title: {
+                text: 'TWD'
+            }
+        },
+        dataLabels: { enabled: false },
+        stroke: { curve: 'smooth', width: 2 },
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
+        tooltip: { 
+            x: { format: 'yyyy-MM-dd' },
+            y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` }
+        },
+        colors: ['#10b981'] // 使用綠色系
+    };
+    const netProfitChart = new ApexCharts(document.querySelector("#net-profit-chart"), options);
+    netProfitChart.render();
+    setState({ netProfitChart });
+}
+
+// 【新增】更新累積淨利圖表
+export function updateNetProfitChart() {
+    const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
+    if (!netProfitChart) return;
+
+    const filteredHistory = filterHistoryByDateRange(netProfitHistory, netProfitDateRange);
+    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
+        netProfitChart.updateSeries([{ data: [] }]);
+        return;
+    }
+
+    const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+    
+    // 【核心邏輯】起始日歸零
+    const baseValue = sortedEntries[0][1];
+    const chartData = sortedEntries.map(([date, value]) => [
+        new Date(date).getTime(),
+        value - baseValue // 從第一個點的值開始計算相對增長
+    ]);
+
+    netProfitChart.updateSeries([{ data: chartData }]);
+}
+
 export function updateAssetChart() {
     const { chart, portfolioHistory, assetDateRange } = getState();
     if (!chart) return;
