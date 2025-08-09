@@ -15,6 +15,7 @@ let state = {
     isAppInitialized: false,
     chart: null,
     twrChart: null,
+    netProfitChart: null, // 【新增】
     confirmCallback: null,
 
     // [新增] 增加一個旗標來防止重複的數據同步
@@ -32,8 +33,10 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
+    netProfitHistory: {}, // 【新增】
     assetDateRange: { type: 'all', start: null, end: null },
-    twrDateRange: { type: 'all', start: null, end: null }
+    twrDateRange: { type: 'all', start: null, end: null },
+    netProfitDateRange: { type: 'all', start: null, end: null } // 【新增】
 };
 
 // 提供外部讀取狀態的方法
