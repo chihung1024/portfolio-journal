@@ -9,7 +9,7 @@ const baseChartOptions = {
     chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
     dataLabels: { enabled: false },
     stroke: { curve: 'smooth', width: 2 },
-    fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
+    // 【修改】將 fill 設定從共用選項中移除
     xaxis: {
         type: 'datetime',
         labels: {
@@ -281,6 +281,8 @@ export function initializeChart() {
         ...baseChartOptions, // 展開載入基礎設定
         series: [{ name: '總資產', data: [] }],
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        // 【修改】將 fill 設定加回來
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
         colors: ['#4f46e5']
     };
     const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
@@ -309,6 +311,8 @@ export function initializeNetProfitChart() {
         ...baseChartOptions, // 展開載入基礎設定
         series: [{ name: '累積淨利', data: [] }],
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        // 【修改】將 fill 設定加回來
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
         tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
         colors: ['#10b981']
     };
