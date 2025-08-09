@@ -78,6 +78,8 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         history: summaryRow.history ? JSON.parse(summaryRow.history) : {},
                         twrHistory: summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {},
                         benchmarkHistory: summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {},
+                        // 【新增】在回應中加入 netProfitHistory
+                        netProfitHistory: summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {},
                     }});
                 }
                 case 'add_transaction': case 'edit_transaction': {
