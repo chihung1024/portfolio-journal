@@ -182,8 +182,16 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }
                 case 'delete_user_dividend': {
                     await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-                    await performRecalculation(uid, null, false);
-                    return res.status(200).send({ success: true, message: '配息紀錄已刪除。' });
+                
+                    // 【修改】立即回傳成功訊息
+                    res.status(200).send({ success: true, message: '配息紀錄已刪除，後端將在背景更新數據。' });
+                
+                    // 【修改】在背景觸發重新計算，不等待其完成
+                    performRecalculation(uid, null, false).catch(err => {
+                        console.error(`[${uid}] UID 的背景刪除配息重算失敗:`, err);
+                    });
+                
+                    return;
                 }
                 case 'save_stock_note': {
                     const { symbol, target_price, stop_loss_price, notes } = data;
