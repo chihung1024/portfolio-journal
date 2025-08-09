@@ -34,6 +34,7 @@ async function requestDataSync() {
     try {
         setState({ isSyncing: true });
         await loadPortfolioData();
+            setState({ currentBenchmark: newBenchmark });      // <─ 新增
     } catch (error) {
         console.error("請求同步時發生錯誤:", error);
     } finally {
@@ -326,8 +327,8 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
     
     if (chartType === 'twr') {
-        const { benchmarkHistory } = getState();
-        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
+        const { currentBenchmark } = getState();   // <─ 讀新欄位
+        const benchmarkSymbol = currentBenchmark || 'SPY';
         updateTwrChart(benchmarkSymbol);
     } else {
         updateAssetChart();
