@@ -259,6 +259,45 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const { twrHistory, benchmarkHistory } = calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate);
         const portfolioResult = calculateCoreMetrics(evts, market);
         
+        // ==========================================================================
+        // == 【新增】計算累積淨利歷史 Start
+        // ==========================================================================
+        const netProfitHistory = {};
+        const dailyCashflows = evts.reduce((acc, e) => {
+            const dateStr = toDate(e.date).toISOString().split('T')[0];
+            let flow = 0;
+            if (e.eventType === 'transaction') {
+                const currency = e.currency || 'USD';
+                const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
+                flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
+            } else if (e.eventType === 'confirmed_dividend') {
+                const fx = findFxRate(market, e.currency, toDate(e.date));
+                flow = -1 * e.amount * (e.currency === 'TWD' ? 1 : fx);
+            } else if (e.eventType === 'implicit_dividend') {
+                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
+                const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
+                if (shares > 0) {
+                    const currency = stateOnDate[e.symbol.toUpperCase()]?.currency || 'USD';
+                    const fx = findFxRate(market, currency, toDate(e.date));
+                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
+                    flow = -1 * postTaxAmount * shares * fx;
+                }
+            }
+            if (flow !== 0) acc[dateStr] = (acc[dateStr] || 0) + flow;
+            return acc;
+        }, {});
+
+        let cumulativeCashflow = 0;
+        const sortedHistoryDates = Object.keys(newFullHistory).sort();
+        for (const dateStr of sortedHistoryDates) {
+            cumulativeCashflow += (dailyCashflows[dateStr] || 0);
+            const marketValue = newFullHistory[dateStr] || 0;
+            netProfitHistory[dateStr] = marketValue - cumulativeCashflow;
+        }
+        // ==========================================================================
+        // == 【新增】計算累積淨利歷史 End
+        // ==========================================================================
+
         if (createSnapshot) {
             const lastDate = Object.keys(newFullHistory).pop();
             if(lastDate) {
@@ -295,8 +334,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const summaryOps = [
             { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
             {
-                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?)`,
-                params: [uid, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString()]
+                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                params: [uid, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
             }
         ];
         
