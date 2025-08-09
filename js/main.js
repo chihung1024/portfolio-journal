@@ -317,18 +317,21 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
                      : chartType === 'asset' ? 'asset-chart-controls' 
                      : 'net-profit-chart-controls';
     
+    // 【修正】更新 chartType === 'net-profit' 時的 stateKey 和 historyKey
+    const finalStateKey = chartType === 'net-profit' ? 'netProfitDateRange' : stateKey;
+    const finalHistoryKey = chartType === 'net-profit' ? 'netProfitHistory' : historyKey;
+
     const newRange = { type: rangeType, start: startDate, end: endDate };
-    setState({ [stateKey]: newRange });
+    setState({ [finalStateKey]: newRange });
     
     document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
 
-    const fullHistory = getState()[historyKey];
+    const fullHistory = getState()[finalHistoryKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
-    // 【修改】在設定 .value 前，先檢查元素是否存在
     if (rangeType !== 'custom') {
         const startDateInput = document.getElementById(`${chartType}-start-date`);
         const endDateInput = document.getElementById(`${chartType}-end-date`);
@@ -344,7 +347,7 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
         updateTwrChart(benchmarkSymbol);
     } else if (chartType === 'asset') {
         updateAssetChart();
-    } else if (chartType === 'netProfit') {
+    } else if (chartType === 'net-profit') { // 【修正】此處的判斷條件
         updateNetProfitChart();
     }
 }
@@ -496,7 +499,8 @@ function setupMainAppEventListeners() {
     if (netProfitControls) {
         netProfitControls.addEventListener('click', (e) => {
             const btn = e.target.closest('.chart-range-btn');
-            if (btn) handleChartRangeChange('netProfit', btn.dataset.range);
+            // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
+            if (btn) handleChartRangeChange('net-profit', btn.dataset.range);
         });
         netProfitControls.addEventListener('change', (e) => {
             if (e.target.matches('.chart-date-input')) {
@@ -504,7 +508,8 @@ function setupMainAppEventListeners() {
                 const endInput = netProfitControls.querySelector('#net-profit-end-date');
                 if (startInput && endInput && startInput.value && endInput.value) {
                     netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    handleChartRangeChange('netProfit', 'custom', startInput.value, endInput.value);
+                    // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
+                    handleChartRangeChange('net-profit', 'custom', startInput.value, endInput.value);
                 }
             }
         });
