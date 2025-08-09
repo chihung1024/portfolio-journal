@@ -341,12 +341,15 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
     if (rangeType !== 'custom') {
-        const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
-        const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
-        if (startDateInput && endDateInput) {
-            startDateInput.value = finalStartDate;
-            endDateInput.value = finalEndDate;
-        }
+        // 【關鍵修正】使用 setTimeout 將 DOM 更新操作推遲到下一個事件循環
+        setTimeout(() => {
+            const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
+            const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
+            if (startDateInput && endDateInput) {
+                startDateInput.value = finalStartDate;
+                endDateInput.value = finalEndDate;
+            }
+        }, 0);
     }
 
     updateFunc();
