@@ -158,61 +158,7 @@ function findNearest(hist, date, toleranceDays = 7) { if (!hist || Object.keys(h
 function findFxRate(market, currency, date, tolerance = 15) { if (!currency || currency === "TWD") return 1; const fxSym = currencyToFx[currency]; if (!fxSym || !market[fxSym]) return 1; return findNearest(market[fxSym]?.rates || {}, date, tolerance) ?? 1; }
 function getPortfolioStateOnDate(allEvts, targetDate, market) { const state = {}; const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate)); for (const e of pastEvents) { const sym = e.symbol.toUpperCase(); if (!state[sym]) state[sym] = { lots: [], currency: e.currency || "USD" }; if (e.eventType === 'transaction') { state[sym].currency = e.currency; if (e.type === 'buy') { const fx = findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); state[sym].lots.push({ quantity: e.quantity, pricePerShareTWD: costTWD / (e.quantity || 1), pricePerShareOriginal: e.price, date: toDate(e.date) }); } else { let sellQty = e.quantity; while (sellQty > 0 && state[sym].lots.length > 0) { const lot = state[sym].lots[0]; if (lot.quantity <= sellQty) { sellQty -= lot.quantity; state[sym].lots.shift(); } else { lot.quantity -= sellQty; sellQty = 0; } } } } else if (e.eventType === 'split') { state[sym].lots.forEach(lot => { lot.quantity *= e.ratio; lot.pricePerShareTWD /= e.ratio; lot.pricePerShareOriginal /= e.ratio; }); } } return state; }
 function dailyValue(state, market, date, allEvts) { return Object.keys(state).reduce((totalValue, sym) => { const s = state[sym]; const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0); if (qty < 1e-9) return totalValue; let price = findNearest(market[sym]?.prices, date); if (price === undefined) { const yesterday = new Date(date); yesterday.setDate(yesterday.getDate() - 1); const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date; if (yesterday < firstLotDate) return totalValue; return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts); } const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(date)); const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1); const unadjustedPrice = price * adjustmentRatio; const fx = findFxRate(market, s.currency, date); return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx)); }, 0); }
-
-function prepareEvents(txs, splits, market, userDividends) {
-    const firstBuyDateMap = {};
-    txs.forEach(tx => {
-        if (tx.type === "buy") {
-            const sym = tx.symbol.toUpperCase();
-            const d = toDate(tx.date);
-            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) firstBuyDateMap[sym] = d;
-        }
-    });
-
-    const evts = [
-        ...txs.map(t => ({ ...t, eventType: "transaction" })),
-        ...splits.map(s => ({ ...s, eventType: "split" }))
-    ];
-
-    const confirmedDividendKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-
-    userDividends.forEach(ud => evts.push({
-        eventType: 'confirmed_dividend',
-        date: toDate(ud.pay_date),
-        symbol: ud.symbol.toUpperCase(),
-        amount: ud.total_amount,
-        currency: ud.currency
-    }));
-
-    Object.keys(market).forEach(sym => {
-        if (market[sym]?.dividends) {
-            Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
-                const dividendDate = toDate(dateStr);
-                if (confirmedDividendKeys.has(`${sym.toUpperCase()}_${dateStr}`)) return;
-                if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
-                    
-                    // 【修改】將待確認配息的事件發生日(payDate)，直接設定為除息日(dividendDate)
-                    const payDate = toDate(dividendDate);
-                    
-                    evts.push({
-                        eventType: "implicit_dividend",
-                        date: payDate,
-                        ex_date: dividendDate,
-                        symbol: sym.toUpperCase(),
-                        amount_per_share: amount
-                    });
-                }
-            });
-        }
-    });
-
-    evts.sort((a, b) => toDate(a.date) - toDate(b.date));
-    
-    const firstTx = evts.find(e => e.eventType === 'transaction');
-    
-    return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
-}
-
+function prepareEvents(txs, splits, market, userDividends) { const firstBuyDateMap = {}; txs.forEach(tx => { if (tx.type === "buy") { const sym = tx.symbol.toUpperCase(); const d = toDate(tx.date); if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) firstBuyDateMap[sym] = d; }}); const evts = [ ...txs.map(t => ({ ...t, eventType: "transaction" })), ...splits.map(s => ({ ...s, eventType: "split" })) ]; const confirmedDividendKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`)); userDividends.forEach(ud => evts.push({ eventType: 'confirmed_dividend', date: toDate(ud.pay_date), symbol: ud.symbol.toUpperCase(), amount: ud.total_amount, currency: ud.currency })); Object.keys(market).forEach(sym => { if (market[sym]?.dividends) { Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => { const dividendDate = toDate(dateStr); if (confirmedDividendKeys.has(`${sym.toUpperCase()}_${dateStr}`)) return; if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) { const payDate = new Date(dividendDate); payDate.setMonth(payDate.getMonth() + 1); evts.push({ eventType: "implicit_dividend", date: payDate, ex_date: dividendDate, symbol: sym.toUpperCase(), amount_per_share: amount }); } }); } }); evts.sort((a, b) => toDate(a.date) - toDate(b.date)); const firstTx = evts.find(e => e.eventType === 'transaction'); return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null }; }
 function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate, log = console.log) { const dates = Object.keys(dailyPortfolioValues).sort(); if (!startDate || dates.length === 0) return { twrHistory: {}, benchmarkHistory: {} }; const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase(); const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {}; const benchmarkCurrency = isTwStock(upperBenchmarkSymbol) ? "TWD" : "USD"; const startFxRate = findFxRate(market, benchmarkCurrency, startDate); const benchmarkStartPriceOriginal = findNearest(benchmarkPrices, startDate); if (!benchmarkStartPriceOriginal) { log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`); return { twrHistory: {}, benchmarkHistory: {} }; } const benchmarkStartPriceTWD = benchmarkStartPriceOriginal * startFxRate; const cashflows = evts.reduce((acc, e) => { const dateStr = toDate(e.date).toISOString().split('T')[0]; let flow = 0; if (e.eventType === 'transaction') { const currency = e.currency || 'USD'; const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date)); flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx); } else if (e.eventType === 'confirmed_dividend') { const fx = findFxRate(market, e.currency, toDate(e.date)); flow = -1 * e.amount * (e.currency === 'TWD' ? 1 : fx); } else if (e.eventType === 'implicit_dividend') { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[e.symbol.toUpperCase()]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30)); flow = -1 * postTaxAmount * shares * fx; } } if (flow !== 0) acc[dateStr] = (acc[dateStr] || 0) + flow; return acc; }, {}); const twrHistory = {}, benchmarkHistory = {}; let cumulativeHpr = 1, lastMarketValue = 0; for (const dateStr of dates) { const MVE = dailyPortfolioValues[dateStr]; const CF = cashflows[dateStr] || 0; const denominator = lastMarketValue + CF; if (denominator !== 0) cumulativeHpr *= MVE / denominator; twrHistory[dateStr] = (cumulativeHpr - 1) * 100; lastMarketValue = MVE; const currentBenchPriceOriginal = findNearest(benchmarkPrices, new Date(dateStr)); if (currentBenchPriceOriginal && benchmarkStartPriceTWD > 0) { const currentFxRate = findFxRate(market, benchmarkCurrency, new Date(dateStr)); benchmarkHistory[dateStr] = ((currentBenchPriceOriginal * currentFxRate / benchmarkStartPriceTWD) - 1) * 100; } } return { twrHistory, benchmarkHistory }; }
 function calculateFinalHoldings(pf, market, allEvts) { const holdingsToUpdate = {}; const today = new Date(); for (const sym in pf) { const h = pf[sym]; const qty = h.lots.reduce((s, l) => s + l.quantity, 0); if (qty > 1e-9) { const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0); const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0); const curPrice = findNearest(market[sym]?.prices || {}, today); const fx = findFxRate(market, h.currency, today); const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > today); const unadjustedPrice = (curPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1); const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx); holdingsToUpdate[sym] = { symbol: sym, quantity: qty, currency: h.currency, avgCostOriginal: totCostOrg > 0 ? totCostOrg / qty : 0, totalCostTWD: totCostTWD, currentPriceOriginal: unadjustedPrice, marketValueTWD: mktVal, unrealizedPLTWD: mktVal - totCostTWD, realizedPLTWD: h.realizedPLTWD, returnRate: totCostTWD > 0 ? ((mktVal - totCostTWD) / totCostTWD) * 100 : 0 }; } } return { holdingsToUpdate }; }
 function createCashflowsForXirr(evts, holdings, market) { const flows = []; evts.forEach(e => { let amt = 0, flowDate = toDate(e.date); if (e.eventType === "transaction") { const currency = e.currency || 'USD'; const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, flowDate); amt = (e.type === "buy" ? -getTotalCost(e) : getTotalCost(e)) * (currency === 'TWD' ? 1 : fx); } else if (e.eventType === "confirmed_dividend") { const fx = findFxRate(market, e.currency, flowDate); amt = e.amount * (e.currency === 'TWD' ? 1 : fx); } else if (e.eventType === "implicit_dividend") { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const sym = e.symbol.toUpperCase(); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, flowDate); const postTaxAmount = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)); amt = postTaxAmount * shares * (currency === "TWD" ? 1 : fx); } } if (Math.abs(amt) > 1e-6) flows.push({ date: flowDate, amount: amt }); }); const totalMarketValue = Object.values(holdings).reduce((s, h) => s + h.marketValueTWD, 0); if (totalMarketValue > 0) flows.push({ date: new Date(), amount: totalMarketValue }); const combined = flows.reduce((acc, flow) => { const dateStr = flow.date.toISOString().slice(0, 10); acc[dateStr] = (acc[dateStr] || 0) + flow.amount; return acc; }, {}); return Object.entries(combined).filter(([, amount]) => Math.abs(amount) > 1e-6).map(([date, amount]) => ({ date: new Date(date), amount })).sort((a, b) => a.date - b.date); }
