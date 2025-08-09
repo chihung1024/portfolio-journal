@@ -319,9 +319,6 @@ export function initializeNetProfitChart() {
         yaxis: { 
             labels: { 
                 formatter: (value) => formatNumber(value, 0) // 格式化為整數
-            },
-            title: {
-                text: 'TWD'
             }
         },
         dataLabels: { enabled: false },
