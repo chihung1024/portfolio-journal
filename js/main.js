@@ -468,14 +468,21 @@ function setupMainAppEventListeners() {
     ['twr', 'asset', 'netProfit'].forEach(chartType => {
         const startInput = document.getElementById(`${chartType}-start-date`);
         const endInput = document.getElementById(`${chartType}-end-date`);
-        const updateFunc = () => {
-            if (startInput.value && endInput.value) {
-                document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
-                handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
-            }
-        };
-        startInput.addEventListener('change', updateFunc);
-        endInput.addEventListener('change', updateFunc);
+
+        // Add a check to ensure the elements exist before adding listeners
+        if (startInput && endInput) {
+            const updateFunc = () => {
+                if (startInput.value && endInput.value) {
+                    document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
+                }
+            };
+            startInput.addEventListener('change', updateFunc);
+            endInput.addEventListener('change', updateFunc);
+        } else {
+            // Log an error if an element is missing, which helps with future debugging
+            console.error(`Could not find date input elements for chart type: ${chartType}`);
+        }
     });
 }
 
