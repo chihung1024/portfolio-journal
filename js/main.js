@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖 (穩定修正版)
+// == 主程式進入點 (main.js) v3.5.2 - 最終穩定版
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -302,36 +302,33 @@ async function handleDeleteDividend(button) {
     });
 }
 
-const chartConfig = {
-    twr: {
-        stateKey: 'twrDateRange',
-        historyKey: 'twrHistory',
-        updateFunc: (benchmarkSymbol) => updateTwrChart(benchmarkSymbol || 'SPY')
-    },
-    asset: {
-        stateKey: 'assetDateRange',
-        historyKey: 'portfolioHistory',
-        updateFunc: () => updateAssetChart()
-    },
-    netProfit: {
-        stateKey: 'netProfitDateRange',
-        historyKey: 'netProfitHistory',
-        updateFunc: () => updateNetProfitChart()
-    }
-};
-
+// 【恢復】明確、獨立的 handleChartRangeChange 函式
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const config = chartConfig[chartType];
-    if (!config) {
+    let stateKey, historyKey, updateFunc, controlsId;
+
+    // 根據圖表類型，設定對應的變數
+    if (chartType === 'twr') {
+        stateKey = 'twrDateRange';
+        historyKey = 'twrHistory';
+        updateFunc = () => updateTwrChart(document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY');
+        controlsId = 'twr-chart-controls';
+    } else if (chartType === 'asset') {
+        stateKey = 'assetDateRange';
+        historyKey = 'portfolioHistory';
+        updateFunc = updateAssetChart;
+        controlsId = 'asset-chart-controls';
+    } else if (chartType === 'netProfit') {
+        stateKey = 'netProfitDateRange';
+        historyKey = 'netProfitHistory';
+        updateFunc = updateNetProfitChart;
+        controlsId = 'net-profit-chart-controls';
+    } else {
         console.error(`未知的圖表類型: ${chartType}`);
         return;
     }
 
-    const { stateKey, historyKey, updateFunc } = config;
-    const controlsId = `${chartType}-chart-controls`;
-    const controlsContainer = document.getElementById(controlsId); // 【新增】先找到控制項的容器
-
-    if (!controlsContainer) return; // 如果容器不存在，直接返回
+    const controlsContainer = document.getElementById(controlsId);
+    if (!controlsContainer) return;
 
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [stateKey]: newRange });
@@ -345,7 +342,6 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
     if (rangeType !== 'custom') {
-        // 【修改】從容器內部尋找元素，而不是從全域 document 尋找
         const startDateInput = controlsContainer.querySelector(`#${chartType}-start-date`);
         const endDateInput = controlsContainer.querySelector(`#${chartType}-end-date`);
         if (startDateInput && endDateInput) {
@@ -354,12 +350,7 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
         }
     }
 
-    if (chartType === 'twr') {
-        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
-        updateFunc(benchmarkSymbol);
-    } else {
-        updateFunc();
-    }
+    updateFunc();
 }
 
 function setupCommonEventListeners() {
@@ -373,6 +364,7 @@ function setupCommonEventListeners() {
     });
 }
 
+// 【恢復】明確、獨立的 setupMainAppEventListeners 函式
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
