@@ -139,8 +139,18 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     const dividendId = id || uuidv4();
                     if (id) await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,[divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
                     else await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    await performRecalculation(uid, null, false);
-                    return res.status(200).send({ success: true, message: '配息紀錄已儲存。' });
+                    
+                    // 【修改】立即回傳成功訊息，讓前端可以繼續操作
+                    res.status(200).send({ success: true, message: '配息紀錄已儲存，後端將在背景進行數據更新。' });
+                
+                    // 【修改】在背景觸發重新計算，不等待其完成，並捕捉潛在錯誤
+                    performRecalculation(uid, null, false).catch(err => {
+                        // 建議加入日誌記錄，以便追蹤背景任務失敗的情況
+                        console.error(`[${uid}] UID 的背景配息重算失敗:`, err);
+                    });
+                    
+                    // 不需要再 return，因為已經發送過回應
+                    return;
                 }
                 case 'bulk_confirm_all_dividends': {
                     const pendingDividends = data.pendingDividends || [];
@@ -148,9 +158,10 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     const dbOps = [];
                     const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
                     for (const pending of pendingDividends) {
-                        const payDate = new Date(pending.ex_dividend_date); payDate.setMonth(payDate.getMonth() + 1); const payDateStr = payDate.toISOString().split('T')[0];
+                        // 【修改】直接使用除息日作為預設的發放日
+                        const payDateStr = pending.ex_dividend_date.split('T')[0]; 
                         const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-                        dbOps.push({ sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`, params: [uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]});
+                        dbOps.push({ sql: `INSERT INTO user_dividends (...) VALUES (...)`, params: [uuidv4(), uid, ..., payDateStr, ...]});
                     }
                     if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
                     return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
