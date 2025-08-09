@@ -90,21 +90,22 @@ export async function loadPortfolioData() {
             portfolioHistory: portfolioData.history || {},
             twrHistory: portfolioData.twrHistory || {},
             benchmarkHistory: portfolioData.benchmarkHistory || {},
-            netProfitHistory: portfolioData.netProfitHistory || {}
+            netProfitHistory: portfolioData.netProfitHistory || {} // 【新增】
         });
         
-        // 渲染表格與儀表板
         renderHoldingsTable(holdingsObject);
         renderTransactionsTable(); 
         renderSplitsTable();
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
-        // --- 【修改】調整執行順序 ---
+        updateAssetChart(); 
+        updateNetProfitChart(); // 【新增】
+        const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+        updateTwrChart(benchmarkSymbol);
 
-        // 1. 先設定好所有圖表的預設日期
-        document.getElementById('benchmark-symbol-input').value = portfolioData.summary?.benchmarkSymbol || 'SPY';
+        document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        const { portfolioHistory, twrHistory, netProfitHistory } = getState();
+        const { portfolioHistory, twrHistory, netProfitHistory } = getState(); // 【修改】
 
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
@@ -114,14 +115,10 @@ export async function loadPortfolioData() {
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
         
+        // 【新增】
         const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
         document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
-
-        // 2. 在日期都設定好之後，才更新圖表
-        updateAssetChart(); 
-        updateNetProfitChart();
-        updateTwrChart(portfolioData.summary?.benchmarkSymbol || 'SPY');
         
         showNotification('success', '資料同步完成！');
     } catch (error) {
