@@ -307,7 +307,6 @@ async function handleDeleteDividend(button) {
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    // 【修改】加入 netProfit 的 case
     const stateKey = chartType === 'twr' ? 'twrDateRange' 
                    : chartType === 'asset' ? 'assetDateRange' 
                    : 'netProfitDateRange';
@@ -329,18 +328,23 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const fullHistory = getState()[historyKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
+    // 【修改】在設定 .value 前，先檢查元素是否存在
     if (rangeType !== 'custom') {
-        document.getElementById(`${chartType}-start-date`).value = finalStartDate;
-        document.getElementById(`${chartType}-end-date`).value = finalEndDate;
+        const startDateInput = document.getElementById(`${chartType}-start-date`);
+        const endDateInput = document.getElementById(`${chartType}-end-date`);
+        if (startDateInput && endDateInput) {
+            startDateInput.value = finalStartDate;
+            endDateInput.value = finalEndDate;
+        }
     }
     
     if (chartType === 'twr') {
         const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
             .value.toUpperCase().trim() || 'SPY';
         updateTwrChart(benchmarkSymbol);
-    } else if (chartType === 'asset') { // 【修改】使用 else if
+    } else if (chartType === 'asset') {
         updateAssetChart();
-    } else if (chartType === 'netProfit') { // 【新增】處理淨利圖表的更新
+    } else if (chartType === 'netProfit') {
         updateNetProfitChart();
     }
 }
