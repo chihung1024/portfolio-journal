@@ -5,15 +5,15 @@
 import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
-import { 
-    initializeChart, 
-    initializeTwrChart, 
+import {
+    initializeChart,
+    initializeTwrChart,
     initializeNetProfitChart,
-    openModal, 
-    closeModal, 
-    showConfirm, 
-    hideConfirm, 
-    toggleOptionalFields, 
+    openModal,
+    closeModal,
+    showConfirm,
+    hideConfirm,
+    toggleOptionalFields,
     showNotification,
     switchTab,
     renderHoldingsTable,
@@ -54,7 +54,7 @@ function handleEdit(button) {
 async function handleDelete(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
-    
+
     const transactionToDelete = transactions.find(t => t.id === txId);
     if (!transactionToDelete) return;
 
@@ -81,7 +81,7 @@ async function handleDelete(button) {
 
 async function handleFormSubmit(e) {
     e.preventDefault();
-    
+
     const { transactions } = getState();
     const originalTransactions = [...transactions];
 
@@ -103,11 +103,11 @@ async function handleFormSubmit(e) {
         showNotification('error', '請填寫所有必填欄位。');
         return;
     }
-    
+
     closeModal('transaction-modal');
 
     if (isEditing) {
-        const updatedTransactions = transactions.map(t => 
+        const updatedTransactions = transactions.map(t =>
             t.id === txId ? { ...t, ...transactionData, id: txId } : t
         );
         setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
@@ -243,8 +243,8 @@ async function handleBulkConfirm() {
             document.getElementById('loading-overlay').style.display = 'flex';
             await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
             showNotification('success', '所有待確認配息已處理完畢！');
-            await loadAndShowDividends(); 
-            await loadPortfolioData(); 
+            await loadAndShowDividends();
+            await loadPortfolioData();
         } catch (error) {
             showNotification('error', `批次確認失敗: ${error.message}`);
         } finally {
@@ -302,36 +302,31 @@ async function handleDeleteDividend(button) {
     });
 }
 
-// 【新增】補上遺漏的 chartConfig 常數定義
-const chartConfig = {
-    twr: {
-        stateKey: 'twrDateRange',
-        historyKey: 'twrHistory',
-        updateFunc: (benchmarkSymbol) => updateTwrChart(benchmarkSymbol || 'SPY')
-    },
-    asset: {
-        stateKey: 'assetDateRange',
-        historyKey: 'portfolioHistory',
-        updateFunc: () => updateAssetChart()
-    },
-    netProfit: {
-        stateKey: 'netProfitDateRange',
-        historyKey: 'netProfitHistory',
-        updateFunc: () => updateNetProfitChart()
-    }
-};
-
+//【修正】恢復為明確的、非數據驅動的函式，以確保穩定性
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const config = chartConfig[chartType]; // 這行現在可以正常運作了
-    if (!config) {
+    let stateKey, historyKey, updateFunc, controlsId;
+
+    if (chartType === 'twr') {
+        stateKey = 'twrDateRange';
+        historyKey = 'twrHistory';
+        updateFunc = () => updateTwrChart(document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY');
+        controlsId = 'twr-chart-controls';
+    } else if (chartType === 'asset') {
+        stateKey = 'assetDateRange';
+        historyKey = 'portfolioHistory';
+        updateFunc = updateAssetChart;
+        controlsId = 'asset-chart-controls';
+    } else if (chartType === 'netProfit') {
+        stateKey = 'netProfitDateRange';
+        historyKey = 'netProfitHistory';
+        updateFunc = updateNetProfitChart;
+        controlsId = 'net-profit-chart-controls';
+    } else {
         console.error(`未知的圖表類型: ${chartType}`);
         return;
     }
 
-    const { stateKey, historyKey, updateFunc } = config;
-    const controlsId = `${chartType}-chart-controls`;
     const controlsContainer = document.getElementById(controlsId);
-
     if (!controlsContainer) return;
 
     const newRange = { type: rangeType, start: startDate, end: endDate };
@@ -354,25 +349,21 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
         }
     }
 
-    if (chartType === 'twr') {
-        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
-        updateFunc(benchmarkSymbol);
-    } else {
-        updateFunc();
-    }
+    updateFunc();
 }
 
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
     document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-    document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
+    document.getElementById('confirm-ok-btn').addEventListener('click', () => {
         const { confirmCallback } = getState();
-        if (confirmCallback) { confirmCallback(); } 
-        hideConfirm(); 
+        if (confirmCallback) { confirmCallback(); }
+        hideConfirm();
     });
 }
 
+//【修正】恢復為明確、獨立的事件監聽區塊，以確保穩定性
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
@@ -391,20 +382,20 @@ function setupMainAppEventListeners() {
             renderTransactionsTable();
         }
     });
-    
+
     const manageSplitsBtn = document.getElementById('manage-splits-btn');
     if(manageSplitsBtn) manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
     document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
+    document.getElementById('splits-table-body').addEventListener('click', (e) => {
         const btn = e.target.closest('.delete-split-btn');
         if(btn) handleDeleteSplit(btn);
     });
-    
+
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
-    
+
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const sortHeader = e.target.closest('[data-sort-key]');
         if (sortHeader) {
@@ -456,7 +447,7 @@ function setupMainAppEventListeners() {
             renderDividendsManagementTab(pendingDividends, confirmedDividends);
         }
     });
-    
+
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
     document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
     document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
@@ -466,7 +457,6 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    // 恢復為穩定、獨立的事件監聽區塊
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
@@ -502,7 +492,7 @@ function setupMainAppEventListeners() {
             }
         });
     }
-    
+
     const netProfitControls = document.getElementById('net-profit-chart-controls');
     if (netProfitControls) {
         netProfitControls.addEventListener('click', (e) => {
@@ -530,7 +520,7 @@ export function initializeAppUI() {
     initializeChart();
     initializeTwrChart();
     initializeNetProfitChart();
-    setupMainAppEventListeners();
+    setupMainAppEventListeners(); // Restored to original call order
     lucide.createIcons();
     setState({ isAppInitialized: true });
 }
@@ -539,6 +529,3 @@ document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
     initializeAuth();
 });
-
-// --- 偵錯用，將 getState() 附加到 window 物件上 ---
-window.debugState = getState;
