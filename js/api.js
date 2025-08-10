@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.6.1 - 修正 updateDashboard 參數錯誤
+// == API 通訊模組 (api.js) v3.5.1
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -12,11 +12,9 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
-    updateNetProfitChart,
-    updateDividendsTabIndicator,
+    updateNetProfitChart, // 【新增此行】
     showNotification,
-    getDateRangeForPreset,
-    updateUIWithData // 確保引入 updateUIWithData
+    getDateRangeForPreset
 } from './ui.js';
 
 /**
@@ -69,14 +67,10 @@ export async function loadPortfolioData() {
         return;
     }
     document.getElementById('loading-overlay').style.display = 'flex';
-    document.getElementById('loading-text').textContent = '正在從雲端同步資料...';
-
     try {
         const result = await apiRequest('get_data', {});
         
         const portfolioData = result.data;
-
-        setState({ fullPortfolioData: portfolioData });
         
         const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
             map[note.symbol] = note;
@@ -90,32 +84,28 @@ export async function loadPortfolioData() {
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
+            marketDataForFrontend: portfolioData.marketData || {},
             stockNotes: stockNotesMap,
             holdings: holdingsObject,
             portfolioHistory: portfolioData.history || {},
             twrHistory: portfolioData.twrHistory || {},
             benchmarkHistory: portfolioData.benchmarkHistory || {},
-            netProfitHistory: portfolioData.netProfitHistory || {},
-            pendingDividendsCount: portfolioData.pendingDividendsCount || 0
+            netProfitHistory: portfolioData.netProfitHistory || {} // 【新增】
         });
         
         renderHoldingsTable(holdingsObject);
         renderTransactionsTable(); 
         renderSplitsTable();
+        updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
-        // 【關鍵修正】將呼叫 updateDashboard 的參數順序修正
-        updateDashboard(portfolioData.summary, holdingsObject);
-        
-        updateAssetChart(portfolioData.history); 
-        updateNetProfitChart(portfolioData.netProfitHistory);
+        updateAssetChart(); 
+        updateNetProfitChart(); // 【新增】
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
-        updateTwrChart(portfolioData.twrHistory, portfolioData.benchmarkHistory, benchmarkSymbol);
-        
-        updateDividendsTabIndicator();
+        updateTwrChart(benchmarkSymbol);
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        const { portfolioHistory, twrHistory, netProfitHistory } = getState();
+        const { portfolioHistory, twrHistory, netProfitHistory } = getState(); // 【修改】
 
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
@@ -125,6 +115,7 @@ export async function loadPortfolioData() {
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
         
+        // 【新增】
         const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
         document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
@@ -136,34 +127,4 @@ export async function loadPortfolioData() {
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
     }
-}
-
-
-// =========================================================================================
-// == 群組功能相關 API 函式
-// =========================================================================================
-
-export async function loadGroups() {
-    const result = await apiRequest('get_groups');
-    if (result.success) {
-        setState({ groups: result.data });
-        return result.data;
-    }
-    throw new Error(result.message || '載入群組失敗');
-}
-
-export async function saveGroup(groupData) {
-    return await apiRequest('save_group', groupData);
-}
-
-export async function deleteGroup(id) {
-    return await apiRequest('delete_group', { id });
-}
-
-export async function calculateBySymbols(symbols) {
-    const result = await apiRequest('calculate_by_symbols', { symbols });
-    if (result.success) {
-        return result.data;
-    }
-    throw new Error(result.message || '群組計算失敗');
 }
