@@ -162,31 +162,37 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }
                 case 'bulk_confirm_all_dividends': {
                     const pendingDividends = data.pendingDividends || [];
-                    if (pendingDividends.length === 0) return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
+                    if (pendingDividends.length === 0) {
+                        return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
+                    }
                     const dbOps = [];
                     const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
+
                     for (const pending of pendingDividends) {
-                        // 【修改】直接使用除息日作為預設的發放日
                         const payDateStr = pending.ex_dividend_date.split('T')[0]; 
-                        const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
+                        const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; 
+                        const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
                         dbOps.push({
                             sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`,
-                            params: [
-                                uuidv4(),
-                                uid,
-                                pending.symbol,
-                                pending.ex_dividend_date,
-                                payDateStr, // 我們修改過的變數
-                                pending.amount_per_share,
-                                pending.quantity_at_ex_date,
-                                totalAmount,
-                                taxRate * 100,
-                                pending.currency
-                            ]
+                            params: [ uuidv4(), uid, pending.symbol, pending.ex_dividend_date, payDateStr, pending.amount_per_share, pending.quantity_at_ex_date, totalAmount, taxRate * 100, pending.currency]
                         });
                     }
-                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
-                    return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
+                    
+                    if (dbOps.length > 0) {
+                         // 步驟 1: 執行資料庫寫入
+                         await d1Client.batch(dbOps);
+
+                         // 步驟 2: 【關鍵修改】立即回覆前端
+                         res.status(200).send({ success: true, message: `已成功送出 ${dbOps.length} 筆配息確認請求。` });
+
+                         // 步驟 3: 【關鍵修改】在背景觸發完整的重新計算
+                         performRecalculation(uid, null, false).catch(err => {
+                            console.error(`[${uid}] UID 的背景批次確認配息重算失敗:`, err);
+                         });
+                    } else {
+                        res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
+                    }
+                    return;
                 }
                 case 'delete_user_dividend': {
                     await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
