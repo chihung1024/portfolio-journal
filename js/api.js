@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.6.0 - 新增群組 API
+// == API 通訊模組 (api.js) v3.6.1 - 修正 updateDashboard 參數錯誤
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -15,7 +15,8 @@ import {
     updateNetProfitChart,
     updateDividendsTabIndicator,
     showNotification,
-    getDateRangeForPreset
+    getDateRangeForPreset,
+    updateUIWithData // 確保引入 updateUIWithData
 } from './ui.js';
 
 /**
@@ -75,7 +76,6 @@ export async function loadPortfolioData() {
         
         const portfolioData = result.data;
 
-        // 【修改】將首次載入的完整數據快取起來
         setState({ fullPortfolioData: portfolioData });
         
         const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
@@ -102,12 +102,14 @@ export async function loadPortfolioData() {
         renderHoldingsTable(holdingsObject);
         renderTransactionsTable(); 
         renderSplitsTable();
-        updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
-        updateAssetChart(); 
-        updateNetProfitChart();
+        // 【關鍵修正】將呼叫 updateDashboard 的參數順序修正
+        updateDashboard(portfolioData.summary, holdingsObject);
+        
+        updateAssetChart(portfolioData.history); 
+        updateNetProfitChart(portfolioData.netProfitHistory);
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
-        updateTwrChart(benchmarkSymbol);
+        updateTwrChart(portfolioData.twrHistory, portfolioData.benchmarkHistory, benchmarkSymbol);
         
         updateDividendsTabIndicator();
 
@@ -136,13 +138,11 @@ export async function loadPortfolioData() {
     }
 }
 
+
 // =========================================================================================
-// == 【全新】群組功能相關 API 函式
+// == 群組功能相關 API 函式
 // =========================================================================================
 
-/**
- * 載入使用者所有的群組
- */
 export async function loadGroups() {
     const result = await apiRequest('get_groups');
     if (result.success) {
@@ -152,23 +152,14 @@ export async function loadGroups() {
     throw new Error(result.message || '載入群組失敗');
 }
 
-/**
- * 儲存一個群組 (新增或更新)
- */
 export async function saveGroup(groupData) {
     return await apiRequest('save_group', groupData);
 }
 
-/**
- * 刪除一個群組
- */
 export async function deleteGroup(id) {
     return await apiRequest('delete_group', { id });
 }
 
-/**
- * 根據股票代碼列表，請求後端即時計算績效
- */
 export async function calculateBySymbols(symbols) {
     const result = await apiRequest('calculate_by_symbols', { symbols });
     if (result.success) {
