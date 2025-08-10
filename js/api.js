@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.5.1
+// == API 通訊模組 (api.js) v3.6.0 - 新增群組 API
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -12,7 +12,8 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
-    updateNetProfitChart, // 【新增此行】
+    updateNetProfitChart,
+    updateDividendsTabIndicator,
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
@@ -67,10 +68,15 @@ export async function loadPortfolioData() {
         return;
     }
     document.getElementById('loading-overlay').style.display = 'flex';
+    document.getElementById('loading-text').textContent = '正在從雲端同步資料...';
+
     try {
         const result = await apiRequest('get_data', {});
         
         const portfolioData = result.data;
+
+        // 【修改】將首次載入的完整數據快取起來
+        setState({ fullPortfolioData: portfolioData });
         
         const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
             map[note.symbol] = note;
@@ -84,13 +90,13 @@ export async function loadPortfolioData() {
         setState({
             transactions: portfolioData.transactions || [],
             userSplits: portfolioData.splits || [],
-            marketDataForFrontend: portfolioData.marketData || {},
             stockNotes: stockNotesMap,
             holdings: holdingsObject,
             portfolioHistory: portfolioData.history || {},
             twrHistory: portfolioData.twrHistory || {},
             benchmarkHistory: portfolioData.benchmarkHistory || {},
-            netProfitHistory: portfolioData.netProfitHistory || {} // 【新增】
+            netProfitHistory: portfolioData.netProfitHistory || {},
+            pendingDividendsCount: portfolioData.pendingDividendsCount || 0
         });
         
         renderHoldingsTable(holdingsObject);
@@ -99,13 +105,15 @@ export async function loadPortfolioData() {
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
         updateAssetChart(); 
-        updateNetProfitChart(); // 【新增】
+        updateNetProfitChart();
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
         updateTwrChart(benchmarkSymbol);
+        
+        updateDividendsTabIndicator();
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        const { portfolioHistory, twrHistory, netProfitHistory } = getState(); // 【修改】
+        const { portfolioHistory, twrHistory, netProfitHistory } = getState();
 
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
@@ -115,7 +123,6 @@ export async function loadPortfolioData() {
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
         
-        // 【新增】
         const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
         document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
@@ -127,4 +134,45 @@ export async function loadPortfolioData() {
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
     }
+}
+
+// =========================================================================================
+// == 【全新】群組功能相關 API 函式
+// =========================================================================================
+
+/**
+ * 載入使用者所有的群組
+ */
+export async function loadGroups() {
+    const result = await apiRequest('get_groups');
+    if (result.success) {
+        setState({ groups: result.data });
+        return result.data;
+    }
+    throw new Error(result.message || '載入群組失敗');
+}
+
+/**
+ * 儲存一個群組 (新增或更新)
+ */
+export async function saveGroup(groupData) {
+    return await apiRequest('save_group', groupData);
+}
+
+/**
+ * 刪除一個群組
+ */
+export async function deleteGroup(id) {
+    return await apiRequest('delete_group', { id });
+}
+
+/**
+ * 根據股票代碼列表，請求後端即時計算績效
+ */
+export async function calculateBySymbols(symbols) {
+    const result = await apiRequest('calculate_by_symbols', { symbols });
+    if (result.success) {
+        return result.data;
+    }
+    throw new Error(result.message || '群組計算失敗');
 }
