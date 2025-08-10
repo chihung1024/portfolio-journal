@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
 
 const { d1Client } = require('./d1.client');
-const { performRecalculation } = require('./calculation.engine');
+const { performRecalculation, calculateAndCachePendingDividends } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
 
@@ -189,12 +189,21 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
                 }
                 case 'delete_user_dividend': {
+                    // 步驟 1: 刪除已確認的配息紀錄
                     await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
+
+                    // 【新增步驟 2】: 在回應前，同步更新待確認配息的快取
+                    // 為了做到這一點，我們需要重新讀取最新的交易和已確認配息列表
+                    const [txs, userDividends] = await Promise.all([
+                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
+                        d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid])
+                    ]);
+                    await calculateAndCachePendingDividends(uid, txs, userDividends);
                 
-                    // 【修改】立即回傳成功訊息
-                    res.status(200).send({ success: true, message: '配息紀錄已刪除，後端將在背景更新數據。' });
+                    // 步驟 3: 現在可以安全地回覆前端，因為待辦列表已是最新
+                    res.status(200).send({ success: true, message: '配息紀錄已刪除，待辦事項已更新。' });
                 
-                    // 【修改】在背景觸發重新計算，不等待其完成
+                    // 步驟 4: 仍在背景觸發完整的重算，以更新總資產等數據
                     performRecalculation(uid, null, false).catch(err => {
                         console.error(`[${uid}] UID 的背景刪除配息重算失敗:`, err);
                     });
