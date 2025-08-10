@@ -291,18 +291,59 @@ async function handleDividendFormSubmit(e) {
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
-    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('delete_user_dividend', { dividendId });
-            showNotification('success', '配息紀錄已刪除！');
-            await loadAndShowDividends();
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
+    const { confirmedDividends, pendingDividends } = getState();
+
+    const dividendToDelete = confirmedDividends.find(d => d.id === dividendId);
+    if (!dividendToDelete) return;
+
+    showConfirm('確定要將這筆配息移回待確認區嗎？', () => {
+        // --- 步驟 1: 前端樂觀更新 ---
+        
+        // a. 從「已確認」陣列中移除
+        const updatedConfirmed = confirmedDividends.filter(d => d.id !== dividendId);
+
+        // b. 根據被刪除的紀錄，建立一個新的「待確認」物件
+        const newPendingDividend = {
+            symbol: dividendToDelete.symbol,
+            ex_dividend_date: dividendToDelete.ex_dividend_date,
+            amount_per_share: dividendToDelete.amount_per_share,
+            quantity_at_ex_date: dividendToDelete.quantity_at_ex_date,
+            currency: dividendToDelete.currency
+        };
+
+        // c. 將新物件加入到「待確認」陣列的開頭
+        const updatedPending = [newPendingDividend, ...pendingDividends];
+
+        // d. 更新前端的本地狀態
+        setState({
+            confirmedDividends: updatedConfirmed,
+            pendingDividends: updatedPending
+        });
+
+        // e. 立即用新的本地狀態重新渲染畫面
+        renderDividendsManagementTab(updatedPending, updatedConfirmed);
+        showNotification('info', '配息已移至待確認區，正在同步至雲端...');
+
+        // --- 步驟 2: 將「刪除」請求發送到後端 (Fire-and-Forget) ---
+        apiRequest('delete_user_dividend', { dividendId })
+            .then(result => {
+                if (result.success) {
+                    showNotification('success', '後端同步完成！');
+                    // 為了確保數據絕對一致，可以在背景重新請求一次數據，但這不是必須的
+                    // requestDataSync(); 
+                } else {
+                    throw new Error(result.message);
+                }
+            })
+            .catch(error => {
+                showNotification('error', `後端同步失敗: ${error.message}。建議重新整理頁面以確保資料正確。`);
+                // 如果後端失敗，可以考慮將前端狀態回滾
+                setState({
+                    confirmedDividends: confirmedDividends,
+                    pendingDividends: pendingDividends
+                });
+                renderDividendsManagementTab(pendingDividends, confirmedDividends);
+            });
     });
 }
 
