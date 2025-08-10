@@ -237,23 +237,63 @@ async function loadAndShowDividends() {
 }
 
 async function handleBulkConfirm() {
-    const { pendingDividends } = getState();
+    const { pendingDividends, confirmedDividends } = getState();
     if (pendingDividends.length === 0) {
         showNotification('info', '沒有需要確認的配息。');
         return;
     }
-    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
-            showNotification('success', '所有待確認配息已處理完畢！');
-            await loadAndShowDividends(); 
-            await loadPortfolioData(); 
-        } catch (error) {
-            showNotification('error', `批次確認失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
+
+    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設值。`, () => {
+        // --- 步驟 1: 前端樂觀更新 ---
+        const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
+
+        // a. 根據待辦事項，建立新的「已確認」物件
+        const newConfirmedDividends = pendingDividends.map(p => {
+            const taxRate = isTwStock(p.symbol) ? 0.0 : 0.30;
+            const totalAmount = p.amount_per_share * p.quantity_at_ex_date * (1 - taxRate);
+            return {
+                id: `temp_${Date.now()}_${p.symbol}`, // 給一個臨時ID
+                uid: getState().currentUserId,
+                symbol: p.symbol,
+                ex_dividend_date: p.ex_dividend_date,
+                pay_date: p.ex_dividend_date, // 預設發放日為除息日
+                amount_per_share: p.amount_per_share,
+                quantity_at_ex_date: p.quantity_at_ex_date,
+                total_amount: totalAmount,
+                tax_rate: taxRate * 100,
+                currency: p.currency,
+                notes: '批次確認',
+                status: 'confirmed'
+            };
+        });
+
+        // b. 更新本地狀態：清空待辦區，並將新物件加入已確認區
+        const updatedConfirmed = [...newConfirmedDividends, ...confirmedDividends].sort((a, b) => new Date(b.pay_date) - new Date(a.pay_date));
+        
+        setState({
+            pendingDividends: [],
+            confirmedDividends: updatedConfirmed
+        });
+
+        // c. 立即用新的本地狀態重新渲染畫面
+        renderDividendsManagementTab([], updatedConfirmed);
+        showNotification('info', '配息已在介面確認，正在同步至雲端...');
+
+        // --- 步驟 2: 將請求發送到後端 (Fire-and-Forget) ---
+        apiRequest('bulk_confirm_all_dividends', { pendingDividends })
+            .then(result => {
+                if (result.success) {
+                    showNotification('success', '後端同步完成！');
+                    // 為了確保數據絕對一致，觸發一次背景的完整數據同步
+                    requestDataSync();
+                } else {
+                    throw new Error(result.message);
+                }
+            })
+            .catch(error => {
+                showNotification('error', `後端同步失敗: ${error.message}。建議重新整理頁面以確保資料正確。`);
+                // 失敗時可以考慮回滾，但由於是批次操作，簡單地提示用戶刷新是更穩健的作法
+            });
     });
 }
 
