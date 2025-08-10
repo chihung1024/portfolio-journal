@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
 
 const { d1Client } = require('./d1.client');
-const { performRecalculation, performCalculationBySymbols } = require('./calculation.engine');
+const { performRecalculation } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
 
@@ -63,50 +63,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
             switch (action) {
-
-                // ================================================================
-                // == 【全新】群組管理與即時計算 API
-                // ================================================================
-                case 'get_groups': {
-                    const groups = await d1Client.query('SELECT * FROM portfolio_groups WHERE uid = ? ORDER BY created_at ASC', [uid]);
-                    return res.status(200).send({ success: true, data: groups });
-                }
-
-                case 'save_group': {
-                    const { id, name, symbols_json } = data;
-                    if (!name || !symbols_json) {
-                        return res.status(400).send({ success: false, message: '群組名稱和股票列表為必填。' });
-                    }
-                    const groupId = id || uuidv4();
-                    const now = new Date().toISOString();
-
-                    if (id) { // 更新現有群組
-                        await d1Client.query('UPDATE portfolio_groups SET name = ?, symbols_json = ? WHERE id = ? AND uid = ?', [name, symbols_json, id, uid]);
-                    } else { // 建立新群組
-                        await d1Client.query('INSERT INTO portfolio_groups (id, uid, name, symbols_json, created_at) VALUES (?, ?, ?, ?, ?)', [groupId, uid, name, symbols_json, now]);
-                    }
-                    return res.status(200).send({ success: true, message: '群組已儲存。', id: groupId });
-                }
-
-                case 'delete_group': {
-                    const { id } = data;
-                    if (!id) {
-                        return res.status(400).send({ success: false, message: '缺少群組 ID。' });
-                    }
-                    await d1Client.query('DELETE FROM portfolio_groups WHERE id = ? AND uid = ?', [id, uid]);
-                    return res.status(200).send({ success: true, message: '群組已刪除。' });
-                }
-
-                case 'calculate_by_symbols': {
-                    const { symbols } = data;
-                    if (!symbols || !Array.isArray(symbols)) {
-                        return res.status(400).send({ success: false, message: '股票代碼列表為無效格式。' });
-                    }
-                    // 執行即時計算並等待結果
-                    const result = await performCalculationBySymbols(uid, symbols);
-                    return res.status(200).send({ success: true, data: result });
-                }
-                
                 case 'get_data': {
                     const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
                         d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
