@@ -588,6 +588,12 @@ function setupMainAppEventListeners() {
     
     const groupModal = document.getElementById('group-management-modal');
     groupModal.addEventListener('click', e => {
+        // 新增：判斷是否點擊了關閉按鈕，或是視窗外的背景
+        if (e.target.closest('#close-group-modal-btn') || !e.target.closest('.bg-white')) {
+            closeModal('group-management-modal');
+            return;
+        }
+
         const groupItem = e.target.closest('[data-group-id]');
         if (groupItem) {
             handleGroupSelect(groupItem.dataset.groupId);
