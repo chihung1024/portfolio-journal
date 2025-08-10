@@ -439,4 +439,4 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 }
 
 
-module.exports = { performRecalculation };
+module.exports = { performRecalculation, calculateAndCachePendingDividends };
