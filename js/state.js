@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v3.5.0 - 新增群組狀態
+// == 狀態管理模組 (state.js) v3.4.1 - 新增同步鎖
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -15,16 +15,11 @@ let state = {
     isAppInitialized: false,
     chart: null,
     twrChart: null,
-    netProfitChart: null,
+    netProfitChart: null, // 【新增】
     confirmCallback: null,
 
+    // [新增] 增加一個旗標來防止重複的數據同步
     isSyncing: false,
-
-    // 【新增】群組功能相關狀態
-    groups: [], // 儲存所有群組的列表
-    selectedGroupId: '_all_', // 當前選擇的群組ID，預設為全部
-    isGroupView: false, // 當前是否為群組檢視模式
-    fullPortfolioData: null, // 用於快取「全部持股」的數據
 
     // 篩選與排序狀態
     transactionFilter: 'all',
@@ -38,10 +33,10 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
-    netProfitHistory: {},
+    netProfitHistory: {}, // 【新增】
     assetDateRange: { type: 'all', start: null, end: null },
     twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null }
+    netProfitDateRange: { type: 'all', start: null, end: null } // 【新增】
 };
 
 // 提供外部讀取狀態的方法
