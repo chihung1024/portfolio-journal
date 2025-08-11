@@ -10,12 +10,12 @@ import {
     renderTransactionsTable, 
     renderSplitsTable, 
     updateDashboard, 
-    updateAssetChart, 
     updateTwrChart,
     updateNetProfitChart, // 【新增此行】
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
+import { updateAssetChart } from './ui/charts/assetChart.js';
 
 /**
  * 統一的後端 API 請求函式
