@@ -4,7 +4,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
-const { performRecalculation } = require('../calculation.engine');
+const { performRecalculation } = require('../performRecalculation');
 const { userDividendSchema } = require('../schemas');
 
 /**
