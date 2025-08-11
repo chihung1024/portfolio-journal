@@ -6,7 +6,6 @@ import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth
 import { API } from './config.js';
 import { getState, setState } from './state.js';
 import { 
-    renderHoldingsTable, 
     renderTransactionsTable, 
     renderSplitsTable, 
     updateDashboard, 
@@ -16,6 +15,7 @@ import {
 import { updateAssetChart } from './ui/charts/assetChart.js';
 import { updateTwrChart } from './ui/charts/twrChart.js';
 import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
+import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 
 /**
  * 統一的後端 API 請求函式
