@@ -6,7 +6,10 @@
 import { getState, setState } from '../state.js';
 import { apiRequest, loadPortfolioData } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-import { openModal, closeModal, showNotification } from '../ui/modals.js';
+// 【修正前】: import { openModal, closeModal, showNotification } from '../ui/modals.js';
+// 【修正後】: 分開從各自的模組引入
+import { openModal, closeModal } from '../ui/modals.js';
+import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
