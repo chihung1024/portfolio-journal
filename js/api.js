@@ -1,21 +1,22 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.5.2 - Refactored
+// == API 通訊模組 (api.js) v3.6.0 - Fully Refactored
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
-import { 
-    updateDashboard, 
-    showNotification,
-    getDateRangeForPreset
-} from './ui.js';
+
+// --- UI Module Imports ---
+import { getDateRangeForPreset } from './ui/utils.js';
 import { updateAssetChart } from './ui/charts/assetChart.js';
 import { updateTwrChart } from './ui/charts/twrChart.js';
 import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
+import { updateDashboard } from './ui/dashboard.js';
+import { showNotification } from './ui/notifications.js';
+import { renderDividendsManagementTab } from "./ui/components/dividends.ui.js";
 
 /**
  * 統一的後端 API 請求函式
