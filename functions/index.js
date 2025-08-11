@@ -7,7 +7,7 @@ const admin = require('firebase-admin');
 const { z } = require("zod");
 
 const { d1Client } = require('./d1.client');
-const { performRecalculation } = require('./calculation.engine');
+const { performRecalculation } = require('./performRecalculation');
 const { verifyFirebaseToken } = require('./middleware');
 
 // 【修改】引入所有 handlers
