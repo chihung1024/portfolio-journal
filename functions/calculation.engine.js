@@ -1,11 +1,11 @@
 // =========================================================================================
-// == 核心計算引擎 (v4.0.1 - Refactoring)
+// == 核心計算引擎 (v4.0.2 - Refactoring)
 // =========================================================================================
 
-// 【移除】yahoo-finance2 的引用，已移至 data.provider.js
-const { d1Client } = require('./d1.client');
-// 【新增】引入新的 data.provider 模組
+const { d1Client } = require('../d1.client');
 const dataProvider = require('./calculation/data.provider');
+// 【新增】引入新的 helpers 模組
+const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./calculation/helpers');
 
 // --- 股息快取模組 ---
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
@@ -25,7 +25,6 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     let txIndex = 0;
     const pendingDividends = [];
     const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-    const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
 
     allMarketDividends.forEach(histDiv => {
         const divSymbol = histDiv.symbol.toUpperCase();
@@ -61,14 +60,8 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
 
 // --- 所有核心計算與資料獲取輔助函式 ---
 
-// 【移除】fetchAndSaveMarketDataRange, ensureDataCoverage, ensureDataFreshness, getMarketDataFromDb
-// 【移除】currencyToFx 常數
+// 【移除】toDate, isTwStock, getTotalCost, findNearest, findFxRate 五個函式
 
-const toDate = v => { if (!v) return null; const d = v.toDate ? v.toDate() : new Date(v); if (d instanceof Date && !isNaN(d)) d.setUTCHours(0, 0, 0, 0); return d; };
-const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
-const getTotalCost = (tx) => (tx.totalCost != null) ? Number(tx.totalCost) : Number(tx.price || 0) * Number(tx.quantity || 0);
-function findNearest(hist, date, toleranceDays = 7) { if (!hist || Object.keys(hist).length === 0) return undefined; const tgt = toDate(date); if (!tgt) return undefined; const tgtStr = tgt.toISOString().slice(0, 10); if (hist[tgtStr]) return hist[tgtStr]; for (let i = 1; i <= toleranceDays; i++) { const checkDate = new Date(tgt); checkDate.setDate(checkDate.getDate() - i); const checkDateStr = checkDate.toISOString().split('T')[0]; if (hist[checkDateStr]) return hist[checkDateStr]; } const sortedDates = Object.keys(hist).sort((a, b) => new Date(b) - new Date(a)); for (const dateStr of sortedDates) { if (dateStr <= tgtStr) return hist[dateStr]; } return undefined; }
-function findFxRate(market, currency, date, tolerance = 15) { const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" }; if (!currency || currency === "TWD") return 1; const fxSym = currencyToFx[currency]; if (!fxSym || !market[fxSym]) return 1; return findNearest(market[fxSym]?.rates || {}, date, tolerance) ?? 1; }
 function getPortfolioStateOnDate(allEvts, targetDate, market) { const state = {}; const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate)); for (const e of pastEvents) { const sym = e.symbol.toUpperCase(); if (!state[sym]) state[sym] = { lots: [], currency: e.currency || "USD" }; if (e.eventType === 'transaction') { state[sym].currency = e.currency; if (e.type === 'buy') { const fx = findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); state[sym].lots.push({ quantity: e.quantity, pricePerShareTWD: costTWD / (e.quantity || 1), pricePerShareOriginal: e.price, date: toDate(e.date) }); } else { let sellQty = e.quantity; while (sellQty > 0 && state[sym].lots.length > 0) { const lot = state[sym].lots[0]; if (lot.quantity <= sellQty) { sellQty -= lot.quantity; state[sym].lots.shift(); } else { lot.quantity -= sellQty; sellQty = 0; } } } } else if (e.eventType === 'split') { state[sym].lots.forEach(lot => { lot.quantity *= e.ratio; lot.pricePerShareTWD /= e.ratio; lot.pricePerShareOriginal /= e.ratio; }); } } return state; }
 function dailyValue(state, market, date, allEvts) { return Object.keys(state).reduce((totalValue, sym) => { const s = state[sym]; const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0); if (qty < 1e-9) return totalValue; let price = findNearest(market[sym]?.prices, date); if (price === undefined) { const yesterday = new Date(date); yesterday.setDate(yesterday.getDate() - 1); const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date; if (yesterday < firstLotDate) return totalValue; return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts); } const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(date)); const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1); const unadjustedPrice = price * adjustmentRatio; const fx = findFxRate(market, s.currency, date); return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx)); }, 0); }
 function prepareEvents(txs, splits, market, userDividends) { const firstBuyDateMap = {}; txs.forEach(tx => { if (tx.type === "buy") { const sym = tx.symbol.toUpperCase(); const d = toDate(tx.date); if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) firstBuyDateMap[sym] = d; } }); const evts = [...txs.map(t => ({ ...t, eventType: "transaction" })), ...splits.map(s => ({ ...s, eventType: "split" }))]; const confirmedDividendKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`)); userDividends.forEach(ud => evts.push({ eventType: 'confirmed_dividend', date: toDate(ud.pay_date), symbol: ud.symbol.toUpperCase(), amount: ud.total_amount, currency: ud.currency })); Object.keys(market).forEach(sym => { if (market[sym]?.dividends) { Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => { const dividendDate = toDate(dateStr); if (confirmedDividendKeys.has(`${sym.toUpperCase()}_${dateStr}`)) return; if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) { const payDate = new Date(dividendDate); payDate.setMonth(payDate.getMonth() + 1); evts.push({ eventType: "implicit_dividend", date: payDate, ex_date: dividendDate, symbol: sym.toUpperCase(), amount_per_share: amount }); } }); } }); evts.sort((a, b) => toDate(a.date) - toDate(b.date)); const firstTx = evts.find(e => e.eventType === 'transaction'); return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null }; }
@@ -83,7 +76,7 @@ function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL
 // == 主計算函式 (重構以整合混合計算)
 // ==========================================================
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v4.0.1 - Refactoring) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v4.0.2 - Refactoring) ---`);
     try {
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
@@ -140,13 +133,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
         const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-        // 【修改】直接從 txs 推算，避免依賴已移除的 currencyToFx
         const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
         const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
         const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
         const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
 
-        // 【修改】呼叫 dataProvider 中的函式
         await dataProvider.ensureDataFreshness(allRequiredSymbols);
         await Promise.all(allRequiredSymbols.map(symbol => dataProvider.ensureDataCoverage(symbol, txs[0].date.split('T')[0])));
 
