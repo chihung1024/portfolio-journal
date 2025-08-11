@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '30 5 * * *'     # 每日 00:00 UTC 執行
     - cron: '0 14 * * *'     # 每日 00:00 UTC 執行
-    - cron: '15 04 * * 1~5'     # 每日 00:00 UTC 執行
+    - cron: '16 4 * * 1,2,3,4,5'     # 每日 00:00 UTC 執行
 
 jobs:
   update-prices:
