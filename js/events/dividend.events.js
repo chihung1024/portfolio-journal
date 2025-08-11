@@ -5,8 +5,11 @@
 
 import { getState, setState } from '../state.js';
 import { apiRequest, loadPortfolioData } from '../api.js';
-import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
+import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
+// 【修正】: 從 main.js 引入 loadAndShowDividends，因為它是跨模組調用的
+import { loadAndShowDividends } from '../main.js';
 
 // --- Private Functions ---
 
@@ -19,8 +22,6 @@ async function handleBulkConfirm() {
     showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
         try {
             document.getElementById('loading-overlay').style.display = 'flex';
-            // The loadAndShowDividends function is in main.js, so we need to call loadPortfolioData to refresh the state
-            const { loadAndShowDividends } = await import('../main.js');
             await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
             showNotification('success', '所有待確認配息已處理完畢！');
             await loadAndShowDividends(); 
@@ -52,7 +53,6 @@ async function handleDividendFormSubmit(e) {
     };
     if (isEditing) { dividendData.id = id; }
     try {
-        const { loadAndShowDividends } = await import('../main.js');
         await apiRequest('save_user_dividend', dividendData);
         closeModal('dividend-modal');
         showNotification('success', '配息紀錄已儲存！');
@@ -71,7 +71,6 @@ async function handleDeleteDividend(button) {
     showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
         try {
             document.getElementById('loading-overlay').style.display = 'flex';
-            const { loadAndShowDividends } = await import('../main.js');
             await apiRequest('delete_user_dividend', { dividendId });
             showNotification('success', '配息紀錄已刪除！');
             await loadAndShowDividends();
