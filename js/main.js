@@ -8,8 +8,8 @@ import { initializeAuth, handleRegister, handleLogin, handleLogout } from './aut
 
 // --- UI Module Imports ---
 import { getDateRangeForPreset } from './ui/utils.js';
-import { initializeAssetChart } from './ui/charts/assetChart.js';
-import { initializeTwrChart } from './ui/charts/twrChart.js';
+import { initializeAssetChart, updateAssetChart } from './ui/charts/assetChart.js';
+import { initializeTwrChart, updateTwrChart } from './ui/charts/twrChart.js';
 import { initializeNetProfitChart, updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
@@ -20,7 +20,6 @@ import { switchTab } from './ui/tabs.js';
 
 // --- 事件處理函式 ---
 
-// [新增] 一個帶有鎖定機制的數據同步請求函式
 async function requestDataSync() {
     if (getState().isSyncing) {
         console.log("數據同步中，已忽略本次請求。");
@@ -45,7 +44,6 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
-// [優化] 使用樂觀更新重構 handleDelete
 async function handleDelete(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
@@ -74,7 +72,6 @@ async function handleDelete(button) {
     });
 }
 
-// [優化] 使用樂觀更新重構 handleFormSubmit
 async function handleFormSubmit(e) {
     e.preventDefault();
     
@@ -167,8 +164,6 @@ async function handleSplitFormSubmit(e) {
 }
 
 async function handleUpdateBenchmark() {
-    const { updateTwrChart } = require("./ui/charts/twrChart.js");
-
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) { showNotification('error', '請輸入 Benchmark 的股票代碼。'); return; }
     try {
@@ -301,9 +296,6 @@ async function handleDeleteDividend(button) {
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const { updateAssetChart } = require("./ui/charts/assetChart.js");
-    const { updateTwrChart } = require("./ui/charts/twrChart.js");
-    
     const stateKey = chartType === 'twr' ? 'twrDateRange' 
                    : chartType === 'asset' ? 'assetDateRange' 
                    : 'netProfitDateRange';
