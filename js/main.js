@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.7.0 - Refactoring Events
+// == 主程式進入點 (main.js) v3.7.1 - Refactoring Events
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -19,44 +19,11 @@ import { switchTab } from './ui/tabs.js';
 
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
+import { initializeSplitEventListeners } from './events/split.events.js';
 
 
 // --- 事件處理函式 ---
-// 【移除】requestDataSync, handleEdit, handleDelete, handleFormSubmit
-
-async function handleDeleteSplit(button) {
-    const splitId = button.dataset.id;
-    showConfirm('確定要刪除這個拆股事件嗎？', async () => {
-        try {
-            await apiRequest('delete_split', { splitId });
-            showNotification('success', '拆股事件已刪除！');
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
-        }
-    });
-}
-
-async function handleSplitFormSubmit(e) {
-    e.preventDefault();
-    const saveBtn = document.getElementById('save-split-btn');
-    saveBtn.disabled = true;
-    const splitData = { date: document.getElementById('split-date').value, symbol: document.getElementById('split-symbol').value.toUpperCase().trim(), ratio: parseFloat(document.getElementById('split-ratio').value) };
-    if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
-        showNotification('error', '請填寫所有欄位並確保比例大於0。');
-        saveBtn.disabled = false; return;
-    }
-    try {
-        await apiRequest('add_split', splitData);
-        closeModal('split-modal');
-        await loadPortfolioData();
-    } catch (error) {
-        showNotification('error', `新增拆股事件失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存';
-    }
-}
+// 【移除】handleDeleteSplit, handleSplitFormSubmit
 
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
@@ -248,16 +215,7 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     
-    // 【移除】交易相關的事件監聽
-    
-    const manageSplitsBtn = document.getElementById('manage-splits-btn');
-    if(manageSplitsBtn) manageSplitsBtn.addEventListener('click', () => openModal('split-modal'));
-    document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
-    document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
-    document.getElementById('splits-table-body').addEventListener('click', (e) => { 
-        const btn = e.target.closest('.delete-split-btn');
-        if(btn) handleDeleteSplit(btn);
-    });
+    // 【移除】拆股相關的事件監聽
     
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
@@ -391,8 +349,8 @@ export function initializeAppUI() {
     
     setTimeout(() => {
         setupMainAppEventListeners();
-        // 【新增】呼叫新的事件監聽初始化函式
         initializeTransactionEventListeners();
+        initializeSplitEventListeners();
         lucide.createIcons();
     }, 0);
 
