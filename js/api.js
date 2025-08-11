@@ -10,12 +10,12 @@ import {
     renderTransactionsTable, 
     renderSplitsTable, 
     updateDashboard, 
-    updateTwrChart,
-    updateNetProfitChart, // 【新增此行】
+    updateNetProfitChart,
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
 import { updateAssetChart } from './ui/charts/assetChart.js';
+import { updateTwrChart } from './ui/charts/twrChart.js';
 
 /**
  * 統一的後端 API 請求函式
@@ -99,13 +99,13 @@ export async function loadPortfolioData() {
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
         updateAssetChart(); 
-        updateNetProfitChart(); // 【新增】
+        updateNetProfitChart();
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
         updateTwrChart(benchmarkSymbol);
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        const { portfolioHistory, twrHistory, netProfitHistory } = getState(); // 【修改】
+        const { portfolioHistory, twrHistory, netProfitHistory } = getState();
 
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
@@ -115,7 +115,6 @@ export async function loadPortfolioData() {
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
         
-        // 【新增】
         const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
         document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
