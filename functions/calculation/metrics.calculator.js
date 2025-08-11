@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - [v1.1 FIXED & CLARIFIED]
+// == 核心指標計算模組 (metrics.calculator.js)
 // == 職責：提供所有核心財務指標的純計算函式，如 TWR, XIRR, PL 等。
 // =========================================================================================
 
@@ -16,7 +16,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase();
     const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {};
     if (Object.keys(benchmarkPrices).length === 0) {
-        log(`TWR_CALC_WARN: Benchmark ${upperBenchmarkSymbol} 缺乏歷史價格，將跳過計算。`);
+        log(`TWR_CALC_WARN: Benchmark ${upperBenchmarkSymbol} a歷史價格，將跳過計算。`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
     
@@ -37,7 +37,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
     for (const dateStr of dates) {
         const MVE = dailyPortfolioValues[dateStr];
-        const CF = dailyCashflows[dateStr] || 0;
+        const CF = dailyCashflows[dateStr] || 0; // TWR 的現金流定義相反，但在傳入前已處理
         const denominator = lastMarketValue + CF;
 
         if (denominator !== 0) {
@@ -82,7 +82,6 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 currentPriceOriginal: unadjustedPrice,
                 marketValueTWD: mktVal,
                 unrealizedPLTWD: mktVal - totCostTWD,
-                // 【已再次確認】此處使用的是從 calculateCoreMetrics 正確計算並傳遞過來的 h.realizedPLTWD
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD > 0 ? ((mktVal - totCostTWD) / totCostTWD) * 100 : 0
             };
@@ -177,13 +176,16 @@ function calculateDailyCashflows(evts, market) {
         if (e.eventType === 'transaction') {
             const currency = e.currency || 'USD';
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
+            // 買入為正現金流(投入)，賣出為負現金流(抽離) -> 為了計算淨利
+            // 注意: TWR的現金流定義與此相反，我們會在TWR函式中處理
             flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
+            // 股息視為現金抽離 (負向現金流)
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
                 const fx = findFxRate(market, e.currency, toDate(e.date));
                 dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-            } else { 
+            } else { // implicit_dividend
                 const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
                 const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
                 if (shares > 0) {
@@ -205,7 +207,7 @@ function calculateDailyCashflows(evts, market) {
  * 計算最終的核心匯總指標 (已實現/未實現損益, 總體報酬率等)
  */
 function calculateCoreMetrics(evts, market) {
-    const pf = {}; 
+    const pf = {}; // 用於追蹤每個股票的 FIFO 成本和已實現損益
     let totalRealizedPL = 0;
 
     for (const e of evts) {
@@ -216,11 +218,9 @@ function calculateCoreMetrics(evts, market) {
         switch (e.eventType) {
             case "transaction": {
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
-                // 【修改】將 costTWD 更名為 proceedsTWD (賣出收入) 或 costTWD (買入成本) 以提高可讀性
-                const amountTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
-                
+                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
                 if (e.type === "buy") {
-                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: amountTWD / (e.quantity || 1), date: toDate(e.date) });
+                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) });
                 } else { // sell
                     let sellQty = e.quantity;
                     let costOfGoodsSoldTWD = 0;
@@ -232,8 +232,7 @@ function calculateCoreMetrics(evts, market) {
                         sellQty -= qtyToSell;
                         if (lot.quantity < 1e-9) pf[sym].lots.shift();
                     }
-                    // `amountTWD` 在此處代表賣出收入 (Proceeds)
-                    const realized = amountTWD - costOfGoodsSoldTWD;
+                    const realized = costTWD - costOfGoodsSoldTWD;
                     totalRealizedPL += realized;
                     pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
                     pf[sym].realizedPLTWD += realized;
