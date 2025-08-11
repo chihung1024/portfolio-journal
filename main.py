@@ -7,18 +7,16 @@ import time
 import pandas as pd
 
 # =========================================================================================
-# == Python 每日增量更新腳本 完整程式碼 (v3.3 - 冪等更新版)
+# == Python 每日增量更新腳本 完整程式碼 (v3.4 - 全面更新版)
 # =========================================================================================
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
-# GCP 和 D1 Worker 使用相同的金鑰
 GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
-    """通用 D1 查詢函式"""
     if params is None:
         params = []
     headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
@@ -31,7 +29,6 @@ def d1_query(sql, params=None):
         return None
 
 def d1_batch(statements):
-    """通用 D1 批次操作函式"""
     headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
     try:
         response = requests.post(f"{D1_WORKER_URL}/batch", json={"statements": statements}, headers=headers)
@@ -42,23 +39,47 @@ def d1_batch(statements):
         return False
 
 def get_update_targets():
-    """從 holdings 表獲取所有用戶當前持有的標的"""
-    print("正在從 D1 holdings 表獲取所有用戶當前持有的金融商品列表...")
-    sql = "SELECT DISTINCT symbol FROM holdings"
-    results = d1_query(sql)
-    if results is None:
-        return [], []
+    """
+    【核心修改】從三個來源全面獲取需要更新的標的列表：
+    1. 當前用戶持股
+    2. 所有用戶設定的 Benchmark
+    3. 根據持股幣別推算出的必要匯率
+    """
+    print("正在全面獲取所有需要更新的金融商品列表...")
     
-    symbols = [row['symbol'] for row in results if row.get('symbol')]
+    all_symbols = set()
+    currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
+
+    # 1. 獲取用戶持股
+    holdings_sql = "SELECT DISTINCT symbol, currency FROM holdings"
+    holdings_results = d1_query(holdings_sql)
+    if holdings_results:
+        for row in holdings_results:
+            all_symbols.add(row['symbol'])
+            # 2. 根據持股幣別推算匯率
+            currency = row.get('currency')
+            if currency and currency in currency_to_fx:
+                all_symbols.add(currency_to_fx[currency])
+
+    # 3. 獲取所有用戶的 Benchmark
+    benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
+    benchmark_results = d1_query(benchmark_sql)
+    if benchmark_results:
+        for row in benchmark_results:
+            all_symbols.add(row['symbol'])
     
+    symbols_list = list(all_symbols)
+    
+    # 獲取所有活躍的使用者 ID
     uid_sql = "SELECT DISTINCT uid FROM transactions"
     uid_results = d1_query(uid_sql)
-    uids = [row['uid'] for row in uid_results if row.get('uid')]
+    uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
-    print(f"找到 {len(symbols)} 個用戶當前持有的標的: {symbols}")
+    print(f"找到 {len(symbols_list)} 個需全面更新的標的: {symbols_list}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
-    return symbols, uids
+    return symbols_list, uids
 
+# ... fetch_and_append_market_data 和 trigger_recalculations 函式維持 v3.3 版的內容不變 ...
 def fetch_and_append_market_data(symbols):
     """
     採用三階段安全模式，為每個標的抓取增量數據，並附加到 D1 資料庫。
@@ -92,7 +113,6 @@ def fetch_and_append_market_data(symbols):
             print(f"警告: 在 {price_table} 中找不到 {symbol} 的任何紀錄，將從 2000-01-01 開始抓取。")
             start_date = "2000-01-01"
         else:
-            # 【核心修改】如果最新日期是今天，則 start_date 依然是今天，以便重新抓取
             if latest_date_str == today_str:
                 start_date = today_str
                 print(f"{symbol} 今日已有數據，準備重新抓取以更新...")
@@ -101,14 +121,14 @@ def fetch_and_append_market_data(symbols):
 
         if start_date > today_str:
             print(f"{symbol} 的數據已是最新 ({latest_date_str})，無需更新。")
+            d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
             continue
 
         print(f"準備抓取 {symbol} 從 {start_date} 到今天的增量數據...")
 
-        # 2. 【第二階段】抓取增量數據並寫入「預備表 (Staging Table)」
         max_retries = 3
         data_staged_successfully = False
-        hist = pd.DataFrame() # 初始化為空的 DataFrame
+        hist = pd.DataFrame()
         
         for attempt in range(max_retries):
             try:
@@ -159,12 +179,9 @@ def fetch_and_append_market_data(symbols):
                 else:
                     print(f"FATAL: 連續 {max_retries} 次處理 {symbol} 失敗。預備表資料未寫入。")
         
-        # 3. 【第三階段】如果數據已成功存入預備表，則將其「更新或插入 (UPSERT)」到正式表
         if data_staged_successfully and not hist.empty:
             print(f"--- [3/3] 準備執行 {symbol} 的原子性更新/插入... ---")
             db_ops_upsert = []
-            # 【核心修改】使用 UPSERT 語法 (ON CONFLICT DO UPDATE)
-            # 這會在新日期時插入數據，在舊日期（僅限今天）時更新價格
             price_upsert_sql = f"""
                 INSERT INTO {price_table} (symbol, date, price)
                 SELECT symbol, date, price FROM {price_staging_table} WHERE symbol = ?
@@ -188,29 +205,23 @@ def fetch_and_append_market_data(symbols):
         elif not data_staged_successfully:
             print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
 
-
 def trigger_recalculations(uids):
-    """主動觸發所有使用者的投資組合重新計算"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
     if not GCP_API_URL or not GCP_API_KEY:
         print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。")
         return
-
     print(f"\n--- 準備為 {len(uids)} 位使用者觸發重算 ---")
-    
     SERVICE_ACCOUNT_KEY = os.environ.get("SERVICE_ACCOUNT_KEY")
     if not SERVICE_ACCOUNT_KEY:
         print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
         return
-
     headers = {
         'X-API-KEY': GCP_API_KEY, 
         'Content-Type': 'application/json',
         'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
     }
-    
     try:
         payload = {"action": "recalculate_all_users"}
         response = requests.post(GCP_API_URL, json=payload, headers=headers)
@@ -221,17 +232,13 @@ def trigger_recalculations(uids):
     except Exception as e:
         print(f"觸發全部重算時發生錯誤: {e}")
 
-
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v3.3) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v3.4) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
-    
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
         if all_uids:
             trigger_recalculations(all_uids)
     else:
-        print("在 holdings 表中沒有找到任何需要更新的標的。")
-        
+        print("資料庫中沒有找到任何需要更新的標的 (無持股、無Benchmark)。")
     print("--- 每日市場數據增量更新腳本執行完畢 ---")
