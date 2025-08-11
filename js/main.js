@@ -13,7 +13,6 @@ import {
     toggleOptionalFields, 
     showNotification,
     switchTab,
-    renderHoldingsTable,
     renderTransactionsTable,
     renderDividendsManagementTab,
     getDateRangeForPreset,
@@ -21,6 +20,7 @@ import {
 import { initializeAssetChart } from './ui/charts/assetChart.js';
 import { initializeTwrChart } from './ui/charts/twrChart.js';
 import { initializeNetProfitChart, updateNetProfitChart } from './ui/charts/netProfitChart.js';
+import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 
 // --- 事件處理函式 ---
 
@@ -304,6 +304,9 @@ async function handleDeleteDividend(button) {
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
+    const { updateAssetChart } = require("./ui/charts/assetChart.js");
+    const { updateTwrChart } = require("./ui/charts/twrChart.js");
+
     const stateKey = chartType === 'twr' ? 'twrDateRange' 
                    : chartType === 'asset' ? 'assetDateRange' 
                    : 'netProfitDateRange';
