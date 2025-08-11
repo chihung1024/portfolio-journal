@@ -1,15 +1,16 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.4.6
+// == UI 渲染與互動模組 (ui.js) v3.5.0 - Refactoring
 // =========================================================================================
 
 import { getState, setState } from './state.js';
+// 【新增】引入新的 utils 模組
+import { isTwStock, formatNumber, findFxRateForFrontend, filterHistoryByDateRange, getDateRangeForPreset } from './ui/utils.js';
 
 // 【新增】一個包含所有圖表共用設定的基礎物件
 const baseChartOptions = {
     chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
     dataLabels: { enabled: false },
     stroke: { curve: 'smooth', width: 2 },
-    // 【修改】將 fill 設定從共用選項中移除
     xaxis: {
         type: 'datetime',
         labels: {
@@ -21,145 +22,8 @@ const baseChartOptions = {
 };
 
 // --- 輔助函式 ---
-function isTwStock(symbol) { 
-    return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; 
-}
 
-function formatNumber(value, decimals = 2) { 
-    const num = Number(value); 
-    if (isNaN(num)) return decimals === 0 ? '0' : '0.00'; 
-    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }); 
-}
-
-function findFxRateForFrontend(currency, dateStr) {
-    const { marketDataForFrontend } = getState();
-    if (currency === 'TWD') return 1;
-    const currencyToFx_FE = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
-    const fxSym = currencyToFx_FE[currency];
-    if (!fxSym || !marketDataForFrontend[fxSym]) return 1;
-    const rates = marketDataForFrontend[fxSym].rates || {};
-    if (rates[dateStr]) return rates[dateStr];
-    let nearestDate = null;
-    for (const rateDate in rates) {
-        if (rateDate <= dateStr && (!nearestDate || rateDate > nearestDate)) {
-            nearestDate = rateDate;
-        }
-    }
-    return nearestDate ? rates[nearestDate] : 1;
-}
-
-function filterHistoryByDateRange(history, dateRange) {
-    if (!history || Object.keys(history).length === 0) {
-        return {};
-    }
-
-    const sortedDates = Object.keys(history).sort();
-    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(sortedDates[sortedDates.length - 1]);
-    let startDate;
-
-    switch (dateRange.type) {
-        case 'ytd':
-            startDate = new Date(endDate.getFullYear(), 0, 1);
-            break;
-        case '1m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 1);
-            break;
-        case '3m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 3);
-            break;
-        case '6m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 6);
-            break;
-        case '1y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 1);
-            break;
-        case '3y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 3);
-            break;
-        case '5y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 5);
-            break;
-        case 'custom':
-            startDate = dateRange.start ? new Date(dateRange.start) : new Date(sortedDates[0]);
-            break;
-        case 'all':
-        default:
-            startDate = new Date(sortedDates[0]);
-            break;
-    }
-
-    const filteredHistory = {};
-    for (const dateStr of sortedDates) {
-        const currentDate = new Date(dateStr);
-        if (currentDate >= startDate && currentDate <= endDate) {
-            filteredHistory[dateStr] = history[dateStr];
-        }
-    }
-    return filteredHistory;
-}
-
-export function getDateRangeForPreset(history, dateRange) {
-    if (!history || Object.keys(history).length === 0) {
-        return { startDate: '', endDate: '' };
-    }
-    const toYYYYMMDD = (date) => date.toISOString().split('T')[0];
-
-    const sortedDates = Object.keys(history).sort();
-    const firstDate = sortedDates[0];
-    const lastDate = sortedDates[sortedDates.length - 1];
-
-    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
-    let startDate;
-
-    switch (dateRange.type) {
-        case 'ytd':
-            startDate = new Date(endDate.getFullYear(), 0, 1);
-            break;
-        case '1m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 1);
-            break;
-        case '3m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 3);
-            break;
-        case '6m':
-            startDate = new Date(endDate);
-            startDate.setMonth(endDate.getMonth() - 6);
-            break;
-        case '1y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 1);
-            break;
-        case '3y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 3);
-            break;
-        case '5y':
-            startDate = new Date(endDate);
-            startDate.setFullYear(endDate.getFullYear() - 5);
-            break;
-        case 'all':
-        default:
-            startDate = new Date(firstDate);
-            break;
-    }
-    
-    if (startDate < new Date(firstDate)) {
-        startDate = new Date(firstDate);
-    }
-
-    return {
-        startDate: toYYYYMMDD(startDate),
-        endDate: toYYYYMMDD(endDate)
-    };
-}
+// 【移除】isTwStock, formatNumber, findFxRateForFrontend, filterHistoryByDateRange, getDateRangeForPreset 五個函式
 
 // --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
@@ -278,10 +142,9 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
 // 資產成長圖表 (initializeChart)
 export function initializeChart() {
     const options = {
-        ...baseChartOptions, // 展開載入基礎設定
+        ...baseChartOptions,
         series: [{ name: '總資產', data: [] }],
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
-        // 【修改】將 fill 設定加回來
         fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
         colors: ['#4f46e5']
     };
@@ -293,8 +156,8 @@ export function initializeChart() {
 // TWR 圖表 (initializeTwrChart)
 export function initializeTwrChart() {
     const options = {
-        ...baseChartOptions, // 展開載入基礎設定
-        chart: { ...baseChartOptions.chart, type: 'line' }, // 覆蓋基礎設定中的圖表類型
+        ...baseChartOptions,
+        chart: { ...baseChartOptions.chart, type: 'line' },
         series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
         yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
         tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
@@ -308,10 +171,9 @@ export function initializeTwrChart() {
 // 淨利圖表 (initializeNetProfitChart)
 export function initializeNetProfitChart() {
     const options = {
-        ...baseChartOptions, // 展開載入基礎設定
+        ...baseChartOptions,
         series: [{ name: '累積淨利', data: [] }],
         yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
-        // 【修改】將 fill 設定加回來
         fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
         tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
         colors: ['#10b981']
@@ -321,7 +183,6 @@ export function initializeNetProfitChart() {
     setState({ netProfitChart });
 }
 
-// 【新增】更新累積淨利圖表
 export function updateNetProfitChart() {
     const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
     if (!netProfitChart) return;
@@ -334,11 +195,10 @@ export function updateNetProfitChart() {
 
     const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
     
-    // 【核心邏輯】起始日歸零
     const baseValue = sortedEntries[0][1];
     const chartData = sortedEntries.map(([date, value]) => [
         new Date(date).getTime(),
-        value - baseValue // 從第一個點的值開始計算相對增長
+        value - baseValue
     ]);
 
     netProfitChart.updateSeries([{ data: chartData }]);
@@ -367,7 +227,7 @@ export function updateTwrChart(benchmarkSymbol) {
         if (!history || Object.keys(history).length === 0) return [];
         const sortedEntries = Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0]));
         const baseValue = sortedEntries[0][1];
-        return sortedEntries.map(([date, value]) => [ new Date(date).getTime(), value - baseValue ]);
+        return sortedEntries.map(([date, value]) => [new Date(date).getTime(), value - baseValue]);
     };
     
     const isShowingFullHistory = Object.keys(twrHistory).length > 0 && Object.keys(twrHistory).length === Object.keys(filteredTwrHistory).length;
@@ -388,32 +248,32 @@ export function updateTwrChart(benchmarkSymbol) {
     ]);
 }
 
-export function openModal(modalId, isEdit = false, data = null) { 
+export function openModal(modalId, isEdit = false, data = null) {
     const { stockNotes, pendingDividends, confirmedDividends } = getState();
     const formId = modalId.replace('-modal', '-form');
     const form = document.getElementById(formId);
     if (form) form.reset();
-    
+
     if (modalId === 'transaction-modal') {
         document.getElementById('transaction-id').value = '';
-        if(isEdit && data) {
-            document.getElementById('modal-title').textContent = '編輯交易紀錄'; 
-            document.getElementById('transaction-id').value = data.id; 
+        if (isEdit && data) {
+            document.getElementById('modal-title').textContent = '編輯交易紀錄';
+            document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
-            document.getElementById('stock-symbol').value = data.symbol; 
-            document.querySelector(`input[name="transaction-type"][value="${data.type}"]`).checked = true; 
-            document.getElementById('quantity').value = data.quantity; 
-            document.getElementById('price').value = data.price; 
+            document.getElementById('stock-symbol').value = data.symbol;
+            document.querySelector(`input[name="transaction-type"][value="${data.type}"]`).checked = true;
+            document.getElementById('quantity').value = data.quantity;
+            document.getElementById('price').value = data.price;
             document.getElementById('currency').value = data.currency;
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
-            document.getElementById('modal-title').textContent = '新增交易紀錄'; 
+            document.getElementById('modal-title').textContent = '新增交易紀錄';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
     } else if (modalId === 'split-modal') {
-         document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
+        document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
     } else if (modalId === 'notes-modal') {
         const symbol = data.symbol;
         const note = stockNotes[symbol] || {};
@@ -423,7 +283,7 @@ export function openModal(modalId, isEdit = false, data = null) {
         document.getElementById('stop-loss-price').value = note.stop_loss_price || '';
         document.getElementById('notes-content').value = note.notes || '';
     } else if (modalId === 'dividend-modal') {
-        const record = isEdit 
+        const record = isEdit
             ? confirmedDividends.find(d => d.id === data.id)
             : pendingDividends[data.index];
         if (!record) return;
@@ -457,19 +317,19 @@ export function openModal(modalId, isEdit = false, data = null) {
     document.getElementById(modalId).classList.remove('hidden');
 }
 
-export function closeModal(modalId) { 
+export function closeModal(modalId) {
     document.getElementById(modalId).classList.add('hidden');
 }
 
-export function showConfirm(message, callback) { 
-    document.getElementById('confirm-message').textContent = message; 
+export function showConfirm(message, callback) {
+    document.getElementById('confirm-message').textContent = message;
     setState({ confirmCallback: callback });
-    document.getElementById('confirm-modal').classList.remove('hidden'); 
+    document.getElementById('confirm-modal').classList.remove('hidden');
 }
 
-export function hideConfirm() { 
+export function hideConfirm() {
     setState({ confirmCallback: null });
-    document.getElementById('confirm-modal').classList.add('hidden'); 
+    document.getElementById('confirm-modal').classList.add('hidden');
 }
 
 export function toggleOptionalFields() {
@@ -482,32 +342,32 @@ export function toggleOptionalFields() {
     }
 }
 
-export function showNotification(type, message) { 
-    const area = document.getElementById('notification-area'); 
-    const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : 'bg-red-500'); 
-    const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle'); 
-    const notification = document.createElement('div'); 
-    notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`; 
-    notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`; 
-    area.appendChild(notification); 
-    lucide.createIcons({nodes: [notification.querySelector('i')]});
-    setTimeout(() => { 
-        notification.style.transition = 'opacity 0.5s ease'; 
-        notification.style.opacity = '0'; 
-        setTimeout(() => notification.remove(), 500); 
-    }, 5000); 
+export function showNotification(type, message) {
+    const area = document.getElementById('notification-area');
+    const color = type === 'success' ? 'bg-green-500' : (type === 'info' ? 'bg-blue-500' : 'bg-red-500');
+    const icon = type === 'success' ? 'check-circle' : (type === 'info' ? 'info' : 'alert-circle');
+    const notification = document.createElement('div');
+    notification.className = `flex items-center ${color} text-white text-sm font-bold px-4 py-3 rounded-md shadow-lg mb-2`;
+    notification.innerHTML = `<i data-lucide="${icon}" class="w-5 h-5 mr-2"></i><p>${message}</p>`;
+    area.appendChild(notification);
+    lucide.createIcons({ nodes: [notification.querySelector('i')] });
+    setTimeout(() => {
+        notification.style.transition = 'opacity 0.5s ease';
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 500);
+    }, 5000);
 }
 
-export function switchTab(tabName) { 
-    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden')); 
-    document.getElementById(`${tabName}-tab`).classList.remove('hidden'); 
-    document.querySelectorAll('.tab-item').forEach(el => { 
-        el.classList.remove('border-indigo-500', 'text-indigo-600'); 
-        el.classList.add('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300'); 
-    }); 
-    const activeTab = document.querySelector(`[data-tab="${tabName}"]`); 
+export function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+    document.getElementById(`${tabName}-tab`).classList.remove('hidden');
+    document.querySelectorAll('.tab-item').forEach(el => {
+        el.classList.remove('border-indigo-500', 'text-indigo-600');
+        el.classList.add('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
+    });
+    const activeTab = document.querySelector(`[data-tab="${tabName}"]`);
     if (activeTab) {
-        activeTab.classList.add('border-indigo-500', 'text-indigo-600'); 
-        activeTab.classList.remove('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300'); 
+        activeTab.classList.add('border-indigo-500', 'text-indigo-600');
+        activeTab.classList.remove('border-transparent', 'text-gray-500', 'hover:text-gray-700', 'hover:border-gray-300');
     }
 }
