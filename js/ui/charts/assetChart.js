@@ -9,6 +9,7 @@ import { baseChartOptions } from './chart.common.js';
 
 /**
  * 初始化資產成長圖表
+ * (原名 initializeChart)
  */
 export function initializeAssetChart() {
     const options = {
