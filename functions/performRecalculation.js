@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主重算流程調度器 (performRecalculation.js)
+// == 主重算流程調度器 (performRecalculation.js) - [v4.1.1 FINAL FIX]
 // == 職責：作為總指揮，調度各計算模組，完成從頭到尾的重算流程。
 // =========================================================================================
 
@@ -12,7 +12,6 @@ const metrics = require('./calculation/metrics.calculator');
 
 /**
  * 負責快取用戶的待確認股息。
- * 此函式與具體的資料庫寫入操作相關，因此保留在主流程檔案中。
  */
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
@@ -69,14 +68,15 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
  * 主計算函式
  */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v4.1.0 - Final Refactor) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v4.1.1 - Final Refactor) ---`);
     try {
         // 1. 讀取使用者基本資料
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
+            // 【核心修正】確保拆股事件也按日期升序排列，保證事件處理順序的絕對正確
+            d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
-            d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
+            d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date ASC', [uid]), // 也建議為 user_dividends 加上排序
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
         ]);
 
