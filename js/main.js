@@ -6,7 +6,6 @@ import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { 
-    initializeChart, 
     initializeTwrChart, 
     initializeNetProfitChart, // 【新增】
     openModal, 
@@ -19,11 +18,11 @@ import {
     renderHoldingsTable,
     renderTransactionsTable,
     renderDividendsManagementTab,
-    updateAssetChart,
     updateTwrChart,
     updateNetProfitChart, // 【新增】
     getDateRangeForPreset,
 } from './ui.js';
+import { initializeAssetChart } from './ui/charts/assetChart.js';
 
 // --- 事件處理函式 ---
 
@@ -521,7 +520,7 @@ export function initializeAppUI() {
         return;
     }
     console.log("Initializing Main App UI...");
-    initializeChart();
+    initializeAssetChart();
     initializeTwrChart();
     initializeNetProfitChart();
     
