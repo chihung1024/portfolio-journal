@@ -1,18 +1,21 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js)
+// == 交易事件處理模組 (transaction.events.js) v1.1 - Optimistic UI
 // == 職責：處理所有與交易紀錄相關的用戶互動事件。
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, loadPortfolioData } from '../api.js';
+import { apiRequest } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-// 【修正前】: import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
-// 【修正後】: 分開從各自的模組引入
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
+// 【新增】引入儀表板和持股列表的渲染函式
+import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
+import { updateDashboard } from '../ui/dashboard.js';
 
 // --- Private Functions (only used within this module) ---
 
+// 【移除】不再需要 requestDataSync 函式，因為我們不再發起第二次請求
+/*
 async function requestDataSync() {
     if (getState().isSyncing) {
         console.log("數據同步中，已忽略本次請求。");
@@ -27,6 +30,7 @@ async function requestDataSync() {
         setState({ isSyncing: false });
     }
 }
+*/
 
 function handleEdit(button) {
     const { transactions } = getState();
@@ -54,7 +58,21 @@ async function handleDelete(button) {
         apiRequest('delete_transaction', { txId })
             .then(result => {
                 showNotification('success', '交易紀錄已成功從雲端刪除！');
-                requestDataSync();
+                
+                // 【修改】核心變更：不再呼叫 requestDataSync()
+                // requestDataSync(); 
+
+                // 【新增】直接使用 API 回應的數據來更新 state 和 UI
+                if (result.data) {
+                    const holdingsObject = (result.data.holdings || []).reduce((obj, item) => {
+                        obj[item.symbol] = item; return obj;
+                    }, {});
+                    
+                    setState({ holdings: holdingsObject });
+
+                    renderHoldingsTable(holdingsObject);
+                    updateDashboard(holdingsObject, result.data.summary?.totalRealizedPL, result.data.summary?.overallReturnRate, result.data.summary?.xirr);
+                }
             })
             .catch(error => {
                 showNotification('error', `刪除失敗: ${error.message}`);
@@ -112,7 +130,21 @@ async function handleFormSubmit(e) {
     apiRequest(action, payload)
         .then(result => {
             showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            requestDataSync();
+            
+            // 【修改】核心變更：不再呼叫 requestDataSync()
+            // requestDataSync();
+            
+            // 【新增】直接使用 API 回應的數據來更新 state 和 UI
+            if (result.data) {
+                const holdingsObject = (result.data.holdings || []).reduce((obj, item) => {
+                    obj[item.symbol] = item; return obj;
+                }, {});
+
+                setState({ holdings: holdingsObject });
+
+                renderHoldingsTable(holdingsObject);
+                updateDashboard(holdingsObject, result.data.summary?.totalRealizedPL, result.data.summary?.overallReturnRate, result.data.summary?.xirr);
+            }
         })
         .catch(error => {
             showNotification('error', `儲存交易失敗: ${error.message}`);
@@ -125,14 +157,10 @@ async function handleFormSubmit(e) {
 // --- Public Function (exported to be called from main.js) ---
 
 export function initializeTransactionEventListeners() {
-    // 監聽「新增交易」按鈕
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
-    
-    // 監聽交易表單的提交與取消
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
 
-    // 使用事件委派來處理表格中的編輯和刪除按鈕點擊
     document.getElementById('transactions-tab').addEventListener('click', (e) => {
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
@@ -147,7 +175,6 @@ export function initializeTransactionEventListeners() {
         }
     });
 
-    // 監聽交易紀錄頁籤中的股票篩選器
     document.getElementById('transactions-tab').addEventListener('change', (e) => {
         if (e.target.id === 'transaction-symbol-filter') {
             setState({ transactionFilter: e.target.value });
