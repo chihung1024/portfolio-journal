@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.5.2 - Refactoring
+// == UI 渲染與互動模組 (ui.js) v3.5.3 - Refactored
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -117,42 +117,6 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     const xirrEl = document.getElementById('xirr-value');
     xirrEl.textContent = `${((xirr || 0) * 100).toFixed(2)}%`;
     xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
-}
-
-// 淨利圖表 (initializeNetProfitChart)
-export function initializeNetProfitChart() {
-    const options = {
-        ...baseChartOptions,
-        series: [{ name: '累積淨利', data: [] }],
-        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
-        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
-        colors: ['#10b981']
-    };
-    const netProfitChart = new ApexCharts(document.querySelector("#net-profit-chart"), options);
-    netProfitChart.render();
-    setState({ netProfitChart });
-}
-
-export function updateNetProfitChart() {
-    const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
-    if (!netProfitChart) return;
-
-    const filteredHistory = filterHistoryByDateRange(netProfitHistory, netProfitDateRange);
-    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
-        netProfitChart.updateSeries([{ data: [] }]);
-        return;
-    }
-
-    const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-    
-    const baseValue = sortedEntries[0][1];
-    const chartData = sortedEntries.map(([date, value]) => [
-        new Date(date).getTime(),
-        value - baseValue
-    ]);
-
-    netProfitChart.updateSeries([{ data: chartData }]);
 }
 
 export function openModal(modalId, isEdit = false, data = null) {
