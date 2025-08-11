@@ -6,7 +6,10 @@
 import { getState, setState } from '../state.js';
 import { apiRequest, loadPortfolioData } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
+// 【修正前】: import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
+// 【修正後】: 分開從各自的模組引入
+import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+import { showNotification } from '../ui/notifications.js';
 
 // --- Private Functions (only used within this module) ---
 
