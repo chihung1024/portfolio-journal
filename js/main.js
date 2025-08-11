@@ -6,8 +6,7 @@ import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { 
-    initializeTwrChart, 
-    initializeNetProfitChart, // 【新增】
+    initializeNetProfitChart,
     openModal, 
     closeModal, 
     showConfirm, 
@@ -18,11 +17,11 @@ import {
     renderHoldingsTable,
     renderTransactionsTable,
     renderDividendsManagementTab,
-    updateTwrChart,
-    updateNetProfitChart, // 【新增】
+    updateNetProfitChart,
     getDateRangeForPreset,
 } from './ui.js';
 import { initializeAssetChart } from './ui/charts/assetChart.js';
+import { initializeTwrChart } from './ui/charts/twrChart.js';
 
 // --- 事件處理函式 ---
 
