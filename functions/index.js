@@ -1,19 +1,21 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v3.8.0 - 支援快照失效判斷)
+// == GCP Cloud Function 主入口 (v3.9.0 - Refactored)
 // =========================================================================================
 
 const functions = require("firebase-functions");
 const admin = require('firebase-admin');
-const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
 
 const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./calculation.engine');
-const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
-// 【修改】引入新的 handlers
+
+// 【修改】引入所有 handlers
 const transactionHandlers = require('./api_handlers/transaction.handler');
 const dividendHandlers = require('./api_handlers/dividend.handler');
+const splitHandlers = require('./api_handlers/split.handler');
+const noteHandlers = require('./api_handlers/note.handler');
+const portfolioHandlers = require('./api_handlers/portfolio.handler');
 
 try {
     admin.initializeApp();
@@ -22,6 +24,7 @@ try {
 }
 
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
+    // CORS and OPTIONS request handling (no changes)
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
         'https://portfolio-journal-467915.firebaseapp.com'
@@ -39,6 +42,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
+    // Service Account request handling (no changes)
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -59,83 +63,49 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
+    // Main request routing
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid;
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
+            // 【重構】路由分發到對應的 handler
             switch (action) {
-                case 'get_data': {
-                    const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-                        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]),
-                        d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid])
-                    ]);
-                    const summaryRow = summaryResult[0] || {};
-                    return res.status(200).send({
-                        success: true, data: {
-                            summary: summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {},
-                            holdings, transactions: txs, splits, stockNotes,
-                            history: summaryRow.history ? JSON.parse(summaryRow.history) : {},
-                            twrHistory: summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {},
-                            benchmarkHistory: summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {},
-                            netProfitHistory: summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {},
-                        }
-                    });
-                }
+                // Portfolio
+                case 'get_data':
+                    return await portfolioHandlers.getData(uid, res);
+                case 'update_benchmark':
+                    return await portfolioHandlers.updateBenchmark(uid, data, res);
+
+                // Transactions
                 case 'add_transaction':
                     return await transactionHandlers.addTransaction(uid, data, res);
-
                 case 'edit_transaction':
                     return await transactionHandlers.editTransaction(uid, data, res);
-
                 case 'delete_transaction':
                     return await transactionHandlers.deleteTransaction(uid, data, res);
 
-                case 'update_benchmark': {
-                    await d1Client.query('INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)', [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]);
-                    await performRecalculation(uid, null, false);
-                    return res.status(200).send({ success: true, message: '基準已更新。' });
-                }
-                case 'add_split': {
-                    const splitData = splitSchema.parse(data); const newSplitId = uuidv4();
-                    await d1Client.query(`INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]);
-                    await performRecalculation(uid, splitData.date, false);
-                    return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
-                }
-                case 'delete_split': {
-                    const splitResult = await d1Client.query('SELECT date FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
-                    const splitDate = splitResult.length > 0 ? splitResult[0].date.split('T')[0] : null;
-                    await d1Client.query('DELETE FROM splits WHERE id = ? AND uid = ?', [data.splitId, uid]);
-                    await performRecalculation(uid, splitDate, false);
-                    return res.status(200).send({ success: true, message: '分割事件已刪除。' });
-                }
-                // 【重構】替換為對 handler 的呼叫
+                // Splits
+                case 'add_split':
+                    return await splitHandlers.addSplit(uid, data, res);
+                case 'delete_split':
+                    return await splitHandlers.deleteSplit(uid, data, res);
+
+                // Dividends
                 case 'get_dividends_for_management':
                     return await dividendHandlers.getDividendsForManagement(uid, res);
-
-                // 【重構】替換為對 handler 的呼叫
                 case 'save_user_dividend':
                     return await dividendHandlers.saveUserDividend(uid, data, res);
-
-                // 【重構】替換為對 handler 的呼叫
                 case 'bulk_confirm_all_dividends':
                     return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
-
-                // 【重構】替換為對 handler 的呼叫
                 case 'delete_user_dividend':
                     return await dividendHandlers.deleteUserDividend(uid, data, res);
+                
+                // Notes
+                case 'save_stock_note':
+                    return await noteHandlers.saveStockNote(uid, data, res);
 
-                case 'save_stock_note': {
-                    const { symbol, target_price, stop_loss_price, notes } = data;
-                    const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
-                    if (existing.length > 0) await d1Client.query('UPDATE user_stock_notes SET target_price = ?, stop_loss_price = ?, notes = ?, last_updated = ? WHERE id = ?', [target_price, stop_loss_price, notes, new Date().toISOString(), existing[0].id]);
-                    else await d1Client.query('INSERT INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)', [uuidv4(), uid, symbol, target_price, stop_loss_price, notes, new Date().toISOString()]);
-                    return res.status(200).send({ success: true, message: '筆記已儲存。' });
-                }
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
             }
