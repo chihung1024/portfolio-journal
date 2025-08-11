@@ -1,29 +1,9 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.5.0 - Refactoring
+// == UI 渲染與互動模組 (ui.js) v3.5.1 - Refactoring
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-// 【新增】引入新的 utils 模組
-import { isTwStock, formatNumber, findFxRateForFrontend, filterHistoryByDateRange, getDateRangeForPreset } from './ui/utils.js';
-
-// 【新增】一個包含所有圖表共用設定的基礎物件
-const baseChartOptions = {
-    chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
-    dataLabels: { enabled: false },
-    stroke: { curve: 'smooth', width: 2 },
-    xaxis: {
-        type: 'datetime',
-        labels: {
-            datetimeUTC: false,
-            datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-        }
-    },
-    tooltip: { x: { format: 'yyyy-MM-dd' } }
-};
-
-// --- 輔助函式 ---
-
-// 【移除】isTwStock, formatNumber, findFxRateForFrontend, filterHistoryByDateRange, getDateRangeForPreset 五個函式
+import { isTwStock, formatNumber, findFxRateForFrontend, filterHistoryByDateRange } from './ui/utils.js';
 
 // --- 主要 UI 函式 ---
 export function renderHoldingsTable(currentHoldings) {
@@ -139,20 +119,6 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
 }
 
-// 資產成長圖表 (initializeChart)
-export function initializeChart() {
-    const options = {
-        ...baseChartOptions,
-        series: [{ name: '總資產', data: [] }],
-        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
-        colors: ['#4f46e5']
-    };
-    const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
-    chart.render();
-    setState({ chart });
-}
-
 // TWR 圖表 (initializeTwrChart)
 export function initializeTwrChart() {
     const options = {
@@ -204,18 +170,6 @@ export function updateNetProfitChart() {
     netProfitChart.updateSeries([{ data: chartData }]);
 }
 
-export function updateAssetChart() {
-    const { chart, portfolioHistory, assetDateRange } = getState();
-    if (!chart) return;
-    const filteredHistory = filterHistoryByDateRange(portfolioHistory, assetDateRange);
-    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
-        chart.updateSeries([{ data: [] }]);
-        return;
-    }
-    const chartData = Object.entries(filteredHistory).map(([date, value]) => [new Date(date).getTime(), value]);
-    chart.updateSeries([{ data: chartData }]);
-}
-
 export function updateTwrChart(benchmarkSymbol) {
     const { twrChart, twrHistory, benchmarkHistory, twrDateRange } = getState();
     if (!twrChart) return;
@@ -227,7 +181,7 @@ export function updateTwrChart(benchmarkSymbol) {
         if (!history || Object.keys(history).length === 0) return [];
         const sortedEntries = Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0]));
         const baseValue = sortedEntries[0][1];
-        return sortedEntries.map(([date, value]) => [new Date(date).getTime(), value - baseValue]);
+        return sortedEntries.map(([date, value]) => [ new Date(date).getTime(), value - baseValue ]);
     };
     
     const isShowingFullHistory = Object.keys(twrHistory).length > 0 && Object.keys(twrHistory).length === Object.keys(filteredTwrHistory).length;
