@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v3.4.1 - 新增同步鎖
+// == 狀態管理模組 (state.js) v3.4.0
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -15,11 +15,7 @@ let state = {
     isAppInitialized: false,
     chart: null,
     twrChart: null,
-    netProfitChart: null, // 【新增】
     confirmCallback: null,
-
-    // [新增] 增加一個旗標來防止重複的數據同步
-    isSyncing: false,
 
     // 篩選與排序狀態
     transactionFilter: 'all',
@@ -33,10 +29,8 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
-    netProfitHistory: {}, // 【新增】
     assetDateRange: { type: 'all', start: null, end: null },
-    twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null } // 【新增】
+    twrDateRange: { type: 'all', start: null, end: null }
 };
 
 // 提供外部讀取狀態的方法

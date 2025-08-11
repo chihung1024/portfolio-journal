@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖
+// == 主程式進入點 (main.js) v3.4.1
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -8,7 +8,6 @@ import { initializeAuth, handleRegister, handleLogin, handleLogout } from './aut
 import { 
     initializeChart, 
     initializeTwrChart, 
-    initializeNetProfitChart, // 【新增】
     openModal, 
     closeModal, 
     showConfirm, 
@@ -21,28 +20,10 @@ import {
     renderDividendsManagementTab,
     updateAssetChart,
     updateTwrChart,
-    updateNetProfitChart, // 【新增】
     getDateRangeForPreset,
 } from './ui.js';
 
 // --- 事件處理函式 ---
-
-// [新增] 一個帶有鎖定機制的數據同步請求函式
-async function requestDataSync() {
-    if (getState().isSyncing) {
-        console.log("數據同步中，已忽略本次請求。");
-        return;
-    }
-    try {
-        setState({ isSyncing: true });
-        await loadPortfolioData();
-    } catch (error) {
-        console.error("請求同步時發生錯誤:", error);
-    } finally {
-        setState({ isSyncing: false });
-    }
-}
-
 
 function handleEdit(button) {
     const { transactions } = getState();
@@ -52,45 +33,29 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
-// [優化] 使用樂觀更新重構 handleDelete
 async function handleDelete(button) {
-    const { transactions } = getState();
     const txId = button.dataset.id;
-    
-    const transactionToDelete = transactions.find(t => t.id === txId);
-    if (!transactionToDelete) return;
-
-    showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-        const originalTransactions = [...transactions];
-        const updatedTransactions = transactions.filter(t => t.id !== txId);
-        setState({ transactions: updatedTransactions });
-
-        renderTransactionsTable();
-        showNotification('info', '交易已於介面移除，正在同步至雲端...');
-
-        apiRequest('delete_transaction', { txId })
-            .then(result => {
-                showNotification('success', '交易紀錄已成功從雲端刪除！');
-                requestDataSync(); // [修改] 使用新的同步函式
-            })
-            .catch(error => {
-                showNotification('error', `刪除失敗: ${error.message}`);
-                setState({ transactions: originalTransactions });
-                renderTransactionsTable();
-            });
+    showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
+        try {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            await apiRequest('delete_transaction', { txId });
+            showNotification('success', '交易紀錄已刪除！');
+            await loadPortfolioData();
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
     });
 }
 
-// [優化] 使用樂觀更新重構 handleFormSubmit
 async function handleFormSubmit(e) {
     e.preventDefault();
-    
-    const { transactions } = getState();
-    const originalTransactions = [...transactions];
-
+    const saveBtn = document.getElementById('save-btn');
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> 儲存中...`;
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
-
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -101,45 +66,27 @@ async function handleFormSubmit(e) {
         totalCost: parseFloat(document.getElementById('total-cost').value) || null,
         exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
     };
-
     if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
         showNotification('error', '請填寫所有必填欄位。');
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存';
         return;
     }
-    
-    closeModal('transaction-modal');
-
-    if (isEditing) {
-        const updatedTransactions = transactions.map(t => 
-            t.id === txId ? { ...t, ...transactionData, id: txId } : t
-        );
-        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
-    } else {
-        const tempId = `temp_${Date.now()}`;
-        const newTransaction = { id: tempId, ...transactionData };
-        const updatedTransactions = [newTransaction, ...transactions];
-        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
+    try {
+        const action = isEditing ? 'edit_transaction' : 'add_transaction';
+        const payload = isEditing ? { txId, txData: transactionData } : transactionData;
+        await apiRequest(action, payload);
+        closeModal('transaction-modal');
+        await loadPortfolioData();
+        showNotification('success', isEditing ? '交易已更新！' : '交易已新增！');
+    } catch (error) {
+        showNotification('error', `儲存交易失敗: ${error.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存';
     }
-
-    renderTransactionsTable();
-    showNotification('info', '交易已更新於介面，正在同步至雲端...');
-
-    const action = isEditing ? 'edit_transaction' : 'add_transaction';
-    const payload = isEditing ? { txId, txData: transactionData } : transactionData;
-
-    apiRequest(action, payload)
-        .then(result => {
-            showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            requestDataSync(); // [修改] 使用新的同步函式
-        })
-        .catch(error => {
-            showNotification('error', `儲存交易失敗: ${error.message}`);
-            setState({ transactions: originalTransactions });
-            renderTransactionsTable();
-        });
 }
 
-// 以下為其他未變動的函式...
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     showConfirm('確定要刪除這個拆股事件嗎？', async () => {
@@ -291,105 +238,48 @@ async function handleDividendFormSubmit(e) {
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
-    const { confirmedDividends, pendingDividends } = getState();
-
-    const dividendToDelete = confirmedDividends.find(d => d.id === dividendId);
-    if (!dividendToDelete) return;
-
-    showConfirm('確定要將這筆配息移回待確認區嗎？', () => {
-        // --- 步驟 1: 前端樂觀更新 ---
-        
-        // a. 從「已確認」陣列中移除
-        const updatedConfirmed = confirmedDividends.filter(d => d.id !== dividendId);
-
-        // b. 根據被刪除的紀錄，建立一個新的「待確認」物件
-        const newPendingDividend = {
-            symbol: dividendToDelete.symbol,
-            ex_dividend_date: dividendToDelete.ex_dividend_date,
-            amount_per_share: dividendToDelete.amount_per_share,
-            quantity_at_ex_date: dividendToDelete.quantity_at_ex_date,
-            currency: dividendToDelete.currency
-        };
-
-        // c. 將新物件加入到「待確認」陣列的開頭
-        const updatedPending = [newPendingDividend, ...pendingDividends];
-
-        // d. 更新前端的本地狀態
-        setState({
-            confirmedDividends: updatedConfirmed,
-            pendingDividends: updatedPending
-        });
-
-        // e. 立即用新的本地狀態重新渲染畫面
-        renderDividendsManagementTab(updatedPending, updatedConfirmed);
-        showNotification('info', '配息已移至待確認區，正在同步至雲端...');
-
-        // --- 步驟 2: 將「刪除」請求發送到後端 (Fire-and-Forget) ---
-        apiRequest('delete_user_dividend', { dividendId })
-            .then(result => {
-                if (result.success) {
-                    showNotification('success', '後端同步完成！');
-                    // 為了確保數據絕對一致，可以在背景重新請求一次數據，但這不是必須的
-                    // requestDataSync(); 
-                } else {
-                    throw new Error(result.message);
-                }
-            })
-            .catch(error => {
-                showNotification('error', `後端同步失敗: ${error.message}。建議重新整理頁面以確保資料正確。`);
-                // 如果後端失敗，可以考慮將前端狀態回滾
-                setState({
-                    confirmedDividends: confirmedDividends,
-                    pendingDividends: pendingDividends
-                });
-                renderDividendsManagementTab(pendingDividends, confirmedDividends);
-            });
+    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
+        try {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            await apiRequest('delete_user_dividend', { dividendId });
+            showNotification('success', '配息紀錄已刪除！');
+            await loadAndShowDividends();
+            await loadPortfolioData();
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        } finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
     });
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    const stateKey = chartType === 'twr' ? 'twrDateRange' 
-                   : chartType === 'asset' ? 'assetDateRange' 
-                   : 'netProfitDateRange';
-    const historyKey = chartType === 'twr' ? 'twrHistory' 
-                     : chartType === 'asset' ? 'portfolioHistory' 
-                     : 'netProfitHistory';
-    const controlsId = chartType === 'twr' ? 'twr-chart-controls' 
-                     : chartType === 'asset' ? 'asset-chart-controls' 
-                     : 'net-profit-chart-controls';
+    const stateKey = chartType === 'twr' ? 'twrDateRange' : 'assetDateRange';
+    const historyKey = chartType === 'twr' ? 'twrHistory' : 'portfolioHistory';
+    const controlsId = chartType === 'twr' ? 'twr-chart-controls' : 'asset-chart-controls';
     
-    // 【修正】更新 chartType === 'net-profit' 時的 stateKey 和 historyKey
-    const finalStateKey = chartType === 'net-profit' ? 'netProfitDateRange' : stateKey;
-    const finalHistoryKey = chartType === 'net-profit' ? 'netProfitHistory' : historyKey;
-
     const newRange = { type: rangeType, start: startDate, end: endDate };
-    setState({ [finalStateKey]: newRange });
+    setState({ [stateKey]: newRange });
     
     document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
 
-    const fullHistory = getState()[finalHistoryKey];
+    const fullHistory = getState()[historyKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
 
     if (rangeType !== 'custom') {
-        const startDateInput = document.getElementById(`${chartType}-start-date`);
-        const endDateInput = document.getElementById(`${chartType}-end-date`);
-        if (startDateInput && endDateInput) {
-            startDateInput.value = finalStartDate;
-            endDateInput.value = finalEndDate;
-        }
+        document.getElementById(`${chartType}-start-date`).value = finalStartDate;
+        document.getElementById(`${chartType}-end-date`).value = finalEndDate;
     }
     
     if (chartType === 'twr') {
-        const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
-            .value.toUpperCase().trim() || 'SPY';
+        const { benchmarkHistory } = getState();
+        const benchmarkSymbol = benchmarkHistory?.benchmarkSymbol || 'SPY'
         updateTwrChart(benchmarkSymbol);
-    } else if (chartType === 'asset') {
+    } else {
         updateAssetChart();
-    } else if (chartType === 'net-profit') { // 【修正】此處的判斷條件
-        updateNetProfitChart();
     }
 }
 
@@ -405,7 +295,6 @@ function setupCommonEventListeners() {
 }
 
 function setupMainAppEventListeners() {
-    // --- 這部分是非圖表相關的事件監聽，維持不變 ---
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
@@ -498,63 +387,27 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    // 【修改】恢復原本的獨立事件監聽結構，並為新圖表複製此模式
-    const twrControls = document.getElementById('twr-chart-controls');
-    if (twrControls) {
-        twrControls.addEventListener('click', (e) => {
-            const btn = e.target.closest('.chart-range-btn');
-            if (btn) handleChartRangeChange('twr', btn.dataset.range);
-        });
-        twrControls.addEventListener('change', (e) => {
-            if (e.target.matches('.chart-date-input')) {
-                const startInput = twrControls.querySelector('#twr-start-date');
-                const endInput = twrControls.querySelector('#twr-end-date');
-                if (startInput && endInput && startInput.value && endInput.value) {
-                    twrControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    handleChartRangeChange('twr', 'custom', startInput.value, endInput.value);
-                }
-            }
-        });
-    }
-
-    const assetControls = document.getElementById('asset-chart-controls');
-    if (assetControls) {
-        assetControls.addEventListener('click', (e) => {
-            const btn = e.target.closest('.chart-range-btn');
-            if (btn) handleChartRangeChange('asset', btn.dataset.range);
-        });
-        assetControls.addEventListener('change', (e) => {
-            if (e.target.matches('.chart-date-input')) {
-                const startInput = assetControls.querySelector('#asset-start-date');
-                const endInput = assetControls.querySelector('#asset-end-date');
-                if (startInput && endInput && startInput.value && endInput.value) {
-                    assetControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    handleChartRangeChange('asset', 'custom', startInput.value, endInput.value);
-                }
-            }
-        });
-    }
+    document.getElementById('twr-chart-controls').addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-range-btn');
+        if (btn) handleChartRangeChange('twr', btn.dataset.range);
+    });
+    document.getElementById('asset-chart-controls').addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-range-btn');
+        if (btn) handleChartRangeChange('asset', btn.dataset.range);
+    });
     
-    // 【新增】為淨利圖表複製完全相同的、獨立的處理模式
-    const netProfitControls = document.getElementById('net-profit-chart-controls');
-    if (netProfitControls) {
-        netProfitControls.addEventListener('click', (e) => {
-            const btn = e.target.closest('.chart-range-btn');
-            // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
-            if (btn) handleChartRangeChange('net-profit', btn.dataset.range);
-        });
-        netProfitControls.addEventListener('change', (e) => {
-            if (e.target.matches('.chart-date-input')) {
-                const startInput = netProfitControls.querySelector('#net-profit-start-date');
-                const endInput = netProfitControls.querySelector('#net-profit-end-date');
-                if (startInput && endInput && startInput.value && endInput.value) {
-                    netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
-                    handleChartRangeChange('net-profit', 'custom', startInput.value, endInput.value);
-                }
+    ['twr', 'asset'].forEach(chartType => {
+        const startInput = document.getElementById(`${chartType}-start-date`);
+        const endInput = document.getElementById(`${chartType}-end-date`);
+        const updateFunc = () => {
+            if (startInput.value && endInput.value) {
+                document.querySelectorAll(`#${chartType}-chart-controls .chart-range-btn`).forEach(btn => btn.classList.remove('active'));
+                handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
             }
-        });
-    }
+        };
+        startInput.addEventListener('change', updateFunc);
+        endInput.addEventListener('change', updateFunc);
+    });
 }
 
 export function initializeAppUI() {
@@ -564,14 +417,8 @@ export function initializeAppUI() {
     console.log("Initializing Main App UI...");
     initializeChart();
     initializeTwrChart();
-    initializeNetProfitChart();
-    
-    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
-    setTimeout(() => {
-        setupMainAppEventListeners();
-        lucide.createIcons();
-    }, 0);
-
+    setupMainAppEventListeners();
+    lucide.createIcons();
     setState({ isAppInitialized: true });
 }
 
