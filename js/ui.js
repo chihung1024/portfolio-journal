@@ -1,5 +1,5 @@
 // =========================================================================================
-// == UI 渲染與互動模組 (ui.js) v3.5.1 - Refactoring
+// == UI 渲染與互動模組 (ui.js) v3.5.2 - Refactoring
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -119,21 +119,6 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
 }
 
-// TWR 圖表 (initializeTwrChart)
-export function initializeTwrChart() {
-    const options = {
-        ...baseChartOptions,
-        chart: { ...baseChartOptions.chart, type: 'line' },
-        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
-        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
-        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
-        colors: ['#4f46e5', '#f59e0b']
-    };
-    const twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
-    twrChart.render();
-    setState({ twrChart });
-}
-
 // 淨利圖表 (initializeNetProfitChart)
 export function initializeNetProfitChart() {
     const options = {
@@ -168,38 +153,6 @@ export function updateNetProfitChart() {
     ]);
 
     netProfitChart.updateSeries([{ data: chartData }]);
-}
-
-export function updateTwrChart(benchmarkSymbol) {
-    const { twrChart, twrHistory, benchmarkHistory, twrDateRange } = getState();
-    if (!twrChart) return;
-    
-    const filteredTwrHistory = filterHistoryByDateRange(twrHistory, twrDateRange);
-    const filteredBenchmarkHistory = filterHistoryByDateRange(benchmarkHistory, twrDateRange);
-
-    const rebaseSeries = (history) => {
-        if (!history || Object.keys(history).length === 0) return [];
-        const sortedEntries = Object.entries(history).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-        const baseValue = sortedEntries[0][1];
-        return sortedEntries.map(([date, value]) => [ new Date(date).getTime(), value - baseValue ]);
-    };
-    
-    const isShowingFullHistory = Object.keys(twrHistory).length > 0 && Object.keys(twrHistory).length === Object.keys(filteredTwrHistory).length;
-    
-    let portfolioData;
-    if (isShowingFullHistory) {
-        const sortedEntries = Object.entries(filteredTwrHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-        portfolioData = sortedEntries.map(([date, value]) => [new Date(date).getTime(), value]);
-    } else {
-        portfolioData = rebaseSeries(filteredTwrHistory);
-    }
-    
-    const rebasedBenchmarkData = rebaseSeries(filteredBenchmarkHistory);
-    
-    twrChart.updateSeries([
-        { name: '投資組合', data: portfolioData },
-        { name: `Benchmark (${benchmarkSymbol || '...'})`, data: rebasedBenchmarkData }
-    ]);
 }
 
 export function openModal(modalId, isEdit = false, data = null) {
