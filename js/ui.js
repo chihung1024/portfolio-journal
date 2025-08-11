@@ -4,6 +4,22 @@
 
 import { getState, setState } from './state.js';
 
+// 【新增】一個包含所有圖表共用設定的基礎物件
+const baseChartOptions = {
+    chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } },
+    dataLabels: { enabled: false },
+    stroke: { curve: 'smooth', width: 2 },
+    // 【修改】將 fill 設定從共用選項中移除
+    xaxis: {
+        type: 'datetime',
+        labels: {
+            datetimeUTC: false,
+            datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
+        }
+    },
+    tooltip: { x: { format: 'yyyy-MM-dd' } }
+};
+
 // --- 輔助函式 ---
 function isTwStock(symbol) { 
     return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false; 
@@ -235,7 +251,7 @@ export function renderDividendsManagementTab(pending, confirmed) {
     const confirmedSymbols = ['all', ...Array.from(new Set(confirmed.map(c => c.symbol)))];
     const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="dividend-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="dividend-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${confirmedSymbols.map(s => `<option value="${s}" ${dividendFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
     const filteredConfirmed = dividendFilter === 'all' ? confirmed : confirmed.filter(c => c.symbol === dividendFilter);
-    const confirmedHtml = `<div><h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>${filterHtml}<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">發放日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">實收總額</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備註</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4">${c.pay_date.split('T')[0]}</td><td class="px-4 py-4 font-medium">${c.symbol}</td><td class="px-4 py-4">${formatNumber(c.total_amount, 2)} <span class="text-xs text-gray-500">${c.currency}</span></td><td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td><td class="px-4 py-4 text-center"><button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}</tbody></table></div></div>`;
+    const confirmedHtml = `<div><h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>${filterHtml}<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">發放日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">實收總額</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備註</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4">${c.pay_date.split('T')[0]}</td><td class="px-4 py-4 font-medium">${c.symbol}</td><td class="px-4 py-4">${formatNumber(c.total_amount, c.currency === 'TWD' ? 0 : 2)} <span class="text-xs text-gray-500">${c.currency}</span></td><td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td><td class="px-4 py-4 text-center"><button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}</tbody></table></div></div>`;
     container.innerHTML = pendingHtml + confirmedHtml;
     lucide.createIcons();
 }
@@ -259,49 +275,73 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
 }
 
+// 資產成長圖表 (initializeChart)
 export function initializeChart() {
-    const options = { 
-        chart: { type: 'area', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
-        series: [{ name: '總資產', data: [] }], 
-        xaxis: { 
-            type: 'datetime', 
-            labels: { 
-                datetimeUTC: false,
-                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-            } 
-        }, 
-        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } }, 
-        dataLabels: { enabled: false }, 
-        stroke: { curve: 'smooth', width: 2 }, 
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } }, 
-        tooltip: { x: { format: 'yyyy-MM-dd' } }, 
-        colors: ['#4f46e5'] 
+    const options = {
+        ...baseChartOptions, // 展開載入基礎設定
+        series: [{ name: '總資產', data: [] }],
+        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        // 【修改】將 fill 設定加回來
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
+        colors: ['#4f46e5']
     };
     const chart = new ApexCharts(document.querySelector("#asset-chart"), options);
     chart.render();
     setState({ chart });
 }
 
+// TWR 圖表 (initializeTwrChart)
 export function initializeTwrChart() {
-    const options = { 
-        chart: { type: 'line', height: 350, zoom: { enabled: true }, toolbar: { show: true } }, 
-        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }], 
-        xaxis: { 
-            type: 'datetime', 
-            labels: { 
-                datetimeUTC: false,
-                datetimeFormatter: { year: 'yyyy', month: "MMM", day: 'dd' }
-            } 
-        }, 
-        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
-        dataLabels: { enabled: false }, 
-        stroke: { curve: 'smooth', width: 2 }, 
-        tooltip: { y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } }, 
-        colors: ['#4f46e5', '#f59e0b'] 
+    const options = {
+        ...baseChartOptions, // 展開載入基礎設定
+        chart: { ...baseChartOptions.chart, type: 'line' }, // 覆蓋基礎設定中的圖表類型
+        series: [{ name: '投資組合', data: [] }, { name: 'Benchmark', data: [] }],
+        yaxis: { labels: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `${(value || 0).toFixed(2)}%` } },
+        colors: ['#4f46e5', '#f59e0b']
     };
     const twrChart = new ApexCharts(document.querySelector("#twr-chart"), options);
     twrChart.render();
     setState({ twrChart });
+}
+
+// 淨利圖表 (initializeNetProfitChart)
+export function initializeNetProfitChart() {
+    const options = {
+        ...baseChartOptions, // 展開載入基礎設定
+        series: [{ name: '累積淨利', data: [] }],
+        yaxis: { labels: { formatter: (value) => formatNumber(value, 0) } },
+        // 【修改】將 fill 設定加回來
+        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.3, stops: [0, 90, 100] } },
+        tooltip: { ...baseChartOptions.tooltip, y: { formatter: (value) => `TWD ${formatNumber(value, 0)}` } },
+        colors: ['#10b981']
+    };
+    const netProfitChart = new ApexCharts(document.querySelector("#net-profit-chart"), options);
+    netProfitChart.render();
+    setState({ netProfitChart });
+}
+
+// 【新增】更新累積淨利圖表
+export function updateNetProfitChart() {
+    const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
+    if (!netProfitChart) return;
+
+    const filteredHistory = filterHistoryByDateRange(netProfitHistory, netProfitDateRange);
+    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
+        netProfitChart.updateSeries([{ data: [] }]);
+        return;
+    }
+
+    const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+    
+    // 【核心邏輯】起始日歸零
+    const baseValue = sortedEntries[0][1];
+    const chartData = sortedEntries.map(([date, value]) => [
+        new Date(date).getTime(),
+        value - baseValue // 從第一個點的值開始計算相對增長
+    ]);
+
+    netProfitChart.updateSeries([{ data: chartData }]);
 }
 
 export function updateAssetChart() {
@@ -406,9 +446,7 @@ export function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('dividend-total-amount').value = record.total_amount;
             document.getElementById('dividend-notes').value = record.notes || '';
         } else {
-            const exDate = new Date(record.ex_dividend_date);
-            exDate.setMonth(exDate.getMonth() + 1);
-            document.getElementById('dividend-pay-date').value = exDate.toISOString().split('T')[0];
+            document.getElementById('dividend-pay-date').value = record.ex_dividend_date.split('T')[0];
             const taxRate = isTwStock(record.symbol) ? 0 : 30;
             document.getElementById('dividend-tax-rate').value = taxRate;
             const totalAmount = record.amount_per_share * record.quantity_at_ex_date * (1 - taxRate / 100);
