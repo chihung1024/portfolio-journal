@@ -1,26 +1,22 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.5.1 - 樂觀更新 + 同步鎖
+// == 主程式進入點 (main.js) v3.6.0 - Fully Refactored
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, loadPortfolioData } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
-import { 
-    openModal, 
-    closeModal, 
-    showConfirm, 
-    hideConfirm, 
-    toggleOptionalFields, 
-    showNotification,
-    switchTab,
-    renderDividendsManagementTab,
-    getDateRangeForPreset,
-} from './ui.js';
+
+// --- UI Module Imports ---
+import { getDateRangeForPreset } from './ui/utils.js';
 import { initializeAssetChart } from './ui/charts/assetChart.js';
 import { initializeTwrChart } from './ui/charts/twrChart.js';
 import { initializeNetProfitChart, updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
+import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
+import { openModal, closeModal, showConfirm, hideConfirm, toggleOptionalFields } from './ui/modals.js';
+import { showNotification } from './ui/notifications.js';
+import { switchTab } from './ui/tabs.js';
 
 // --- 事件處理函式 ---
 
@@ -68,7 +64,7 @@ async function handleDelete(button) {
         apiRequest('delete_transaction', { txId })
             .then(result => {
                 showNotification('success', '交易紀錄已成功從雲端刪除！');
-                requestDataSync(); // [修改] 使用新的同步函式
+                requestDataSync();
             })
             .catch(error => {
                 showNotification('error', `刪除失敗: ${error.message}`);
@@ -127,7 +123,7 @@ async function handleFormSubmit(e) {
     apiRequest(action, payload)
         .then(result => {
             showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            requestDataSync(); // [修改] 使用新的同步函式
+            requestDataSync();
         })
         .catch(error => {
             showNotification('error', `儲存交易失敗: ${error.message}`);
@@ -136,7 +132,6 @@ async function handleFormSubmit(e) {
         });
 }
 
-// 以下為其他未變動的函式...
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     showConfirm('確定要刪除這個拆股事件嗎？', async () => {
@@ -172,6 +167,8 @@ async function handleSplitFormSubmit(e) {
 }
 
 async function handleUpdateBenchmark() {
+    const { updateTwrChart } = require("./ui/charts/twrChart.js");
+
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) { showNotification('error', '請輸入 Benchmark 的股票代碼。'); return; }
     try {
@@ -306,7 +303,7 @@ async function handleDeleteDividend(button) {
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
     const { updateAssetChart } = require("./ui/charts/assetChart.js");
     const { updateTwrChart } = require("./ui/charts/twrChart.js");
-
+    
     const stateKey = chartType === 'twr' ? 'twrDateRange' 
                    : chartType === 'asset' ? 'assetDateRange' 
                    : 'netProfitDateRange';
@@ -317,7 +314,6 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
                      : chartType === 'asset' ? 'asset-chart-controls' 
                      : 'net-profit-chart-controls';
     
-    // 【修正】更新 chartType === 'net-profit' 時的 stateKey 和 historyKey
     const finalStateKey = chartType === 'net-profit' ? 'netProfitDateRange' : stateKey;
     const finalHistoryKey = chartType === 'net-profit' ? 'netProfitHistory' : historyKey;
 
@@ -342,12 +338,11 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
     
     if (chartType === 'twr') {
-        const benchmarkSymbol = document.getElementById('benchmark-symbol-input')
-            .value.toUpperCase().trim() || 'SPY';
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY';
         updateTwrChart(benchmarkSymbol);
     } else if (chartType === 'asset') {
         updateAssetChart();
-    } else if (chartType === 'net-profit') { // 【修正】此處的判斷條件
+    } else if (chartType === 'net-profit') {
         updateNetProfitChart();
     }
 }
@@ -364,7 +359,6 @@ function setupCommonEventListeners() {
 }
 
 function setupMainAppEventListeners() {
-    // --- 這部分是非圖表相關的事件監聽，維持不變 ---
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
     document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
@@ -457,7 +451,6 @@ function setupMainAppEventListeners() {
     });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
-    // 【修改】恢復原本的獨立事件監聽結構，並為新圖表複製此模式
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
@@ -494,12 +487,10 @@ function setupMainAppEventListeners() {
         });
     }
     
-    // 【新增】為淨利圖表複製完全相同的、獨立的處理模式
     const netProfitControls = document.getElementById('net-profit-chart-controls');
     if (netProfitControls) {
         netProfitControls.addEventListener('click', (e) => {
             const btn = e.target.closest('.chart-range-btn');
-            // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
             if (btn) handleChartRangeChange('net-profit', btn.dataset.range);
         });
         netProfitControls.addEventListener('change', (e) => {
@@ -508,7 +499,6 @@ function setupMainAppEventListeners() {
                 const endInput = netProfitControls.querySelector('#net-profit-end-date');
                 if (startInput && endInput && startInput.value && endInput.value) {
                     netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                    // 【修正】將 'netProfit' 改為 'net-profit' 以匹配 HTML 的 ID
                     handleChartRangeChange('net-profit', 'custom', startInput.value, endInput.value);
                 }
             }
@@ -525,7 +515,6 @@ export function initializeAppUI() {
     initializeTwrChart();
     initializeNetProfitChart();
     
-    // 【修改】使用 setTimeout 來確保 DOM 元素都已渲染完成
     setTimeout(() => {
         setupMainAppEventListeners();
         lucide.createIcons();
