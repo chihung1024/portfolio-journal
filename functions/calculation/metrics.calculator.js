@@ -218,24 +218,44 @@ function calculateCoreMetrics(evts, market) {
         switch (e.eventType) {
             case "transaction": {
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
-                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+
                 if (e.type === "buy") {
-                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) });
+                    const totalBuyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+                    pf[sym].lots.push({ 
+                        quantity: e.quantity, 
+                        pricePerShareOriginal: e.price, 
+                        pricePerShareTWD: totalBuyCostTWD / (e.quantity || 1), 
+                        date: toDate(e.date) 
+                    });
                 } else { // sell
+                    const proceedsTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); // 明確定義為「收入」
                     let sellQty = e.quantity;
                     let costOfGoodsSoldTWD = 0;
+
+                    // FIFO 邏輯來計算已售出股份的原始成本
                     while (sellQty > 0 && pf[sym].lots.length > 0) {
                         const lot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, lot.quantity);
+                        
                         costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD;
+                        
                         lot.quantity -= qtyToSell;
                         sellQty -= qtyToSell;
-                        if (lot.quantity < 1e-9) pf[sym].lots.shift();
+
+                        if (lot.quantity < 1e-9) {
+                            pf[sym].lots.shift();
+                        }
                     }
-                    const realized = costTWD - costOfGoodsSoldTWD;
-                    totalRealizedPL += realized;
+
+                    // 計算本次交易的「已實現損益」 (利潤或虧損)
+                    const realizedPL = proceedsTWD - costOfGoodsSoldTWD;
+                    
+                    // 將本次的「已實現損益」累加到總額和該股票的累計額中
+                    totalRealizedPL += realizedPL;
+                    pf[sym].realizedPLTWD += realizedPL;
+
+                    // 將本次賣出股票的「成本」累加到已實現成本中 (用於計算總投資成本)
                     pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
-                    pf[sym].realizedPLTWD += realized;
                 }
                 break;
             }
