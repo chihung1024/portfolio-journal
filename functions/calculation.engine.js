@@ -206,236 +206,170 @@ function calculateDailyCashflows(evts, market) {
 
 function calculateCoreMetrics(evts, market) { const pf = {}; let totalRealizedPL = 0; for (const e of evts) { const sym = e.symbol.toUpperCase(); if (!pf[sym]) pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0, realizedCostTWD: 0 }; switch (e.eventType) { case "transaction": { const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date)); const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx); if (e.type === "buy") { pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) }); } else { let sellQty = e.quantity; let costOfGoodsSoldTWD = 0; while (sellQty > 0 && pf[sym].lots.length > 0) { const lot = pf[sym].lots[0]; const qtyToSell = Math.min(sellQty, lot.quantity); costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD; lot.quantity -= qtyToSell; sellQty -= qtyToSell; if (lot.quantity < 1e-9) pf[sym].lots.shift(); } const realized = costTWD - costOfGoodsSoldTWD; totalRealizedPL += realized; pf[sym].realizedCostTWD += costOfGoodsSoldTWD; pf[sym].realizedPLTWD += realized; } break; } case "split": { pf[sym].lots.forEach(l => { l.quantity *= e.ratio; l.pricePerShareTWD /= e.ratio; l.pricePerShareOriginal /= e.ratio; }); break; } case "confirmed_dividend": { const fx = findFxRate(market, e.currency, toDate(e.date)); const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; break; } case "implicit_dividend": { const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market); const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0; if (shares > 0) { const currency = stateOnDate[sym]?.currency || 'USD'; const fx = findFxRate(market, currency, toDate(e.date)); const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx); totalRealizedPL += divTWD; pf[sym].realizedPLTWD += divTWD; } break; } } } const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts); const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market); const xirr = calculateXIRR(xirrFlows); const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0); const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + Object.values(pf).reduce((sum, p) => sum + p.realizedCostTWD, 0); const totalReturnValue = totalRealizedPL + totalUnrealizedPL; const overallReturnRate = totalInvestedCost > 0 ? (totalReturnValue / totalInvestedCost) * 100 : 0; return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate }; }
 
+// ==========================================================
+// == 主計算函式 (重構以整合混合計算)
+// ==========================================================
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    const LOCK_TIMEOUT_MINUTES = 5; // 設定 5 分鐘為鎖的超時時間
-
-    // --- 步驟 1: 智慧鎖狀態檢查與取得 ---
+    console.log(`--- [${uid}] 重新計算程序開始 (v4.0.0 - 混合計算版) ---`);
     try {
-        const lockResult = await d1Client.query("SELECT * FROM user_job_locks WHERE uid = ?", [uid]);
-        let lock = lockResult.length > 0 ? lockResult[0] : null;
+        const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
+            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
+            d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
+            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
+            d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
+            d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
+        ]);
 
-        if (lock) {
-            // 處理殭屍鎖：如果鎖被佔用超過超時時間，就判定為失效並打破它
-            if (lock.status === 'RUNNING') {
-                const lastUpdated = new Date(lock.updated_at);
-                const minutesDiff = (new Date().getTime() - lastUpdated.getTime()) / (1000 * 60);
-                if (minutesDiff > LOCK_TIMEOUT_MINUTES) {
-                    console.warn(`[${uid}] 偵測到並打破了一個超時的殭屍鎖。`);
-                    await d1Client.query("UPDATE user_job_locks SET status = 'IDLE', updated_at = ? WHERE uid = ?", [new Date().toISOString(), uid]);
-                    lock.status = 'IDLE';
-                }
+        await calculateAndCachePendingDividends(uid, txs, userDividends);
+
+        if (txs.length === 0) {
+            await d1Client.batch([
+                { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] },
+                { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
+            ]);
+            return;
+        }
+
+        const firstTxDate = toDate(txs[0].date);
+        let calculationStartDate = firstTxDate;
+        let oldHistory = {};
+
+        const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
+        let latestSnapshot = latestSnapshotResult[0];
+        
+        if (latestSnapshot && modifiedTxDate && toDate(modifiedTxDate) <= toDate(latestSnapshot.snapshot_date)) {
+            console.log(`[${uid}] 偵測到歷史交易變動 (${modifiedTxDate})，將使 ${modifiedTxDate} 之後的快照失效...`);
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
+            const newLatestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
+            latestSnapshot = newLatestSnapshotResult[0];
+        }
+        
+        if (latestSnapshot) {
+            const snapshotDate = toDate(latestSnapshot.snapshot_date);
+            const summaryRow = summaryResult[0];
+            if (summaryRow && summaryRow.history) {
+                 oldHistory = JSON.parse(summaryRow.history);
+                 for (const date in oldHistory) {
+                    if (toDate(date) > snapshotDate) {
+                        delete oldHistory[date];
+                    }
+                 }
             }
-            
-            // 智慧鎖狀態機
-            if (lock.status === 'RUNNING') {
-                await d1Client.query("UPDATE user_job_locks SET status = 'PENDING', updated_at = ? WHERE uid = ?", [new Date().toISOString(), uid]);
-                console.log(`[${uid}] 計算任務已在執行中，將其標記為 PENDING。`);
-                return;
-            }
-            if (lock.status === 'PENDING') {
-                console.log(`[${uid}] 計算任務已在等待中，無需重複標記。`);
-                return;
+            const nextDay = new Date(snapshotDate);
+            nextDay.setDate(nextDay.getDate() + 1);
+            calculationStartDate = nextDay;
+            console.log(`[${uid}] 將從快照點 ${latestSnapshot.snapshot_date} 之後開始混合計算。`);
+        } else {
+            console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
+        }
+
+        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+        const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+        const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
+        const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
+        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
+        await ensureDataFreshness(allRequiredSymbols);
+        await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, txs[0].date.split('T')[0])));
+        
+        const market = await getMarketDataFromDb(txs, benchmarkSymbol);
+        const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
+
+        if (!firstBuyDate) {
+            console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
+            return;
+        }
+
+        const partialHistory = {};
+        let curDate = new Date(calculationStartDate);
+        const today = new Date();
+        today.setUTCHours(0,0,0,0);
+        
+        if (curDate <= today) {
+            console.log(`[${uid}] 執行小範圍增量計算: ${curDate.toISOString().split('T')[0]} -> 今天`);
+            while(curDate <= today) {
+                const dateStr = curDate.toISOString().split('T')[0];
+                partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
+                curDate.setDate(curDate.getDate() + 1);
             }
         }
         
-        // 取得鎖: 若無記錄則新增，若為 IDLE 則更新
-        if (!lock) {
-            await d1Client.query("INSERT INTO user_job_locks (uid, status, updated_at) VALUES (?, 'RUNNING', ?)", [uid, new Date().toISOString()]);
-        } else { // 狀態必為 IDLE
-            await d1Client.query("UPDATE user_job_locks SET status = 'RUNNING', updated_at = ? WHERE uid = ?", [new Date().toISOString(), uid]);
+        const newFullHistory = { ...oldHistory, ...partialHistory };
+
+        // 【重構】只計算一次現金流，並將結果儲存起來
+        const dailyCashflows = calculateDailyCashflows(evts, market);
+        
+        // 【重構】將算好的現金流結果傳遞給 TWR 函式
+        const { twrHistory, benchmarkHistory } = calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
+        
+        const portfolioResult = calculateCoreMetrics(evts, market);
+        
+        // 【重構】直接使用已算好的現金流來計算淨利，移除重複的計算邏輯
+        const netProfitHistory = {};
+        let cumulativeCashflow = 0;
+        const sortedHistoryDates = Object.keys(newFullHistory).sort();
+        for (const dateStr of sortedHistoryDates) {
+            cumulativeCashflow += (dailyCashflows[dateStr] || 0);
+            const marketValue = newFullHistory[dateStr] || 0;
+            netProfitHistory[dateStr] = marketValue - cumulativeCashflow;
         }
-        console.log(`[${uid}] 成功取得鎖，開始計算。`);
 
-    } catch (lockError) {
-        console.error(`[${uid}] 致命錯誤：無法取得或管理鎖，計算中止。`, lockError);
-        return; // 如果連鎖都無法操作，直接中止
-    }
-
-    // --- 步驟 2: 核心計算迴圈 ---
-    let shouldContinueLoop = true;
-    while (shouldContinueLoop) {
-        try {
-            // ================================================================
-            // == 以下是您原本的 performRecalculation 核心邏輯，原封不動 ==
-            // ================================================================
-            console.log(`--- [${uid}] 開始執行計算週期 (v4.0.0 - 混合計算版) ---`);
-            const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
-                d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
-                d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
-                d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
-                d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
-                d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
-            ]);
-    
-            await calculateAndCachePendingDividends(uid, txs, userDividends);
-    
-            if (txs.length === 0) {
-                await d1Client.batch([
-                    { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
-                    { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
-                    { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] },
-                    { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
-                ]);
-                shouldContinueLoop = false; // 無交易紀錄，無需循環，準備退出
-                continue; // 立即跳到迴圈的下一次迭代檢查 (將會退出)
+        if (createSnapshot) {
+            const lastDate = Object.keys(newFullHistory).pop();
+            if(lastDate) {
+                const marketValue = newFullHistory[lastDate];
+                const finalState = getPortfolioStateOnDate(evts, new Date(lastDate), market);
+                const totalCost = Object.values(finalState).reduce((sum, stock) => {
+                    return sum + stock.lots.reduce((lotSum, lot) => lotSum + (lot.quantity * lot.pricePerShareTWD), 0);
+                }, 0);
+                await d1Client.query(
+                    `INSERT OR REPLACE INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+                    [uid, lastDate, marketValue, totalCost]
+                );
+                console.log(`[${uid}] 已成功建立 ${lastDate} 的每週快照。`);
             }
-    
-            const firstTxDate = toDate(txs[0].date);
-            let calculationStartDate = firstTxDate;
-            let oldHistory = {};
-    
-            const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-            let latestSnapshot = latestSnapshotResult[0];
-            
-            if (latestSnapshot && modifiedTxDate && toDate(modifiedTxDate) <= toDate(latestSnapshot.snapshot_date)) {
-                console.log(`[${uid}] 偵測到歷史交易變動 (${modifiedTxDate})，將使 ${modifiedTxDate} 之後的快照失效...`);
-                await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
-                const newLatestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-                latestSnapshot = newLatestSnapshotResult[0];
-            }
-            
-            if (latestSnapshot) {
-                const snapshotDate = toDate(latestSnapshot.snapshot_date);
-                const summaryRow = summaryResult[0];
-                if (summaryRow && summaryRow.history) {
-                     oldHistory = JSON.parse(summaryRow.history);
-                     for (const date in oldHistory) {
-                        if (toDate(date) > snapshotDate) {
-                            delete oldHistory[date];
-                        }
-                     }
-                }
-                const nextDay = new Date(snapshotDate);
-                nextDay.setDate(nextDay.getDate() + 1);
-                calculationStartDate = nextDay;
-                console.log(`[${uid}] 將從快照點 ${latestSnapshot.snapshot_date} 之後開始混合計算。`);
-            } else {
-                console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
-            }
-    
-            const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-            const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-            const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
-            const fxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
-            const allRequiredSymbols = [...new Set([...symbolsInPortfolio, ...fxSymbols, benchmarkSymbol.toUpperCase()])].filter(Boolean);
-            await ensureDataFreshness(allRequiredSymbols);
-            await Promise.all(allRequiredSymbols.map(symbol => ensureDataCoverage(symbol, txs[0].date.split('T')[0])));
-            
-            const market = await getMarketDataFromDb(txs, benchmarkSymbol);
-            const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
-    
-            if (!firstBuyDate) {
-                console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
-                shouldContinueLoop = false;
-                continue;
-            }
-    
-            const partialHistory = {};
-            let curDate = new Date(calculationStartDate);
-            const today = new Date();
-            today.setUTCHours(0,0,0,0);
-            
-            if (curDate <= today) {
-                console.log(`[${uid}] 執行小範圍增量計算: ${curDate.toISOString().split('T')[0]} -> 今天`);
-                while(curDate <= today) {
-                    const dateStr = curDate.toISOString().split('T')[0];
-                    partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
-                    curDate.setDate(curDate.getDate() + 1);
-                }
-            }
-            
-            const newFullHistory = { ...oldHistory, ...partialHistory };
-    
-            const dailyCashflows = calculateDailyCashflows(evts, market);
-            
-            const { twrHistory, benchmarkHistory } = calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
-            
-            const portfolioResult = calculateCoreMetrics(evts, market);
-            
-            const netProfitHistory = {};
-            let cumulativeCashflow = 0;
-            const sortedHistoryDates = Object.keys(newFullHistory).sort();
-            for (const dateStr of sortedHistoryDates) {
-                cumulativeCashflow += (dailyCashflows[dateStr] || 0);
-                const marketValue = newFullHistory[dateStr] || 0;
-                netProfitHistory[dateStr] = marketValue - cumulativeCashflow;
-            }
-    
-            if (createSnapshot) {
-                const lastDate = Object.keys(newFullHistory).pop();
-                if(lastDate) {
-                    const marketValue = newFullHistory[lastDate];
-                    const finalState = getPortfolioStateOnDate(evts, new Date(lastDate), market);
-                    const totalCost = Object.values(finalState).reduce((sum, stock) => {
-                        return sum + stock.lots.reduce((lotSum, lot) => lotSum + (lot.quantity * lot.pricePerShareTWD), 0);
-                    }, 0);
-                    await d1Client.query(
-                        `INSERT OR REPLACE INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
-                        [uid, lastDate, marketValue, totalCost]
-                    );
-                    console.log(`[${uid}] 已成功建立 ${lastDate} 的每週快照。`);
-                }
-            }
-            
-            const { holdingsToUpdate } = portfolioResult.holdings;
-            const dbOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
-            for (const sym in holdingsToUpdate) {
-                const h = holdingsToUpdate[sym];
-                dbOps.push({
-                    sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-                    params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
-                });
-            }
-            
-            const summaryData = {
-                totalRealizedPL: portfolioResult.totalRealizedPL,
-                xirr: portfolioResult.xirr,
-                overallReturnRate: portfolioResult.overallReturnRate,
-                benchmarkSymbol: benchmarkSymbol
-            };
-            
-            const summaryOps = [
-                { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
-                {
-                    sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    params: [uid, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
-                }
-            ];
-            
-            await d1Client.batch(summaryOps);
-    
-            const BATCH_SIZE = 900;
-            const dbOpsChunks = [];
-            for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
-                dbOpsChunks.push(dbOps.slice(i, i + BATCH_SIZE));
-            }
-            await Promise.all(dbOpsChunks.map((chunk) => d1Client.batch(chunk)));
-    
-            console.log(`--- [${uid}] 計算週期順利完成。 ---`);
-            // ================================================================
-            // == 原本的核心邏輯到此結束 ==
-            // ================================================================
-
-            // --- 步驟 3: 檢查是否需要再次計算 ---
-            const finalLockCheckResult = await d1Client.query("SELECT status FROM user_job_locks WHERE uid = ?", [uid]);
-            if (finalLockCheckResult.length > 0 && finalLockCheckResult[0].status === 'PENDING') {
-                console.log(`[${uid}] 偵測到 PENDING 狀態，將重新執行計算以包含最新變動。`);
-                await d1Client.query("UPDATE user_job_locks SET status = 'RUNNING', updated_at = ? WHERE uid = ?", [new Date().toISOString(), uid]);
-                shouldContinueLoop = true; // 繼續迴圈
-            } else {
-                shouldContinueLoop = false; // 沒有新任務，準備退出
-            }
-
-        } catch (calcError) {
-            console.error(`[${uid}] 計算迴圈中發生致命錯誤，將釋放鎖:`, calcError);
-            shouldContinueLoop = false; // 發生錯誤，強制退出迴圈
-            // 這裡不向上拋出錯誤，以確保 finally 會被執行來解鎖
         }
-    }
+        
+        const { holdingsToUpdate } = portfolioResult.holdings;
+        const dbOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
+        for (const sym in holdingsToUpdate) {
+            const h = holdingsToUpdate[sym];
+            dbOps.push({
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+                params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
+            });
+        }
+        
+        const summaryData = {
+            totalRealizedPL: portfolioResult.totalRealizedPL,
+            xirr: portfolioResult.xirr,
+            overallReturnRate: portfolioResult.overallReturnRate,
+            benchmarkSymbol: benchmarkSymbol
+        };
+        
+        const summaryOps = [
+            { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
+            {
+                sql: `INSERT INTO portfolio_summary (uid, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                params: [uid, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
+            }
+        ];
+        
+        await d1Client.batch(summaryOps);
 
-    // --- 步驟 4: 釋放鎖 ---
-    await d1Client.query("UPDATE user_job_locks SET status = 'IDLE', updated_at = ? WHERE uid = ?", [new Date().toISOString(), uid]);
-    console.log(`[${uid}] 所有計算已完成，釋放鎖。`);
+        const BATCH_SIZE = 900;
+        const dbOpsChunks = [];
+        for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
+            dbOpsChunks.push(dbOps.slice(i, i + BATCH_SIZE));
+        }
+        await Promise.all(dbOpsChunks.map((chunk) => d1Client.batch(chunk)));
+
+        console.log(`--- [${uid}] 重新計算程序完成 ---`);
+    } catch (e) {
+        console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
+        throw e;
+    }
 }
 
 
