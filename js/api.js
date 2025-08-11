@@ -10,12 +10,12 @@ import {
     renderTransactionsTable, 
     renderSplitsTable, 
     updateDashboard, 
-    updateNetProfitChart,
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
 import { updateAssetChart } from './ui/charts/assetChart.js';
 import { updateTwrChart } from './ui/charts/twrChart.js';
+import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
 
 /**
  * 統一的後端 API 請求函式
@@ -90,7 +90,7 @@ export async function loadPortfolioData() {
             portfolioHistory: portfolioData.history || {},
             twrHistory: portfolioData.twrHistory || {},
             benchmarkHistory: portfolioData.benchmarkHistory || {},
-            netProfitHistory: portfolioData.netProfitHistory || {} // 【新增】
+            netProfitHistory: portfolioData.netProfitHistory || {}
         });
         
         renderHoldingsTable(holdingsObject);
