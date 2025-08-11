@@ -13,7 +13,6 @@ import {
     toggleOptionalFields, 
     showNotification,
     switchTab,
-    renderTransactionsTable,
     renderDividendsManagementTab,
     getDateRangeForPreset,
 } from './ui.js';
@@ -21,6 +20,7 @@ import { initializeAssetChart } from './ui/charts/assetChart.js';
 import { initializeTwrChart } from './ui/charts/twrChart.js';
 import { initializeNetProfitChart, updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
+import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 
 // --- 事件處理函式 ---
 
