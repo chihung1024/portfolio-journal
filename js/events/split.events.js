@@ -4,7 +4,10 @@
 // =========================================================================================
 
 import { apiRequest, loadPortfolioData } from '../api.js';
-import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
+// 【修正前】: import { openModal, closeModal, showConfirm, showNotification } from '../ui/modals.js';
+// 【修正後】: 分開從各自的模組引入
+import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+import { showNotification } from '../ui/notifications.js';
 
 // --- Private Functions ---
 
