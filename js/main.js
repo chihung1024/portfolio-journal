@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v3.7.1 - Refactoring Events
+// == 主程式進入點 (main.js) v3.7.2 - Refactoring Events
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -20,10 +20,11 @@ import { switchTab } from './ui/tabs.js';
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
 import { initializeSplitEventListeners } from './events/split.events.js';
+import { initializeDividendEventListeners } from './events/dividend.events.js';
 
 
 // --- 事件處理函式 ---
-// 【移除】handleDeleteSplit, handleSplitFormSubmit
+// 【移除】handleBulkConfirm, handleDividendFormSubmit, handleDeleteDividend
 
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
@@ -66,7 +67,8 @@ async function handleNotesFormSubmit(e) {
     }
 }
 
-async function loadAndShowDividends() {
+// 註：此函式由通用的 switchTab 邏輯呼叫，因此保留在 main.js 中
+export async function loadAndShowDividends() {
     const overlay = document.getElementById('loading-overlay');
     overlay.style.display = 'flex';
     try {
@@ -85,76 +87,6 @@ async function loadAndShowDividends() {
     } finally {
         overlay.style.display = 'none';
     }
-}
-
-async function handleBulkConfirm() {
-    const { pendingDividends } = getState();
-    if (pendingDividends.length === 0) {
-        showNotification('info', '沒有需要確認的配息。');
-        return;
-    }
-    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
-            showNotification('success', '所有待確認配息已處理完畢！');
-            await loadAndShowDividends(); 
-            await loadPortfolioData(); 
-        } catch (error) {
-            showNotification('error', `批次確認失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
-    });
-}
-
-async function handleDividendFormSubmit(e) {
-    e.preventDefault();
-    const saveBtn = document.getElementById('save-dividend-btn');
-    saveBtn.disabled = true;
-    const id = document.getElementById('dividend-id').value;
-    const isEditing = !!id;
-    const dividendData = {
-        symbol: document.getElementById('dividend-symbol').value,
-        ex_dividend_date: document.getElementById('dividend-ex-date').value,
-        pay_date: document.getElementById('dividend-pay-date').value,
-        currency: document.getElementById('dividend-currency').value,
-        quantity_at_ex_date: parseFloat(document.getElementById('dividend-quantity').value),
-        amount_per_share: parseFloat(document.getElementById('dividend-original-amount-ps').value),
-        total_amount: parseFloat(document.getElementById('dividend-total-amount').value),
-        tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value) || 0,
-        notes: document.getElementById('dividend-notes').value.trim()
-    };
-    if (isEditing) { dividendData.id = id; }
-    try {
-        await apiRequest('save_user_dividend', dividendData);
-        closeModal('dividend-modal');
-        showNotification('success', '配息紀錄已儲存！');
-        await loadAndShowDividends();
-        await loadPortfolioData();
-    } catch (error) {
-        showNotification('error', `儲存失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存紀錄';
-    }
-}
-
-async function handleDeleteDividend(button) {
-    const dividendId = button.dataset.id;
-    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('delete_user_dividend', { dividendId });
-            showNotification('success', '配息紀錄已刪除！');
-            await loadAndShowDividends();
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
-    });
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
@@ -215,8 +147,6 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     
-    // 【移除】拆股相關的事件監聽
-    
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
@@ -242,6 +172,7 @@ function setupMainAppEventListeners() {
     });
 
     document.getElementById('tabs').addEventListener('click', (e) => {
+        const { renderTransactionsTable } = require("./ui/components/transactions.ui.js");
         const tabItem = e.target.closest('.tab-item');
         if (tabItem) {
             e.preventDefault();
@@ -250,37 +181,13 @@ function setupMainAppEventListeners() {
             if (tabName === 'dividends') {
                 loadAndShowDividends();
             } else if (tabName === 'transactions') {
-                const { renderTransactionsTable } = require("./ui/components/transactions.ui.js");
                 renderTransactionsTable();
             }
         }
     });
 
-    document.getElementById('dividends-tab').addEventListener('click', (e) => {
-        const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
-        if (bulkConfirmBtn) { handleBulkConfirm(); return; }
-        const editBtn = e.target.closest('.edit-dividend-btn');
-        if (editBtn) { openModal('dividend-modal', true, { id: editBtn.dataset.id }); return; }
-        const confirmBtn = e.target.closest('.confirm-dividend-btn');
-        if (confirmBtn) { openModal('dividend-modal', false, { index: confirmBtn.dataset.index }); return; }
-        const deleteBtn = e.target.closest('.delete-dividend-btn');
-        if (deleteBtn) { handleDeleteDividend(deleteBtn); }
-    });
-     document.getElementById('dividends-tab').addEventListener('change', (e) => {
-        if (e.target.id === 'dividend-symbol-filter') {
-            setState({ dividendFilter: e.target.value });
-            const { pendingDividends, confirmedDividends } = getState();
-            renderDividendsManagementTab(pendingDividends, confirmedDividends);
-        }
-    });
+    // 【移除】配息相關的事件監聽
     
-    document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
-    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
-    document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
-        if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
-            closeModal('dividend-history-modal');
-        }
-    });
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
     const twrControls = document.getElementById('twr-chart-controls');
@@ -351,6 +258,7 @@ export function initializeAppUI() {
         setupMainAppEventListeners();
         initializeTransactionEventListeners();
         initializeSplitEventListeners();
+        initializeDividendEventListeners();
         lucide.createIcons();
     }, 0);
 
