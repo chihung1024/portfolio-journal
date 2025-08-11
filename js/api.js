@@ -12,6 +12,7 @@ import {
     updateDashboard, 
     updateAssetChart, 
     updateTwrChart,
+    updateNetProfitChart, // 【新增此行】
     showNotification,
     getDateRangeForPreset
 } from './ui.js';
@@ -88,7 +89,8 @@ export async function loadPortfolioData() {
             holdings: holdingsObject,
             portfolioHistory: portfolioData.history || {},
             twrHistory: portfolioData.twrHistory || {},
-            benchmarkHistory: portfolioData.benchmarkHistory || {}
+            benchmarkHistory: portfolioData.benchmarkHistory || {},
+            netProfitHistory: portfolioData.netProfitHistory || {} // 【新增】
         });
         
         renderHoldingsTable(holdingsObject);
@@ -97,12 +99,13 @@ export async function loadPortfolioData() {
         updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
         
         updateAssetChart(); 
+        updateNetProfitChart(); // 【新增】
         const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
         updateTwrChart(benchmarkSymbol);
 
         document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-        const { portfolioHistory, twrHistory } = getState();
+        const { portfolioHistory, twrHistory, netProfitHistory } = getState(); // 【修改】
 
         const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
         document.getElementById('asset-start-date').value = assetDates.startDate;
@@ -111,6 +114,11 @@ export async function loadPortfolioData() {
         const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
         document.getElementById('twr-start-date').value = twrDates.startDate;
         document.getElementById('twr-end-date').value = twrDates.endDate;
+        
+        // 【新增】
+        const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
+        document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
+        document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
         
         showNotification('success', '資料同步完成！');
     } catch (error) {
