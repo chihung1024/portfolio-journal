@@ -20,7 +20,24 @@ exports.addTransaction = async (uid, data, res) => {
     );
 
     await performRecalculation(uid, txData.date, false);
-    return res.status(200).send({ success: true, message: '操作成功。', id: txId });
+
+    // 【新增】重算後，立刻查詢最新結果
+    const [holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+    ]);
+    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
+
+    // 【修改】在回應中包含新數據
+    return res.status(200).send({
+        success: true,
+        message: '操作成功。',
+        id: txId,
+        data: {
+            holdings: holdings,
+            summary: summary_data
+        }
+    });
 };
 
 /**
@@ -36,7 +53,24 @@ exports.editTransaction = async (uid, data, res) => {
     );
 
     await performRecalculation(uid, txData.date, false);
-    return res.status(200).send({ success: true, message: '操作成功。', id: txId });
+
+    // 【新增】重算後，立刻查詢最新結果
+    const [holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+    ]);
+    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
+    
+    // 【修改】在回應中包含新數據
+    return res.status(200).send({
+        success: true,
+        message: '操作成功。',
+        id: txId,
+        data: {
+            holdings: holdings,
+            summary: summary_data
+        }
+    });
 };
 
 /**
@@ -55,5 +89,21 @@ exports.deleteTransaction = async (uid, data, res) => {
     );
 
     await performRecalculation(uid, txDate, false);
-    return res.status(200).send({ success: true, message: '交易已刪除。' });
+
+    // 【新增】重算後，立刻查詢最新結果
+    const [holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+    ]);
+    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
+
+    // 【修改】在回應中包含新數據
+    return res.status(200).send({
+        success: true,
+        message: '交易已刪除。',
+        data: {
+            holdings: holdings,
+            summary: summary_data
+        }
+    });
 };
