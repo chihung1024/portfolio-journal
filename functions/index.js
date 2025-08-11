@@ -11,8 +11,9 @@ const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./calculation.engine');
 const { transactionSchema, splitSchema, userDividendSchema } = require('./schemas');
 const { verifyFirebaseToken } = require('./middleware');
-// 【新增】引入新的 handler
+// 【修改】引入新的 handlers
 const transactionHandlers = require('./api_handlers/transaction.handler');
+const dividendHandlers = require('./api_handlers/dividend.handler');
 
 try {
     admin.initializeApp();
@@ -85,15 +86,12 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                         }
                     });
                 }
-                // 【重構】替換為對 handler 的呼叫
                 case 'add_transaction':
                     return await transactionHandlers.addTransaction(uid, data, res);
 
-                // 【重構】替換為對 handler 的呼叫
                 case 'edit_transaction':
                     return await transactionHandlers.editTransaction(uid, data, res);
 
-                // 【重構】替換為對 handler 的呼叫
                 case 'delete_transaction':
                     return await transactionHandlers.deleteTransaction(uid, data, res);
 
@@ -115,79 +113,22 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     await performRecalculation(uid, splitDate, false);
                     return res.status(200).send({ success: true, message: '分割事件已刪除。' });
                 }
-                case 'get_dividends_for_management': {
-                    const [pendingDividends, confirmedDividends] = await Promise.all([
-                        d1Client.query('SELECT * FROM user_pending_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid]),
-                        d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date DESC', [uid])
-                    ]);
+                // 【重構】替換為對 handler 的呼叫
+                case 'get_dividends_for_management':
+                    return await dividendHandlers.getDividendsForManagement(uid, res);
 
-                    return res.status(200).send({
-                        success: true,
-                        data: {
-                            pendingDividends: pendingDividends || [],
-                            confirmedDividends: confirmedDividends || []
-                        }
-                    });
-                }
-                case 'save_user_dividend': {
-                    const parsedData = userDividendSchema.parse(data);
-                    await d1Client.query('DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', [uid, parsedData.symbol, parsedData.ex_dividend_date]);
+                // 【重構】替換為對 handler 的呼叫
+                case 'save_user_dividend':
+                    return await dividendHandlers.saveUserDividend(uid, data, res);
 
-                    const { id, ...divData } = parsedData;
-                    const dividendId = id || uuidv4();
+                // 【重構】替換為對 handler 的呼叫
+                case 'bulk_confirm_all_dividends':
+                    return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
 
-                    if (id) {
-                        await d1Client.query(`UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`, [divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]);
-                    } else {
-                        await d1Client.query(`INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]);
-                    }
+                // 【重構】替換為對 handler 的呼叫
+                case 'delete_user_dividend':
+                    return await dividendHandlers.deleteUserDividend(uid, data, res);
 
-                    res.status(200).send({ success: true, message: '配息紀錄已儲存，後端將在背景更新數據。' });
-
-                    performRecalculation(uid, null, false).catch(err => {
-                        console.error(`[${uid}] UID 的背景儲存/編輯配息重算失敗:`, err);
-                    });
-
-                    return;
-                }
-                case 'bulk_confirm_all_dividends': {
-                    const pendingDividends = data.pendingDividends || [];
-                    if (pendingDividends.length === 0) return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
-                    const dbOps = [];
-                    const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
-                    for (const pending of pendingDividends) {
-                        const payDateStr = pending.ex_dividend_date.split('T')[0];
-                        const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30; const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-                        dbOps.push({
-                            sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`,
-                            params: [
-                                uuidv4(),
-                                uid,
-                                pending.symbol,
-                                pending.ex_dividend_date,
-                                payDateStr,
-                                pending.amount_per_share,
-                                pending.quantity_at_ex_date,
-                                totalAmount,
-                                taxRate * 100,
-                                pending.currency
-                            ]
-                        });
-                    }
-                    if (dbOps.length > 0) { await d1Client.batch(dbOps); await performRecalculation(uid, null, false); }
-                    return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
-                }
-                case 'delete_user_dividend': {
-                    await d1Client.query('DELETE FROM user_dividends WHERE id = ? AND uid = ?', [data.dividendId, uid]);
-
-                    res.status(200).send({ success: true, message: '配息紀錄已刪除，後端將在背景更新數據。' });
-
-                    performRecalculation(uid, null, false).catch(err => {
-                        console.error(`[${uid}] UID 的背景刪除配息重算失敗:`, err);
-                    });
-
-                    return;
-                }
                 case 'save_stock_note': {
                     const { symbol, target_price, stop_loss_price, notes } = data;
                     const existing = await d1Client.query('SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?', [uid, symbol]);
