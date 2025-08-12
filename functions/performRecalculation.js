@@ -122,20 +122,42 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             return acc;
         }, {});
 
-        // 步驟 8: 決定計算的起始點 (快照邏輯)
+        // 步驟 8: 決定計算的起始點 (快照邏輯) - REVISED AND FIXED
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
-        const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-        let latestSnapshot = latestSnapshotResult[0];
-        if (latestSnapshot && modifiedTxDate && toDate(modifiedTxDate) <= toDate(latestSnapshot.snapshot_date)) {
+        let latestSnapshot = null;
+
+        if (modifiedTxDate) {
+            // A transaction was modified. We need to invalidate future snapshots and find the last valid one.
+            console.log(`[${uid}] 交易在 ${modifiedTxDate} 被修改，正在尋找此日期前的最新快照...`);
+            
+            // First, find the last valid snapshot BEFORE the change.
+            const latestValidSnapshotResult = await d1Client.query(
+                'SELECT * FROM portfolio_snapshots WHERE uid = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1', 
+                [uid, modifiedTxDate]
+            );
+            latestSnapshot = latestValidSnapshotResult[0];
+
+            // Then, delete all snapshots from the modification date onwards, as they are now invalid.
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
-            const newLatestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-            latestSnapshot = newLatestSnapshotResult[0];
+            if(latestSnapshot) {
+                console.log(`[${uid}] 找到並將使用 ${latestSnapshot.snapshot_date} 的快照。之後的無效快照已被清除。`);
+            } else {
+                console.log(`[${uid}] 未找到修改日期前的快照，將從頭計算。之後的無效快照已被清除。`);
+            }
+
+        } else {
+            // No specific transaction was modified, so just get the absolute latest snapshot.
+            // This path is used by the weekend job or other full recalculations.
+            const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
+            latestSnapshot = latestSnapshotResult[0];
         }
+
         if (latestSnapshot) {
             const snapshotDate = toDate(latestSnapshot.snapshot_date);
             if (summaryResult[0] && summaryResult[0].history) {
                 oldHistory = JSON.parse(summaryResult[0].history);
+                // Prune the history JSON to only include dates up to the snapshot date
                 Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
             }
             const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
