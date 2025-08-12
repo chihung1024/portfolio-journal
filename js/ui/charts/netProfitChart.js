@@ -42,7 +42,7 @@ export function initializeNetProfitChart() {
 }
 
 /**
- * 更新淨利圖表的數據
+ * 更新淨利圖表的數據 (最終修正版)
  */
 export function updateNetProfitChart() {
     const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
@@ -56,11 +56,10 @@ export function updateNetProfitChart() {
 
     const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
     
-    // 從選定範圍的第一個點開始歸零計算，以顯示該期間的相對增長
-    const baseValue = sortedEntries[0][1];
+    // 【修正】移除歸零化(Rebasing)邏輯，直接使用後端計算出的絕對值繪圖
     const chartData = sortedEntries.map(([date, value]) => [
         new Date(date).getTime(),
-        value - baseValue
+        value
     ]);
 
     netProfitChart.updateSeries([{ data: chartData }]);
