@@ -22,13 +22,12 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     
     const benchmarkCurrency = isTwStock(upperBenchmarkSymbol) ? "TWD" : "USD";
     const startFxRate = findFxRate(market, benchmarkCurrency, startDate);
-    
-    const benchmarkStartPriceInfo = findNearest(benchmarkPrices, startDate);
-    if (!benchmarkStartPriceInfo) {
+    const benchmarkStartPriceOriginal = findNearest(benchmarkPrices, startDate);
+
+    if (!benchmarkStartPriceOriginal) {
         log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
-    const benchmarkStartPriceOriginal = benchmarkStartPriceInfo.value;
     const benchmarkStartPriceTWD = benchmarkStartPriceOriginal * startFxRate;
 
     const twrHistory = {};
@@ -38,7 +37,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
     for (const dateStr of dates) {
         const MVE = dailyPortfolioValues[dateStr];
-        const CF = dailyCashflows[dateStr] || 0;
+        const CF = dailyCashflows[dateStr] || 0; // TWR 的現金流定義相反，但在傳入前已處理
         const denominator = lastMarketValue + CF;
 
         if (denominator !== 0) {
@@ -47,9 +46,8 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
         lastMarketValue = MVE;
 
-        const currentBenchPriceInfo = findNearest(benchmarkPrices, new Date(dateStr));
-        if (currentBenchPriceInfo && benchmarkStartPriceTWD > 0) {
-            const currentBenchPriceOriginal = currentBenchPriceInfo.value;
+        const currentBenchPriceOriginal = findNearest(benchmarkPrices, new Date(dateStr));
+        if (currentBenchPriceOriginal && benchmarkStartPriceTWD > 0) {
             const currentFxRate = findFxRate(market, benchmarkCurrency, new Date(dateStr));
             benchmarkHistory[dateStr] = ((currentBenchPriceOriginal * currentFxRate / benchmarkStartPriceTWD) - 1) * 100;
         }
@@ -209,7 +207,7 @@ function calculateDailyCashflows(evts, market) {
  * 計算最終的核心匯總指標 (已實現/未實現損益, 總體報酬率等)
  */
 function calculateCoreMetrics(evts, market) {
-    const pf = {};
+    const pf = {}; // 用於追蹤每個股票的 FIFO 成本和已實現損益
     let totalRealizedPL = 0;
 
     for (const e of evts) {
@@ -220,34 +218,24 @@ function calculateCoreMetrics(evts, market) {
         switch (e.eventType) {
             case "transaction": {
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
+                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
                 if (e.type === "buy") {
-                    const totalBuyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
-                    pf[sym].lots.push({ 
-                        quantity: e.quantity, 
-                        pricePerShareOriginal: e.price, 
-                        pricePerShareTWD: totalBuyCostTWD / (e.quantity || 1), 
-                        date: toDate(e.date) 
-                    });
+                    pf[sym].lots.push({ quantity: e.quantity, pricePerShareOriginal: e.price, pricePerShareTWD: costTWD / (e.quantity || 1), date: toDate(e.date) });
                 } else { // sell
-                    const proceedsTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
                     let sellQty = e.quantity;
                     let costOfGoodsSoldTWD = 0;
-
                     while (sellQty > 0 && pf[sym].lots.length > 0) {
                         const lot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, lot.quantity);
                         costOfGoodsSoldTWD += qtyToSell * lot.pricePerShareTWD;
                         lot.quantity -= qtyToSell;
                         sellQty -= qtyToSell;
-                        if (lot.quantity < 1e-9) {
-                            pf[sym].lots.shift();
-                        }
+                        if (lot.quantity < 1e-9) pf[sym].lots.shift();
                     }
-
-                    const realizedPL = proceedsTWD - costOfGoodsSoldTWD;
-                    totalRealizedPL += realizedPL;
-                    pf[sym].realizedPLTWD += realizedPL;
+                    const realized = costTWD - costOfGoodsSoldTWD;
+                    totalRealizedPL += realized;
                     pf[sym].realizedCostTWD += costOfGoodsSoldTWD;
+                    pf[sym].realizedPLTWD += realized;
                 }
                 break;
             }
