@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主重算流程調度器 (performRecalculation.js)
+// == 主重算流程調度器 (performRecalculation.js) - v_final
 // == 職責：作為總指揮，調度各計算模組，完成從頭到尾的重算流程。
 // =========================================================================================
 
@@ -66,12 +66,12 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
 
 
 /**
- * 主計算函式
+ * 主計算函式 (已修正數據流順序的最終版本)
  */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v4.1.0 - Final Refactor) ---`);
+    console.log(`--- [${uid}] 重新計算程序開始 (v_final - Correct Order) ---`);
     try {
-        // 1. 讀取使用者基本資料
+        // 步驟 1: 讀取使用者所有的核心操作記錄 (交易、拆股、股利等)
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -80,10 +80,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
         ]);
 
-        // 2. 更新待確認股息 (此操作依賴交易資料，需先執行)
+        // 步驟 2: 基於最新的交易記錄，更新待確認股息列表
         await calculateAndCachePendingDividends(uid, txs, userDividends);
 
-        // 3. 處理無交易的邊界情況
+        // 步驟 3: 處理無任何交易的特殊情況
         if (txs.length === 0) {
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
@@ -94,21 +94,39 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             return;
         }
 
-        // 4. 準備市場數據 (使用 Data Provider)
-        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
-        await dataProvider.ensureDataFreshness(Object.keys(market));
-        const firstTxDateStr = txs[0].date.split('T')[0];
-        await Promise.all(Object.keys(market).map(symbol => dataProvider.ensureDataCoverage(symbol, firstTxDateStr)));
+        // ==================================================================
+        // == 核心架構修正：確保市場數據在讀取前已是最新狀態 ==
+        // ==================================================================
 
-        // 5. 準備事件列表 (使用 State Calculator)
+        // 步驟 4: 【先】根據使用者記錄，確定所有需要用到的市場數據代碼
+        const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+        const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+        const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
+        const requiredFxSymbols = currencies.map(c => ({ "USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X" }[c])).filter(Boolean);
+        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase(), ...requiredFxSymbols])].filter(Boolean);
+
+        // 步驟 5: 【再】呼叫 Data Provider，確保這些代碼的數據在「資料庫」中都是最新且完整的
+        // (若有缺失，此步驟會從 Yahoo Finance 下載並存入資料庫)
+        console.log(`[${uid}] 確保市場數據新鮮度與覆蓋範圍...`);
+        await dataProvider.ensureDataFreshness(allRequiredSymbols);
+        const firstTxDateStr = txs[0].date.split('T')[0];
+        await Promise.all(allRequiredSymbols.map(symbol => dataProvider.ensureDataCoverage(symbol, firstTxDateStr)));
+        console.log(`[${uid}] 市場數據準備完畢。`);
+
+        // 步驟 6: 【然後】才從準備好的「資料庫」中，將所有市場數據一次性讀取到「記憶體」
+        console.log(`[${uid}] 從資料庫讀取市場數據...`);
+        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
+        
+        // ==================================================================
+        
+        // 步驟 7: 使用最新的 `market` 數據，準備統一的事件列表
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) {
             console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
             return;
         }
 
-        // 6. 決定計算起始點 (快照邏輯)
+        // 步驟 8: 決定計算的起始點 (快照邏輯)
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
         const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
@@ -131,12 +149,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
         }
 
-        // 7. 增量計算每日資產價值 (使用 State Calculator)
+        // 步驟 9: 逐日計算每日資產價值
         const partialHistory = {};
         let curDate = new Date(calculationStartDate);
         const today = new Date(); today.setUTCHours(0, 0, 0, 0);
         if (curDate <= today) {
-            console.log(`[${uid}] 執行小範圍增量計算: ${curDate.toISOString().split('T')[0]} -> 今天`);
+            console.log(`[${uid}] 執行每日價值計算: ${curDate.toISOString().split('T')[0]} -> 今天`);
             while (curDate <= today) {
                 const dateStr = curDate.toISOString().split('T')[0];
                 partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
@@ -145,7 +163,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
         const newFullHistory = { ...oldHistory, ...partialHistory };
 
-        // 8. 計算各項核心指標 (使用 Metrics Calculator)
+        // 步驟 10: 計算所有核心財務指標
         const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
         const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
         const portfolioResult = metrics.calculateCoreMetrics(evts, market);
@@ -157,7 +175,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             netProfitHistory[dateStr] = newFullHistory[dateStr] - cumulativeCashflow;
         });
 
-        // 9. 儲存快照 (如果需要)
+        // 步驟 11: 根據需要儲存快照
         if (createSnapshot) {
             const lastDate = Object.keys(newFullHistory).pop();
             if (lastDate) {
@@ -171,7 +189,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             }
         }
         
-        // 10. 將計算結果寫入資料庫
+        // 步驟 12: 將所有計算結果寫入資料庫
         const { holdingsToUpdate } = portfolioResult.holdings;
         const dbOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
         Object.values(holdingsToUpdate).forEach(h => {
