@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主重算流程調度器 (performRecalculation.js) - PROFILING & COMPLETE VERSION
+// == 主重算流程調度器 (performRecalculation.js) - FINAL & COMPLETE VERSION
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
@@ -9,7 +9,9 @@ const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calcul
 const metrics = require('./calculation/metrics.calculator');
 
 
-// 負責快取用戶的待確認股息 (此函式內容與您目前版本完全相同，保持不變)
+/**
+ * 負責快取用戶的待確認股息。
+ */
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
@@ -62,16 +64,12 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
 
 
 /**
- * 主計算函式 (內置計時器，完整內容)
+ * 主計算函式 (已整合混合模式、效能優化與所有修正)
  */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    // 【新增】計時器開始
-    const fullProcessStart = Date.now();
-    console.log(`--- [${uid}] 重新計算程序開始 (v_performance_profiling) ---`);
-    
+    console.log(`--- [${uid}] 重新計算程序開始 (v_final_architecture) ---`);
     try {
-        // 步驟 1: 讀取使用者基本資料
-        let timer = Date.now();
+        // 步驟 1: 讀取使用者所有的核心操作記錄
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -79,12 +77,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
         ]);
-        console.log(`[PERF] 1. 讀取使用者基本資料: ${Date.now() - timer} ms`);
 
         // 步驟 2: 更新待確認股息
-        timer = Date.now();
         await calculateAndCachePendingDividends(uid, txs, userDividends);
-        console.log(`[PERF] 2. 更新待確認股息: ${Date.now() - timer} ms`);
 
         // 步驟 3: 處理無交易的特殊情況
         if (txs.length === 0) {
@@ -97,29 +92,24 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             return;
         }
 
-        // 步驟 4: 確定所有需要的市場數據代碼
-        timer = Date.now();
+        // 步驟 4: 根據使用者記錄，確定所有需要的股票代碼及其最早的交易日期
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
         const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-        const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
-        const requiredFxSymbols = currencies.map(c => ({ "USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X" }[c])).filter(Boolean);
-        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase(), ...requiredFxSymbols])].filter(Boolean);
-        console.log(`[PERF] 4. 確定所需代碼: ${Date.now() - timer} ms`);
-
-        // 步驟 5: 確保市場數據在資料庫中是最新且完整的
-        timer = Date.now();
-        await dataProvider.ensureDataFreshness(allRequiredSymbols);
+        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase()])].filter(Boolean);
         const firstTxDateStr = txs[0].date.split('T')[0];
-        await Promise.all(allRequiredSymbols.map(symbol => dataProvider.ensureDataCoverage(symbol, firstTxDateStr)));
-        console.log(`[PERF] 5. 確保市場數據新鮮度 (包含潛在的網路下載): ${Date.now() - timer} ms`);
 
-        // 步驟 6: 從資料庫讀取市場數據到記憶體
-        timer = Date.now();
+        // 步驟 5: 【即時補缺】為所有需要的股票，確保其歷史數據「覆蓋度」足夠
+        console.log(`[${uid}] 確保數據覆蓋度至 ${firstTxDateStr}...`);
+        await Promise.all(allRequiredSymbols.map(symbol => 
+            dataProvider.ensureDataCoverage(symbol, firstTxDateStr)
+        ));
+        console.log(`[${uid}] 數據覆蓋度檢查與補缺完成。`);
+
+        // 步驟 6: 從資料庫讀取市場數據（此時已包含所有深度足夠的歷史數據）
+        console.log(`[${uid}] 從資料庫讀取市場數據...`);
         const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
-        console.log(`[PERF] 6. 從DB讀取市場數據: ${Date.now() - timer} ms`);
         
-        // 步驟 7: 準備事件列表
-        timer = Date.now();
+        // 步驟 7: 準備統一的事件列表，並按日期分組以備高效查找
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) {
             console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
@@ -131,10 +121,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             acc[dateStr].push(e);
             return acc;
         }, {});
-        console.log(`[PERF] 7. 準備事件列表: ${Date.now() - timer} ms`);
 
-        // 步驟 8: 每日價值計算 (高效能迴圈)
-        timer = Date.now();
+        // 步驟 8: 決定計算的起始點 (快照邏輯)
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
         const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
@@ -157,9 +145,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
         }
 
+        // 步驟 9: 【核心效能優化】採用事件驅動的狀態推進模型
+        console.log(`[${uid}] 執行高效的每日價值計算...`);
         const partialHistory = {};
         const dayBeforeStartDate = new Date(calculationStartDate.getTime() - 86400000);
         let currentState = getPortfolioStateOnDate(evts, dayBeforeStartDate, market);
+        
         let curDate = new Date(calculationStartDate);
         const today = new Date(); today.setUTCHours(0, 0, 0, 0);
 
@@ -167,30 +158,31 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             while (curDate <= today) {
                 const dateStr = curDate.toISOString().split('T')[0];
                 const dailyEvents = eventsByDate[dateStr] || [];
+
                 if (dailyEvents.length > 0) {
                      currentState = getPortfolioStateOnDate(evts, curDate, market);
                 }
+                
                 partialHistory[dateStr] = dailyValue(currentState, market, curDate, evts);
+                
                 curDate.setDate(curDate.getDate() + 1);
             }
         }
         const newFullHistory = { ...oldHistory, ...partialHistory };
-        console.log(`[PERF] 8. 每日價值計算迴圈: ${Date.now() - timer} ms`);
 
-        // 步驟 9: 計算所有核心財務指標
-        timer = Date.now();
+        // 步驟 10: 計算所有核心財務指標
         const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
         const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
         const portfolioResult = metrics.calculateCoreMetrics(evts, market);
+
         const netProfitHistory = {};
         let cumulativeCashflow = 0;
         Object.keys(newFullHistory).sort().forEach(dateStr => {
             cumulativeCashflow += (dailyCashflows[dateStr] || 0);
             netProfitHistory[dateStr] = newFullHistory[dateStr] - cumulativeCashflow;
         });
-        console.log(`[PERF] 9. 計算核心指標 (TWR, XIRR, P/L): ${Date.now() - timer} ms`);
 
-        // 步驟 10: 儲存快照
+        // 步驟 11: 根據需要儲存快照
         if (createSnapshot) {
             const lastDate = Object.keys(newFullHistory).pop();
             if (lastDate) {
@@ -204,8 +196,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             }
         }
         
-        // 步驟 11: 將所有計算結果寫入資料庫
-        timer = Date.now();
+        // 步驟 12: 將所有計算結果寫入資料庫
         const { holdingsToUpdate } = portfolioResult.holdings;
         const dbOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
         Object.values(holdingsToUpdate).forEach(h => {
@@ -234,13 +225,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
             await d1Client.batch(dbOps.slice(i, i + BATCH_SIZE));
         }
-        console.log(`[PERF] 11. 寫入結果至DB: ${Date.now() - timer} ms`);
-        
+
+        console.log(`--- [${uid}] 重新計算程序完成 ---`);
     } catch (e) {
         console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
         throw e;
-    } finally {
-        console.log(`--- [${uid}] 重新計算程序總耗時: ${Date.now() - fullProcessStart} ms ---`);
     }
 }
 
