@@ -56,10 +56,11 @@ export function updateNetProfitChart() {
 
     const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
     
-    // 【修正】移除歸零化邏輯，直接使用絕對值繪圖
+    // 從選定範圍的第一個點開始歸零計算，以顯示該期間的相對增長
+    const baseValue = sortedEntries[0][1];
     const chartData = sortedEntries.map(([date, value]) => [
         new Date(date).getTime(),
-        value // 直接使用後端計算出的原始累積淨利值
+        value - baseValue
     ]);
 
     netProfitChart.updateSeries([{ data: chartData }]);
