@@ -1,18 +1,9 @@
 // =========================================================================================
-// == 投資組合狀態計算模組 (state.calculator.js)
-// == 職責：根據事件歷史，計算在任何指定日期的投資組合狀態 (持股、成本) 及其市場價值。
+// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION
 // =========================================================================================
 
 const { toDate, findFxRate, getTotalCost, findNearest, isTwStock } = require('./helpers');
 
-/**
- * 準備一個統一的、按時間排序的事件列表，供後續計算使用
- * @param {Array} txs - 使用者交易紀錄
- * @param {Array} splits - 使用者拆股紀錄
- * @param {object} market - 市場數據
- * @param {Array} userDividends - 使用者已確認的股利
- * @returns {{evts: Array, firstBuyDate: Date|null}} 包含所有事件的列表和首次購買日期
- */
 function prepareEvents(txs, splits, market, userDividends) {
     const firstBuyDateMap = {};
     txs.forEach(tx => {
@@ -67,14 +58,6 @@ function prepareEvents(txs, splits, market, userDividends) {
     return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
 }
 
-
-/**
- * 獲取在某個特定日期結束時的投資組合狀態 (FIFO)
- * @param {Array} allEvts - 所有事件的列表
- * @param {Date} targetDate - 目標日期
- * @param {object} market - 市場數據
- * @returns {object} 當日的投資組合狀態，包含每個持股的 lots
- */
 function getPortfolioStateOnDate(allEvts, targetDate, market) {
     const state = {};
     const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate));
@@ -121,41 +104,37 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
 }
 
 /**
- * 根據當日持股狀態，計算其市場總價值 (TWD)
- * @param {object} state - 從 getPortfolioStateOnDate 來的持股狀態
- * @param {object} market - 市場數據
- * @param {Date} date - 目標日期
- * @param {Array} allEvts - 所有事件列表 (用於處理未來拆股的股價還原)
- * @returns {number} 當日市場總價值
+ * 根據當日持股狀態，計算其市場總價值 (TWD) - 最終修正版
  */
 function dailyValue(state, market, date, allEvts) {
-    return Object.keys(state).reduce((totalValue, sym) => {
+    let totalPortfolioValue = 0;
+
+    for (const sym of Object.keys(state)) {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
 
-        if (qty < 1e-9) return totalValue;
+        if (qty < 1e-9) continue;
 
-        let price = findNearest(market[sym]?.prices, date);
-        if (price === undefined) {
-            // 如果今天找不到價格（例如假日），則使用昨天的價值
-            const yesterday = new Date(date);
-            yesterday.setDate(yesterday.getDate() - 1);
-            const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date;
-            if (yesterday < firstLotDate) {
-                 // 如果回溯到比第一筆買入還早，代表此資產價值為0
-                return totalValue;
-            }
-            return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts);
-        }
+        const priceInfo = findNearest(market[sym]?.prices, date);
+
+        if (!priceInfo) continue;
         
-        // 將股價還原到未經未來拆股調整的狀態
-        const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(date));
+        const { date: priceDate, value: price } = priceInfo;
+
+        const futureSplits = allEvts.filter(e => 
+            e.eventType === 'split' && 
+            e.symbol.toUpperCase() === sym.toUpperCase() && 
+            toDate(e.date) > toDate(priceDate)
+        );
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
-        const fx = findFxRate(market, s.currency, date);
-        return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
-    }, 0);
+        const fx = findFxRate(market, s.currency, priceDate);
+
+        totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
+    }
+
+    return totalPortfolioValue;
 }
 
 module.exports = {
