@@ -101,28 +101,47 @@ async function ensureDataFreshness(symbols) {
 
 /**
  * 從 D1 資料庫中獲取所有計算需要的市場數據（股價、股利、匯率）
+ * @param {string | null} startDate - 計算起始日期 YYYY-MM-DD. 如果提供，則只獲取此日期之後的數據。
  */
-async function getMarketDataFromDb(txs, benchmarkSymbol) {
+async function getMarketDataFromDb(txs, benchmarkSymbol, startDate = null) {
     const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
     const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
     const requiredFxSymbols = currencies.map(c => currencyToFx[c]).filter(Boolean);
     const requiredStockSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase()])].filter(Boolean);
 
     const promises = [];
+    
+    // --- 優化：增加 startDate 條件 ---
+    const stockParams = [...requiredStockSymbols];
+    let stockPriceQuery = `SELECT symbol, date, price FROM price_history WHERE symbol IN (${requiredStockSymbols.map(() => '?').join(',')})`;
+    let dividendQuery = `SELECT symbol, date, dividend FROM dividend_history WHERE symbol IN (${requiredStockSymbols.map(() => '?').join(',')})`;
+
+    if (startDate) {
+        stockPriceQuery += ' AND date >= ?';
+        dividendQuery += ' AND date >= ?';
+        stockParams.push(startDate);
+    }
+
     if (requiredStockSymbols.length > 0) {
-        const p1 = requiredStockSymbols.map(() => '?').join(',');
-        promises.push(d1Client.query(`SELECT symbol, date, price FROM price_history WHERE symbol IN (${p1})`, requiredStockSymbols));
-        promises.push(d1Client.query(`SELECT symbol, date, dividend FROM dividend_history WHERE symbol IN (${p1})`, requiredStockSymbols));
+        promises.push(d1Client.query(stockPriceQuery, stockParams));
+        promises.push(d1Client.query(dividendQuery, stockParams));
     } else {
         promises.push(Promise.resolve([]), Promise.resolve([]));
     }
 
+    const fxParams = [...requiredFxSymbols];
+    let fxQuery = `SELECT symbol, date, price FROM exchange_rates WHERE symbol IN (${requiredFxSymbols.map(() => '?').join(',')})`;
+    if (startDate) {
+        fxQuery += ' AND date >= ?';
+        fxParams.push(startDate);
+    }
+
     if (requiredFxSymbols.length > 0) {
-        const p2 = requiredFxSymbols.map(() => '?').join(',');
-        promises.push(d1Client.query(`SELECT symbol, date, price FROM exchange_rates WHERE symbol IN (${p2})`, requiredFxSymbols));
+        promises.push(d1Client.query(fxQuery, fxParams));
     } else {
         promises.push(Promise.resolve([]));
     }
+    // --- 優化結束 ---
 
     const [stockPricesFlat, stockDividendsFlat, fxRatesFlat] = await Promise.all(promises);
     const allSymbols = [...requiredStockSymbols, ...requiredFxSymbols];
