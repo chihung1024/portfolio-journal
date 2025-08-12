@@ -138,17 +138,22 @@ function dailyValue(state, market, date, allEvts) {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
 
-        if (qty < 1e-9) continue;
+        if (qty < 1e-9) {
+            continue; // 如果持股為 0，跳過此股票
+        }
 
-        // 1. 使用增強後的 findNearest 獲取價格和它對應的日期
+        // 1. 使用增強後的 findNearest 獲取價格物件 {date, value}
         const priceInfo = findNearest(market[sym]?.prices, date);
 
         // 如果連歷史價格都找不到，則此資產價值為0，直接跳過
-        if (!priceInfo) continue;
+        if (!priceInfo) {
+            continue;
+        }
         
+        // 2. 解構出價格和價格對應的日期
         const { date: priceDate, value: price } = priceInfo;
 
-        // 2. 使用找到的價格和「價格對應的日期(priceDate)」進行後續計算
+        // 3. 使用找到的價格和「價格對應的日期(priceDate)」進行後續計算
         const futureSplits = allEvts.filter(e => 
             e.eventType === 'split' && 
             e.symbol.toUpperCase() === sym.toUpperCase() && 
@@ -157,6 +162,7 @@ function dailyValue(state, market, date, allEvts) {
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
+        // 使用價格對應的日期(priceDate)來尋找匯率，確保數據一致
         const fx = findFxRate(market, s.currency, priceDate);
 
         totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
