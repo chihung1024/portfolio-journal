@@ -191,9 +191,10 @@ function calculateDailyCashflows(evts, market) {
     }, {});
 }
 
-function calculateCoreMetrics(evts, market) {
+(evts, market) {
     const pf = {};
     let totalRealizedPL = 0;
+    let totalBuyCostTWD = 0; // 【新增】一個專門的變數來累計總買入成本
 
     for (const e of evts) {
         const sym = e.symbol.toUpperCase();
@@ -207,10 +208,12 @@ function calculateCoreMetrics(evts, market) {
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
                 
                 if (e.type === "buy") {
+                    const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+                    totalBuyCostTWD += buyCostTWD; // 【新增】累加總買入成本
+
                     let buyQty = e.quantity;
-                    const buyPricePerShareTWD = (getTotalCost(e) / (e.quantity || 1)) * (e.currency === "TWD" ? 1 : fx);
+                    const buyPricePerShareTWD = buyCostTWD / (e.quantity || 1);
                     
-                    // 優先補回空頭
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (buyQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity < 0) {
                         const shortLot = pf[sym].lots[0];
@@ -243,7 +246,6 @@ function calculateCoreMetrics(evts, market) {
                     let sellQty = e.quantity;
                     const sellPricePerShareTWD = (getTotalCost(e) / (e.quantity || 1)) * (e.currency === "TWD" ? 1 : fx);
 
-                    // 優先賣出多頭
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (sellQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity > 0) {
                         const longLot = pf[sym].lots[0];
@@ -275,6 +277,7 @@ function calculateCoreMetrics(evts, market) {
                 }
                 break;
             }
+            // ... (其他 case: split, dividend 等保持不變) ...
              case "split": {
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
@@ -284,15 +287,14 @@ function calculateCoreMetrics(evts, market) {
                 break;
             }
             case "confirmed_dividend": {
-                // 對於空頭倉位，支付股利是虧損
                 const currentQty = pf[sym].lots.reduce((s, l) => s + l.quantity, 0);
                 const fx = findFxRate(market, e.currency, toDate(e.date));
                 const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
                 
-                if (currentQty >= 0) { // 多頭或持平倉位收到股利
+                if (currentQty >= 0) {
                     totalRealizedPL += divTWD;
                     pf[sym].realizedPLTWD += divTWD;
-                } else { // 空頭倉位支付股利
+                } else {
                     totalRealizedPL -= divTWD;
                     pf[sym].realizedPLTWD -= divTWD;
                 }
@@ -301,13 +303,13 @@ function calculateCoreMetrics(evts, market) {
             case "implicit_dividend": {
                 const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
                 const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
-                if (shares < -1e-9) { // 空頭倉位支付股利
+                if (shares < -1e-9) {
                      const currency = stateOnDate[sym]?.currency || 'USD';
                      const fx = findFxRate(market, currency, toDate(e.date));
                      const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * Math.abs(shares) * (currency === "TWD" ? 1 : fx);
                      totalRealizedPL -= divTWD;
                      pf[sym].realizedPLTWD -= divTWD;
-                } else if (shares > 1e-9) { // 多頭倉位收到股利
+                } else if (shares > 1e-9) {
                     const currency = stateOnDate[sym]?.currency || 'USD';
                     const fx = findFxRate(market, currency, toDate(e.date));
                     const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx);
@@ -323,18 +325,20 @@ function calculateCoreMetrics(evts, market) {
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
 
+    // =======================================================
+    // == 【核心修正】採用新的總報酬率計算方式 ==
+    // =======================================================
     const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
-    const totalReturnValue = totalRealizedPL + Object.values(holdingsToUpdate).reduce((s, h) => s + (h.unrealizedPLTWD || 0), 0);
-    // 總投資成本的計算邏輯保持不變，因為成本計算已在 FIFO 中處理
-    const realizedCostTWD = Object.values(pf).reduce((sum, p) => p.lots.filter(l => l.quantity > 0).reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0) , 0)
-    const totalInvestedCost = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.totalCostTWD, 0) + realizedCostTWD;
+    
+    // 總損益 = 已實現損益 + 未實現損益 (分子)
+    const totalProfitAndLoss = totalRealizedPL + totalUnrealizedPL;
+    
+    // 總投入成本 = 所有歷史買入交易的成本總和 (分母)
+    const totalInvestedCost = totalBuyCostTWD;
 
-
-    // 重新思考報酬率計算
-    const totalCurrentValue = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.marketValueTWD, 0);
-    const totalNetProfit = totalCurrentValue + totalRealizedPL - totalInvestedCost;
-    const overallReturnRate = totalInvestedCost > 0 ? (totalNetProfit / totalInvestedCost) * 100 : 0;
-
+    // 總報酬率 = 總損益 / 總投入成本
+    const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
+    // =======================================================
 
     return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
 }
