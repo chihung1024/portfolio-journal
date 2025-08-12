@@ -14,7 +14,7 @@ const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
 async function fetchAndSaveMarketDataRange(symbol, startDate, endDate) {
     try {
         const hist = await yahooFinance.chart(symbol, { period1: startDate, period2: endDate, interval: '1d', autoAdjust: false, backAdjust: false });
-        if (!hist || hist.length === 0) return [];
+        if (!Array.isArray(hist) || hist.length === 0) return [];
 
         const dbOps = [];
         const tableName = symbol.includes("=") ? "exchange_rates" : "price_history";
