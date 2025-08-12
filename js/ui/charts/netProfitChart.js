@@ -56,11 +56,10 @@ export function updateNetProfitChart() {
 
     const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
     
-    // 【修正】恢復歸零化(Rebasing)邏輯，以顯示區間內的利潤變化
-    const baseValue = sortedEntries[0][1];
+    // 【修正】移除歸零化(Rebasing)邏輯，直接使用後端計算出的絕對值繪圖
     const chartData = sortedEntries.map(([date, value]) => [
         new Date(date).getTime(),
-        value - baseValue
+        value
     ]);
 
     netProfitChart.updateSeries([{ data: chartData }]);
