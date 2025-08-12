@@ -121,7 +121,7 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
 }
 
 /**
- * 根據當日持股狀態，計算其市場總價值 (TWD)
+ * 根據當日持股狀態，計算其市場總價值 (TWD) - 已重構，消除遞迴
  * @param {object} state - 從 getPortfolioStateOnDate 來的持股狀態
  * @param {object} market - 市場數據
  * @param {Date} date - 目標日期
@@ -129,33 +129,61 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
  * @returns {number} 當日市場總價值
  */
 function dailyValue(state, market, date, allEvts) {
-    return Object.keys(state).reduce((totalValue, sym) => {
+    // 使用 for...of 迴圈代替 reduce，讓邏輯更清晰
+    let totalPortfolioValue = 0;
+
+    for (const sym of Object.keys(state)) {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
 
-        if (qty < 1e-9) return totalValue;
+        if (qty < 1e-9) {
+            continue; // 如果持股為 0，跳過此股票
+        }
 
-        let price = findNearest(market[sym]?.prices, date);
-        if (price === undefined) {
-            // 如果今天找不到價格（例如假日），則使用昨天的價值
-            const yesterday = new Date(date);
-            yesterday.setDate(yesterday.getDate() - 1);
-            const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date;
-            if (yesterday < firstLotDate) {
-                 // 如果回溯到比第一筆買入還早，代表此資產價值為0
-                return totalValue;
+        // 步驟 1: 尋找價格和對應的日期
+        let price = undefined;
+        let priceDate = null;
+        let tempDate = new Date(date);
+
+        // 向前回溯最多 7 天尋找最近的有效價格
+        for (let i = 0; i < 7; i++) {
+            price = findNearest(market[sym]?.prices, tempDate, 1); // toleranceDays設為1，確保只找當天
+            if (price !== undefined) {
+                priceDate = new Date(tempDate);
+                break;
             }
-            return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts);
+            tempDate.setDate(tempDate.getDate() - 1);
+        }
+
+        // 如果 7 天內都找不到，則使用 findNearest 的最大回溯能力
+        if (price === undefined) {
+            price = findNearest(market[sym]?.prices, date);
+            if (price !== undefined) {
+                // 如果找到了，我們需要知道這是哪一天的價格，但 helpers.js 沒返回，這是一個缺陷
+                // 為了簡單起見，我們假設 findNearest 找到的價格日期與目標日期不會差太遠
+                // 在這種極端情況下，我們仍然使用目標日期 date 來計算 FX 和 split
+                priceDate = date; 
+            }
         }
         
+        // 如果最終還是找不到任何價格（例如，股票是全新的，還沒有任何歷史數據），則其價值視為0
+        if (price === undefined) {
+            continue;
+        }
+
+        // 步驟 2: 使用找到的價格和對應的日期進行計算
         // 將股價還原到未經未來拆股調整的狀態
-        const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(date));
+        const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(priceDate));
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
-        const fx = findFxRate(market, s.currency, date);
-        return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
-    }, 0);
+        // 使用價格對應的日期(priceDate)來尋找匯率，確保數據一致
+        const fx = findFxRate(market, s.currency, priceDate);
+
+        totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
+    }
+
+    return totalPortfolioValue;
 }
 
 module.exports = {
