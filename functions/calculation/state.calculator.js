@@ -128,38 +128,34 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
  * @param {Array} allEvts - 所有事件列表 (用於處理未來拆股的股價還原)
  * @returns {number} 當日市場總價值
  */
-/**
- * 根據當日持股狀態，計算其市場總價值 (TWD) - 最終修正版
- */
 function dailyValue(state, market, date, allEvts) {
-    let totalPortfolioValue = 0;
-
-    for (const sym of Object.keys(state)) {
+    return Object.keys(state).reduce((totalValue, sym) => {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
 
-        if (qty < 1e-9) continue;
+        if (qty < 1e-9) return totalValue;
 
-        const priceInfo = findNearest(market[sym]?.prices, date);
-
-        if (!priceInfo) continue;
+        let price = findNearest(market[sym]?.prices, date);
+        if (price === undefined) {
+            // 如果今天找不到價格（例如假日），則使用昨天的價值
+            const yesterday = new Date(date);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const firstLotDate = s.lots.length > 0 ? toDate(s.lots[0].date) : date;
+            if (yesterday < firstLotDate) {
+                 // 如果回溯到比第一筆買入還早，代表此資產價值為0
+                return totalValue;
+            }
+            return totalValue + dailyValue({ [sym]: s }, market, yesterday, allEvts);
+        }
         
-        const { date: priceDate, value: price } = priceInfo;
-
-        const futureSplits = allEvts.filter(e => 
-            e.eventType === 'split' && 
-            e.symbol.toUpperCase() === sym.toUpperCase() && 
-            toDate(e.date) > toDate(priceDate)
-        );
+        // 將股價還原到未經未來拆股調整的狀態
+        const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > toDate(date));
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
-        const fx = findFxRate(market, s.currency, priceDate);
-
-        totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
-    }
-
-    return totalPortfolioValue;
+        const fx = findFxRate(market, s.currency, date);
+        return totalValue + (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
+    }, 0);
 }
 
 module.exports = {
