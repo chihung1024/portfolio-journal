@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - FINAL VERSION
+// == 核心指標計算模組 (metrics.calculator.js) - FINAL & COMPLETE VERSION
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -60,7 +60,6 @@ function calculateFinalHoldings(pf, market, allEvts) {
         const h = pf[sym];
         const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
 
-        // 【修改點】只要數量不為零（無論正負），就進行計算
         if (Math.abs(qty) > 1e-9) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
@@ -73,7 +72,6 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > today);
             const unadjustedPrice = (curPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
-            // 【修改點】市值計算。如果 qty 是負數，市值也會是負數，代表負債
             const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx);
 
             holdingsToUpdate[sym] = {
@@ -86,7 +84,6 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 marketValueTWD: mktVal,
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
-                // 【修改點】報酬率計算。對於空頭，成本是負數
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0
             };
         }
@@ -123,7 +120,7 @@ function createCashflowsForXirr(evts, holdings, market) {
     });
 
     const totalMarketValue = Object.values(holdings).reduce((s, h) => s + h.marketValueTWD, 0);
-    if (totalMarketValue > 0) {
+    if (Math.abs(totalMarketValue) > 0) { // Support negative total market value for short positions
         flows.push({ date: new Date(), amount: totalMarketValue });
     }
 
@@ -191,10 +188,10 @@ function calculateDailyCashflows(evts, market) {
     }, {});
 }
 
-(evts, market) {
+function calculateCoreMetrics(evts, market) {
     const pf = {};
     let totalRealizedPL = 0;
-    let totalBuyCostTWD = 0; // 【新增】一個專門的變數來累計總買入成本
+    let totalBuyCostTWD = 0; 
 
     for (const e of evts) {
         const sym = e.symbol.toUpperCase();
@@ -209,7 +206,7 @@ function calculateDailyCashflows(evts, market) {
                 
                 if (e.type === "buy") {
                     const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
-                    totalBuyCostTWD += buyCostTWD; // 【新增】累加總買入成本
+                    totalBuyCostTWD += buyCostTWD; 
 
                     let buyQty = e.quantity;
                     const buyPricePerShareTWD = buyCostTWD / (e.quantity || 1);
@@ -277,8 +274,7 @@ function calculateDailyCashflows(evts, market) {
                 }
                 break;
             }
-            // ... (其他 case: split, dividend 等保持不變) ...
-             case "split": {
+            case "split": {
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
                     l.pricePerShareTWD /= e.ratio;
@@ -325,24 +321,21 @@ function calculateDailyCashflows(evts, market) {
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
 
-    // =======================================================
-    // == 【核心修正】採用新的總報酬率計算方式 ==
-    // =======================================================
     const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
-    
-    // 總損益 = 已實現損益 + 未實現損益 (分子)
     const totalProfitAndLoss = totalRealizedPL + totalUnrealizedPL;
-    
-    // 總投入成本 = 所有歷史買入交易的成本總和 (分母)
     const totalInvestedCost = totalBuyCostTWD;
 
-    // 總報酬率 = 總損益 / 總投入成本
+    console.log("============== Return Rate Calculation Debug ==============");
+    console.log(`Total P/L (Numerator): ${totalProfitAndLoss.toFixed(2)} (Realized: ${totalRealizedPL.toFixed(2)}, Unrealized: ${totalUnrealizedPL.toFixed(2)})`);
+    console.log(`Total Invested Cost (Denominator): ${totalInvestedCost.toFixed(2)}`);
+    
     const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
-    // =======================================================
+    
+    console.log(`Calculated Overall Return Rate: ${overallReturnRate.toFixed(2)}%`);
+    console.log("==========================================================");
 
     return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
 }
-
 
 module.exports = {
     calculateTwrHistory,
