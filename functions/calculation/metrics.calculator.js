@@ -22,7 +22,13 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     
     const benchmarkCurrency = isTwStock(upperBenchmarkSymbol) ? "TWD" : "USD";
     const startFxRate = findFxRate(market, benchmarkCurrency, startDate);
-    const benchmarkStartPriceOriginal = findNearest(benchmarkPrices, startDate);
+    
+    const benchmarkStartPriceInfo = findNearest(benchmarkPrices, startDate);
+    if (!benchmarkStartPriceInfo) {
+        log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
+        return { twrHistory: {}, benchmarkHistory: {} };
+    }
+    const benchmarkStartPriceOriginal = benchmarkStartPriceInfo.value;
 
     if (!benchmarkStartPriceOriginal) {
         log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
@@ -46,8 +52,9 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
         lastMarketValue = MVE;
 
-        const currentBenchPriceOriginal = findNearest(benchmarkPrices, new Date(dateStr));
-        if (currentBenchPriceOriginal && benchmarkStartPriceTWD > 0) {
+        const currentBenchPriceInfo = findNearest(benchmarkPrices, new Date(dateStr));
+        if (currentBenchPriceInfo) {
+            const currentBenchPriceOriginal = currentBenchPriceInfo.value;
             const currentFxRate = findFxRate(market, benchmarkCurrency, new Date(dateStr));
             benchmarkHistory[dateStr] = ((currentBenchPriceOriginal * currentFxRate / benchmarkStartPriceTWD) - 1) * 100;
         }
