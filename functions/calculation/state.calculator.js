@@ -67,29 +67,59 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
         if (!state[sym]) {
             state[sym] = { lots: [], currency: e.currency || "USD" };
         }
+        state[sym].currency = e.currency;
 
         if (e.eventType === 'transaction') {
-            state[sym].currency = e.currency;
+            const fx = findFxRate(market, e.currency, toDate(e.date));
+            const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+
             if (e.type === 'buy') {
-                const fx = findFxRate(market, e.currency, toDate(e.date));
-                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
-                state[sym].lots.push({
-                    quantity: e.quantity,
-                    pricePerShareTWD: costTWD / (e.quantity || 1),
-                    pricePerShareOriginal: e.price,
-                    date: toDate(e.date)
-                });
+                let buyQty = e.quantity;
+                // 優先用買入來補回空頭倉位
+                state[sym].lots.sort((a, b) => a.date - b.date); // 確保按時間順序補回
+                while (buyQty > 0 && state[sym].lots.length > 0 && state[sym].lots[0].quantity < 0) {
+                    const shortLot = state[sym].lots[0];
+                    const qtyToCover = Math.min(buyQty, -shortLot.quantity);
+                    
+                    shortLot.quantity += qtyToCover;
+                    buyQty -= qtyToCover;
+
+                    if (Math.abs(shortLot.quantity) < 1e-9) {
+                        state[sym].lots.shift();
+                    }
+                }
+                // 如果還有剩餘的買入數量，則建立新的多頭倉位
+                if (buyQty > 1e-9) {
+                    state[sym].lots.push({
+                        quantity: buyQty,
+                        pricePerShareTWD: costTWD / (e.quantity || 1), // 成本以原始交易計算
+                        pricePerShareOriginal: e.price,
+                        date: toDate(e.date)
+                    });
+                }
             } else { // sell
                 let sellQty = e.quantity;
-                while (sellQty > 0 && state[sym].lots.length > 0) {
-                    const lot = state[sym].lots[0];
-                    if (lot.quantity <= sellQty) {
-                        sellQty -= lot.quantity;
+                // 優先賣出現有的多頭倉位
+                state[sym].lots.sort((a, b) => a.date - b.date); // 確保按 FIFO 賣出
+                while (sellQty > 0 && state[sym].lots.length > 0 && state[sym].lots[0].quantity > 0) {
+                    const longLot = state[sym].lots[0];
+                    const qtyToSell = Math.min(sellQty, longLot.quantity);
+                    
+                    longLot.quantity -= qtyToSell;
+                    sellQty -= qtyToSell;
+
+                    if (longLot.quantity < 1e-9) {
                         state[sym].lots.shift();
-                    } else {
-                        lot.quantity -= sellQty;
-                        sellQty = 0;
                     }
+                }
+                // 如果還有剩餘的賣出數量，則建立新的空頭倉位
+                if (sellQty > 1e-9) {
+                    state[sym].lots.push({
+                        quantity: -sellQty, // 數量為負
+                        pricePerShareTWD: costTWD / (e.quantity || 1), // 這裡記錄的是賣出收入
+                        pricePerShareOriginal: e.price,
+                        date: toDate(e.date)
+                    });
                 }
             }
         } else if (e.eventType === 'split') {
