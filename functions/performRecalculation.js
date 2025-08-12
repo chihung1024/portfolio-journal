@@ -98,18 +98,60 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const allRequiredSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase()])].filter(Boolean);
         const firstTxDateStr = txs[0].date.split('T')[0];
 
-        // 步驟 5: 【即時補缺】為所有需要的股票，確保其歷史數據「覆蓋度」足夠
+        // 步驟 5: 決定計算的起始點 (快照邏輯) - REVISED AND FIXED
+        const firstTxDate = toDate(firstTxDateStr);
+        let calculationStartDate = firstTxDate;
+        let oldHistory = {};
+        let latestSnapshot = null;
+
+        if (modifiedTxDate) {
+            // A transaction was modified. We need to invalidate future snapshots and find the last valid one.
+            console.log(`[${uid}] 交易在 ${modifiedTxDate} 被修改，正在尋找此日期前的最新快照...`);
+            
+            const latestValidSnapshotResult = await d1Client.query(
+                'SELECT * FROM portfolio_snapshots WHERE uid = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1', 
+                [uid, modifiedTxDate]
+            );
+            latestSnapshot = latestValidSnapshotResult[0];
+
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
+            if(latestSnapshot) {
+                console.log(`[${uid}] 找到並將使用 ${latestSnapshot.snapshot_date} 的快照。之後的無效快照已被清除。`);
+            } else {
+                console.log(`[${uid}] 未找到修改日期前的快照，將從頭計算。之後的無效快照已被清除。`);
+            }
+
+        } else {
+            const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
+            latestSnapshot = latestSnapshotResult[0];
+        }
+
+        if (latestSnapshot) {
+            const snapshotDate = toDate(latestSnapshot.snapshot_date);
+            if (summaryResult[0] && summaryResult[0].history) {
+                oldHistory = JSON.parse(summaryResult[0].history);
+                Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
+            }
+            const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
+            calculationStartDate = nextDay;
+            console.log(`[${uid}] 將從快照點 ${latestSnapshot.snapshot_date} 之後開始混合計算。`);
+        } else {
+            console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
+        }
+
+        // 步驟 6: 【即時補缺】為所有需要的股票，確保其歷史數據「覆蓋度」足夠
         console.log(`[${uid}] 確保數據覆蓋度至 ${firstTxDateStr}...`);
         await Promise.all(allRequiredSymbols.map(symbol => 
             dataProvider.ensureDataCoverage(symbol, firstTxDateStr)
         ));
         console.log(`[${uid}] 數據覆蓋度檢查與補缺完成。`);
 
-        // 步驟 6: 從資料庫讀取市場數據（此時已包含所有深度足夠的歷史數據）
-        console.log(`[${uid}] 從資料庫讀取市場數據...`);
-        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
+        // 步驟 7: 從資料庫讀取市場數據（現在只讀取必要範圍）
+        const calculationStartDateStr = calculationStartDate.toISOString().split('T')[0];
+        console.log(`[${uid}] 從資料庫讀取市場數據 (從 ${calculationStartDateStr} 開始)...`);
+        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol, calculationStartDateStr);
         
-        // 步驟 7: 準備統一的事件列表，並按日期分組以備高效查找
+        // 步驟 8: 準備統一的事件列表，並按日期分組以備高效查找
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) {
             console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
@@ -121,51 +163,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             acc[dateStr].push(e);
             return acc;
         }, {});
-
-        // 步驟 8: 決定計算的起始點 (快照邏輯) - REVISED AND FIXED
-        let calculationStartDate = firstBuyDate;
-        let oldHistory = {};
-        let latestSnapshot = null;
-
-        if (modifiedTxDate) {
-            // A transaction was modified. We need to invalidate future snapshots and find the last valid one.
-            console.log(`[${uid}] 交易在 ${modifiedTxDate} 被修改，正在尋找此日期前的最新快照...`);
-            
-            // First, find the last valid snapshot BEFORE the change.
-            const latestValidSnapshotResult = await d1Client.query(
-                'SELECT * FROM portfolio_snapshots WHERE uid = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1', 
-                [uid, modifiedTxDate]
-            );
-            latestSnapshot = latestValidSnapshotResult[0];
-
-            // Then, delete all snapshots from the modification date onwards, as they are now invalid.
-            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
-            if(latestSnapshot) {
-                console.log(`[${uid}] 找到並將使用 ${latestSnapshot.snapshot_date} 的快照。之後的無效快照已被清除。`);
-            } else {
-                console.log(`[${uid}] 未找到修改日期前的快照，將從頭計算。之後的無效快照已被清除。`);
-            }
-
-        } else {
-            // No specific transaction was modified, so just get the absolute latest snapshot.
-            // This path is used by the weekend job or other full recalculations.
-            const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-            latestSnapshot = latestSnapshotResult[0];
-        }
-
-        if (latestSnapshot) {
-            const snapshotDate = toDate(latestSnapshot.snapshot_date);
-            if (summaryResult[0] && summaryResult[0].history) {
-                oldHistory = JSON.parse(summaryResult[0].history);
-                // Prune the history JSON to only include dates up to the snapshot date
-                Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
-            }
-            const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
-            calculationStartDate = nextDay;
-            console.log(`[${uid}] 將從快照點 ${latestSnapshot.snapshot_date} 之後開始混合計算。`);
-        } else {
-            console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
-        }
 
         // 步驟 9: 【核心效能優化】採用事件驅動的狀態推進模型
         console.log(`[${uid}] 執行高效的每日價值計算...`);
