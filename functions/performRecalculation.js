@@ -26,7 +26,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
         ]);
 
-        await dataProvider.calculateAndCachePendingDividends(uid, txs, userDividends);
+        await calculateAndCachePendingDividends(uid, txs, userDividends);
 
         if (txs.length === 0) {
             // 清理該使用者的所有數據
