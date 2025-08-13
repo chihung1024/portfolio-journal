@@ -8,6 +8,47 @@ const { toDate, isTwStock } = require('./calculation/helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
 
+// =========================================================================================
+// == 新增函式：backfillMissingSnapshots
+// == 職責：檢查並補齊從計算起點到現在，所有遺失的「週六」快照。
+// =========================================================================================
+async function backfillMissingSnapshots(uid, newFullHistory, evts, market) {
+    // Cloudflare D1 (SQLite) 中，'6' 代表週六
+    const SATURDAY_WEEKDAY_INDEX = '6';
+
+    console.log(`[${uid}] 開始檢查並回補遺失的週六快照...`);
+    
+    const snapshotOps = [];
+    const existingSnapshotsResult = await d1Client.query('SELECT date FROM portfolio_snapshots WHERE uid = ?', [uid]);
+    const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.date.split('T')[0]));
+    
+    const sortedHistoryDates = Object.keys(newFullHistory).sort();
+
+    for (const dateStr of sortedHistoryDates) {
+        const currentDate = new Date(dateStr);
+        // 檢查這一天是否為週六 (getUTCDay() 中 6 代表週六)
+        if (currentDate.getUTCDay() === 6) {
+            // 並且資料庫中尚無此天的快照
+            if (!existingSnapshotDates.has(dateStr)) {
+                const finalState = getPortfolioStateOnDate(evts, currentDate, market);
+                const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
+                
+                snapshotOps.push({
+                    sql: `INSERT INTO portfolio_snapshots (uid, date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+                    params: [uid, dateStr, newFullHistory[dateStr], totalCost]
+                });
+            }
+        }
+    }
+
+    if (snapshotOps.length > 0) {
+        await d1Client.batch(snapshotOps);
+        console.log(`[${uid}] 成功回補了 ${snapshotOps.length} 筆遺失的週六快照。`);
+    } else {
+        console.log(`[${uid}] 快照鏈完整，無需回補。`);
+    }
+}
+
 
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
