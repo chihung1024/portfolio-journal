@@ -110,9 +110,20 @@ def fetch_and_append_market_data(symbols):
             latest_date_str = result[0]['latest_date'].split('T')[0]
         
         if not latest_date_str:
-            print(f"警告: 在 {price_table} 中找不到 {symbol} 的任何紀錄，將從 2000-01-01 開始抓取。")
-            start_date = "2000-01-01"
+            # 如果價格歷史中沒有紀錄，則查詢交易紀錄中的最早日期
+            print(f"資訊: 在 {price_table} 中找不到 {symbol} 的任何紀錄，正在查詢首次交易日期...")
+            first_tx_sql = "SELECT MIN(date) as first_tx_date FROM transactions WHERE symbol = ?"
+            tx_result = d1_query(first_tx_sql, [symbol])
+            
+            if tx_result and tx_result[0].get('first_tx_date'):
+                start_date = tx_result[0]['first_tx_date'].split('T')[0]
+                print(f"找到 {symbol} 的首次交易日期: {start_date}，將從此日期開始抓取。")
+            else:
+                # 如果連交易紀錄都沒有（例如純 Benchmark），則使用終極預設值
+                start_date = "2000-01-01"
+                print(f"警告: 在 transactions 中也找不到 {symbol} 的紀錄，將從 {start_date} 開始抓取。")
         else:
+            # 維持原有的增量更新邏輯
             if latest_date_str == today_str:
                 start_date = today_str
                 print(f"{symbol} 今日已有數據，準備重新抓取以更新...")
