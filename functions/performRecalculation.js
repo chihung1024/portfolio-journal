@@ -1,71 +1,23 @@
 // =========================================================================================
-// == 主重算流程調度器 (performRecalculation.js) - FINAL VERSION
+// == 檔案：functions/performRecalculation.js (完整版 - 精準週六快照策略)
+// == 職責：被背景任務 worker 呼叫，執行完整的重算、指標分析與快照維護。
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
 const dataProvider = require('./calculation/data.provider');
-const { toDate, isTwStock } = require('./calculation/helpers');
+const { toDate } = require('./calculation/helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
 
+// Cloudflare D1 (SQLite) 中，'6' 代表週六
+const SATURDAY_WEEKDAY_INDEX = '6';
 
-async function calculateAndCachePendingDividends(uid, txs, userDividends) {
-    console.log(`[${uid}] 開始計算並快取待確認股息...`);
-    await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
-    if (!txs || txs.length === 0) {
-        console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
-        return;
-    }
-    const allMarketDividends = await d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC');
-    if (!allMarketDividends || allMarketDividends.length === 0) {
-        console.log(`[${uid}] 無市場股息資料，無需快取。`);
-        return;
-    }
-    const confirmedKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-    const holdings = {};
-    let txIndex = 0;
-    const pendingDividends = [];
-    const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-
-    allMarketDividends.forEach(histDiv => {
-        const divSymbol = histDiv.symbol.toUpperCase();
-        if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
-        const exDateStr = histDiv.date.split('T')[0];
-        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
-        const exDateMinusOne = new Date(exDateStr);
-        exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-        while (txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
-            const tx = txs[txIndex];
-            holdings[tx.symbol.toUpperCase()] = (holdings[tx.symbol.toUpperCase()] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
-            txIndex++;
-        }
-        const quantity = holdings[divSymbol] || 0;
-        if (quantity > 0) {
-            const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
-            pendingDividends.push({
-                symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend,
-                quantity_at_ex_date: quantity, currency: currency
-            });
-        }
-    });
-
-    if (pendingDividends.length > 0) {
-        const dbOps = pendingDividends.map(p => ({
-            sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
-            params: [uid, p.symbol, p.ex_dividend_date, p.amount_per_share, p.quantity_at_ex_date, p.currency]
-        }));
-        await d1Client.batch(dbOps);
-    }
-    console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
-}
-
-
-/**
- * 主計算函式 (已修正數據流順序的最終版本)
- */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 重新計算程序開始 (v_final - Correct Order) ---`);
+    console.log(`--- [${uid}] 背景重算程序開始 (週六快照策略) ---`);
+    console.log(`--- 修改日期: ${modifiedTxDate}, 強制快照: ${createSnapshot} ---`);
+
     try {
+        // 步驟 1: 獲取所有必要的原始數據
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -74,33 +26,25 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ?', [uid]),
         ]);
 
-        await calculateAndCachePendingDividends(uid, txs, userDividends);
+        await dataProvider.calculateAndCachePendingDividends(uid, txs, userDividends);
 
         if (txs.length === 0) {
+            // 清理該使用者的所有數據
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
             ]);
+            console.log(`[${uid}] 使用者無交易紀錄，已清理所有相關資料。`);
             return;
         }
 
+        // 步驟 2: 準備市場數據
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-        const symbolsInPortfolio = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-        const currencies = [...new Set(txs.map(t => t.currency))].filter(c => c !== "TWD");
-        const requiredFxSymbols = currencies.map(c => ({ "USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X" }[c])).filter(Boolean);
-        const allRequiredSymbols = [...new Set([...symbolsInPortfolio, benchmarkSymbol.toUpperCase(), ...requiredFxSymbols])].filter(Boolean);
+        const market = await dataProvider.getMarketDataForDb(txs, benchmarkSymbol);
 
-        console.log(`[${uid}] 確保市場數據新鮮度與覆蓋範圍...`);
-        await dataProvider.ensureDataFreshness(allRequiredSymbols);
-        const firstTxDateStr = txs[0].date.split('T')[0];
-        await Promise.all(allRequiredSymbols.map(symbol => dataProvider.ensureDataCoverage(symbol, firstTxDateStr)));
-        console.log(`[${uid}] 市場數據準備完畢。`);
-
-        console.log(`[${uid}] 從資料庫讀取市場數據...`);
-        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
-        
+        // 步驟 3: 準備事件流和計算邊界
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) {
             console.log(`[${uid}] 找不到首次交易日期，計算中止。`);
@@ -109,29 +53,43 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
-        const latestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-        let latestSnapshot = latestSnapshotResult[0];
-        if (latestSnapshot && modifiedTxDate && toDate(modifiedTxDate) <= toDate(latestSnapshot.snapshot_date)) {
-            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date >= ?', [uid, modifiedTxDate]);
-            const newLatestSnapshotResult = await d1Client.query('SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1', [uid]);
-            latestSnapshot = newLatestSnapshotResult[0];
-        }
-        if (latestSnapshot) {
-            const snapshotDate = toDate(latestSnapshot.snapshot_date);
+
+        // ========================【快照處理核心邏輯 - 開始】========================
+
+        const LATEST_SATURDAY_SNAPSHOT_SQL = modifiedTxDate
+            ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND strftime('%w', date) = ? AND date < ? ORDER BY date DESC LIMIT 1`
+            : `SELECT * FROM portfolio_snapshots WHERE uid = ? AND strftime('%w', date) = ? ORDER BY date DESC LIMIT 1`;
+        
+        const params = modifiedTxDate ? [uid, SATURDAY_WEEKDAY_INDEX, modifiedTxDate] : [uid, SATURDAY_WEEKDAY_INDEX];
+        const latestValidSnapshotResult = await d1Client.query(LATEST_SATURDAY_SNAPSHOT_SQL, params);
+        const baseSnapshot = latestValidSnapshotResult[0];
+
+        if (baseSnapshot) {
+            console.log(`[${uid}] 找到基準快照: ${baseSnapshot.date} (週六)`);
+            
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND date > ?', [uid, baseSnapshot.date]);
+            console.log(`[${uid}] 已清理 ${baseSnapshot.date} 之後的所有快照。`);
+
             if (summaryResult[0] && summaryResult[0].history) {
                 oldHistory = JSON.parse(summaryResult[0].history);
+                const snapshotDate = toDate(baseSnapshot.date);
                 Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
             }
-            const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
+            const nextDay = new Date(baseSnapshot.date);
+            nextDay.setDate(nextDay.getDate() + 1);
             calculationStartDate = nextDay;
-            console.log(`[${uid}] 將從快照點 ${latestSnapshot.snapshot_date} 之後開始混合計算。`);
         } else {
-            console.log(`[${uid}] 找不到任何有效快照，將從頭開始完整計算。`);
+            console.log(`[${uid}] 找不到任何有效快照，將執行完整計算並清理所有舊快照。`);
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ?', [uid]);
         }
 
+        // ========================【快照處理核心邏輯 - 結束】========================
+        
+        // 步驟 4: 執行每日價值計算
         const partialHistory = {};
         let curDate = new Date(calculationStartDate);
         const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+
         if (curDate <= today) {
             console.log(`[${uid}] 執行每日價值計算: ${curDate.toISOString().split('T')[0]} -> 今天`);
             while (curDate <= today) {
@@ -142,34 +100,57 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
         const newFullHistory = { ...oldHistory, ...partialHistory };
 
+        // 步驟 5: 計算所有核心指標
         const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
         const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
         const portfolioResult = metrics.calculateCoreMetrics(evts, market);
+        const netProfitHistory = metrics.calculateNetProfitHistory(newFullHistory, dailyCashflows);
 
-        const netProfitHistory = {};
-        let cumulativeCashflow = 0;
-        Object.keys(newFullHistory).sort().forEach(dateStr => {
-            cumulativeCashflow += (dailyCashflows[dateStr] || 0);
-            netProfitHistory[dateStr] = newFullHistory[dateStr] - cumulativeCashflow;
-        });
+        // ========================【快照回補核心邏輯 - 開始】========================
 
-        if (createSnapshot) {
-            const lastDate = Object.keys(newFullHistory).pop();
-            if (lastDate) {
-                const finalState = getPortfolioStateOnDate(evts, new Date(lastDate), market);
+        // 檢查並回補遺失的週六快照
+        const snapshotOps = [];
+        const existingSnapshotsResult = await d1Client.query('SELECT date FROM portfolio_snapshots WHERE uid = ?', [uid]);
+        const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.date));
+        
+        const sortedHistoryDates = Object.keys(newFullHistory).sort();
+        
+        for (const dateStr of sortedHistoryDates) {
+            const currentDate = new Date(dateStr);
+            if (currentDate.getUTCDay() === 6 && !existingSnapshotDates.has(dateStr)) {
+                const finalState = getPortfolioStateOnDate(evts, currentDate, market);
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
-                await d1Client.query(
-                    `INSERT OR REPLACE INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
-                    [uid, lastDate, newFullHistory[lastDate], totalCost]
-                );
-                console.log(`[${uid}] 已成功建立 ${lastDate} 的快照。`);
+                
+                snapshotOps.push({
+                    sql: `INSERT INTO portfolio_snapshots (uid, date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+                    params: [uid, dateStr, newFullHistory[dateStr], totalCost]
+                });
             }
         }
         
+        // 如果週末校驗腳本觸發，也建立當天的快照
+        const lastDateStr = sortedHistoryDates.pop();
+        if (createSnapshot && lastDateStr && !existingSnapshotDates.has(lastDateStr)) {
+            const finalState = getPortfolioStateOnDate(evts, new Date(lastDateStr), market);
+            const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
+            snapshotOps.push({
+                sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+                params: [uid, lastDateStr, newFullHistory[lastDateStr], totalCost]
+            });
+        }
+        
+        if (snapshotOps.length > 0) {
+            await d1Client.batch(snapshotOps);
+            console.log(`[${uid}] 成功回補或建立了 ${snapshotOps.length} 筆快照。`);
+        }
+
+        // ========================【快照回補核心邏輯 - 結束】========================
+
+        // 步驟 6: 將最終計算結果寫入資料庫
         const { holdingsToUpdate } = portfolioResult.holdings;
-        const dbOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
+        const holdingsOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
         Object.values(holdingsToUpdate).forEach(h => {
-            dbOps.push({
+            holdingsOps.push({
                 sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
                 params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
             });
@@ -189,15 +170,16 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             }
         ];
         
+        // 分批執行資料庫操作以防超出限制
         await d1Client.batch(summaryOps);
         const BATCH_SIZE = 900;
-        for (let i = 0; i < dbOps.length; i += BATCH_SIZE) {
-            await d1Client.batch(dbOps.slice(i, i + BATCH_SIZE));
+        for (let i = 0; i < holdingsOps.length; i += BATCH_SIZE) {
+            await d1Client.batch(holdingsOps.slice(i, i + BATCH_SIZE));
         }
 
-        console.log(`--- [${uid}] 重新計算程序完成 ---`);
+        console.log(`--- [${uid}] 背景重算程序完成 ---`);
     } catch (e) {
-        console.error(`[${uid}] 計算期間發生嚴重錯誤：`, e);
+        console.error(`[${uid}] 背景計算期間發生嚴重錯誤：`, e);
         throw e;
     }
 }
