@@ -3,7 +3,7 @@
   "version": "2.7.0",
   "main": "index.js",
   "scripts": {
-    "start": "functions-framework --target=unifiedPortfolioHandler"
+    "start": "functions-framework"
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^3.0.0",
