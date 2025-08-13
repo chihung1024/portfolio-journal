@@ -27,7 +27,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, forceCreateL
         const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
         
         snapshotOps.push({
-            sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+            sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
             params: [uid, latestDateStr, newFullHistory[latestDateStr], totalCost]
         });
         existingSnapshotDates.add(latestDateStr);
@@ -41,7 +41,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, forceCreateL
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
                 
                 snapshotOps.push({
-                    sql: `INSERT INTO portfolio_snapshots (uid, date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
+                    sql: `INSERT INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
                     params: [uid, dateStr, newFullHistory[dateStr], totalCost]
                 });
             }
@@ -138,16 +138,16 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         let oldHistory = {};
 
         const LATEST_SNAPSHOT_SQL = modifiedTxDate
-            ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND date < ? ORDER BY date DESC LIMIT 1`
-            : `SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY date DESC LIMIT 1`;
+            ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
+            : `SELECT * FROM portfolio_snapshots WHERE uid = ? ORDER BY snapshot_date DESC LIMIT 1`;
         const params = modifiedTxDate ? [uid, modifiedTxDate] : [uid];
         const latestValidSnapshotResult = await d1Client.query(LATEST_SNAPSHOT_SQL, params);
         const baseSnapshot = latestValidSnapshotResult[0];
 
         if (baseSnapshot) {
-            console.log(`[${uid}] 找到基準快照: ${baseSnapshot.date}`);
-            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND date > ?', [uid, baseSnapshot.date]);
-            const snapshotDate = toDate(baseSnapshot.date);
+            console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}`);
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND snapshot_date > ?', [uid, baseSnapshot.snapshot_date]);
+            const snapshotDate = toDate(baseSnapshot.snapshot_date);
             if (summaryResult[0] && summaryResult[0].history) {
                 oldHistory = JSON.parse(summaryResult[0].history);
                 Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
