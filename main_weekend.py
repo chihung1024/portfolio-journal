@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v1.8 - 動態 Benchmark 策略版)
+# == Python 週末完整校驗腳本 (v2.0 - 動態全局起始日策略版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -16,6 +16,7 @@ GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
+    """執行 D1 查詢"""
     if params is None:
         params = []
     if not D1_WORKER_URL or not D1_API_KEY:
@@ -31,6 +32,7 @@ def d1_query(sql, params=None):
         return None
 
 def d1_batch(statements):
+    """執行 D1 批次操作"""
     if not D1_WORKER_URL or not D1_API_KEY:
         print("FATAL: Missing D1_WORKER_URL or D1_API_KEY environment variables.")
         return False
@@ -43,10 +45,9 @@ def d1_batch(statements):
         print(f"FATAL: D1 批次操作失敗: {e}")
         return False
 
-# 【修改點一】讓此函式額外回傳 benchmark_symbols 的集合
 def get_full_refresh_targets():
     """
-    從三個來源全面獲取需要更新的標的列表，並額外回傳一份所有 Benchmark 的清單。
+    全面獲取需要更新的標的列表、Benchmark 列表、使用者列表，以及全局最早的交易日期。
     """
     print("正在全面獲取所有需要完整刷新的金融商品列表...")
     
@@ -64,7 +65,7 @@ def get_full_refresh_targets():
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
 
-    # 2. 獲取所有用戶的 Benchmark，並加入到 all_symbols 和 benchmark_symbols
+    # 2. 獲取所有用戶的 Benchmark
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql)
     if benchmark_results:
@@ -81,16 +82,24 @@ def get_full_refresh_targets():
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
+    # 4. 【新增】獲取全域最早的交易日期
+    global_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
+    global_earliest_tx_date = None
+    if global_earliest_date_result and global_earliest_date_result[0].get('earliest_date'):
+        global_earliest_tx_date = global_earliest_date_result[0]['earliest_date'].split('T')[0]
+        print(f"找到全域最早的交易日期: {global_earliest_tx_date}")
+    else:
+        print("警告: 找不到任何交易紀錄，Benchmark 和匯率的歷史將不會被抓取。")
+
     print(f"找到 {len(targets)} 個需全面刷新的標的: {targets}")
     print(f"從資料庫找到 {len(benchmark_symbols)} 個 Benchmark: {benchmark_symbols}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
     
-    return targets, benchmark_symbols, uids
+    return targets, benchmark_symbols, uids, global_earliest_tx_date
 
-# 【修改點二】讓此函式接收 benchmark_symbols 集合
-def fetch_and_overwrite_market_data(targets, benchmark_symbols):
+def fetch_and_overwrite_market_data(targets, global_earliest_tx_date):
     """
-    (安全模式) 為每個標的抓取完整歷史數據，並根據其是否為 Benchmark 決定抓取策略。
+    (安全模式) 為每個標的抓取完整歷史數據，使用統一化的起始日期策略。
     """
     if not targets:
         print("沒有需要刷新的標的。")
@@ -102,28 +111,23 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols):
         if not symbol: continue
 
         is_fx = "=" in symbol
-        # 檢查此 symbol 是否為從資料庫中查到的 Benchmark 之一
-        is_benchmark = symbol in benchmark_symbols
-
-        if is_fx or is_benchmark:
-            # 策略 A: 對於匯率和 Benchmark，我們總是希望有長期的歷史數據
-            # 優先從 market_data_coverage 表中尋找已記錄的最早日期
-            start_date_from_db = d1_query("SELECT earliest_date FROM market_data_coverage WHERE symbol = ?", [symbol])
-            if start_date_from_db and start_date_from_db[0].get('earliest_date'):
-                 start_date = start_date_from_db[0]['earliest_date'].split('T')[0]
-                 print(f"資訊: {symbol} 是特殊標的，將從已記錄的最早日期 {start_date} 開始抓取。")
-            else:
-                 # 如果連 coverage 表都沒有，給一個非常早的預設值
-                 start_date = "2000-01-01" 
-                 print(f"資訊: {symbol} 是特殊標的，且無歷史記錄，將從預設值 {start_date} 開始抓取。")
+        
+        # --- 【邏輯修正核心 v2.0】---
+        start_date = None
+        
+        # 1. 優先從該標的自身的交易紀錄中查找最早的日期
+        symbol_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
+        if symbol_earliest_date_result and symbol_earliest_date_result[0].get('earliest_date'):
+            start_date = symbol_earliest_date_result[0]['earliest_date'].split('T')[0]
         else:
-            # 策略 B: 對於普通持股，維持原有邏輯，從首次交易日開始
-            start_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
-            if start_date_result and start_date_result[0].get('earliest_date'):
-                start_date = start_date_result[0]['earliest_date'].split('T')[0]
-            else:
-                # 如果普通持股也找不到交易日（不太可能發生），也給一個預設值
-                start_date = "2000-01-01"
+            # 2. 如果該標的沒有交易紀錄 (例如純 Benchmark 或匯率)，則使用全域最早的交易日期作為備用
+            if global_earliest_tx_date:
+                start_date = global_earliest_tx_date
+        
+        if not start_date:
+            print(f"警告: 找不到 {symbol} 的有效起始日期 (無自身交易紀錄，且全局無任何交易)。跳過此標的。")
+            continue
+        # --- 【邏輯修正結束】---
 
         print(f"--- [1/3] 開始處理: {symbol} (從 {start_date} 開始) ---")
         
@@ -134,6 +138,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols):
 
         max_retries = 3
         data_fetched_successfully = False
+        hist = None # 初始化 hist
         
         for attempt in range(max_retries):
             try:
@@ -181,7 +186,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols):
                 else:
                     print(f"FATAL: 連續 {max_retries} 次處理 {symbol} 失敗。正式表資料未受影響。")
 
-        if data_fetched_successfully:
+        if data_fetched_successfully and hist is not None and not hist.empty:
             print(f"--- [3/3] 準備執行 {symbol} 的原子性資料替換... ---")
             db_ops_swap = []
             db_ops_swap.append({"sql": f"DELETE FROM {price_table} WHERE symbol = ?", "params": [symbol]})
@@ -193,10 +198,8 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols):
 
             if d1_batch(db_ops_swap):
                 print(f"成功！ {symbol} 的正式表數據已原子性更新。")
-                # 更新覆蓋範圍紀錄
                 earliest_date_in_hist = hist.index.min().strftime('%Y-%m-%d')
                 
-                # 檢查 coverage 表中是否已存在該 symbol 的紀錄
                 coverage_exists = d1_query("SELECT 1 FROM market_data_coverage WHERE symbol = ?", [symbol])
                 if coverage_exists:
                     d1_query("UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?", [earliest_date_in_hist, today_str, symbol])
@@ -205,9 +208,10 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols):
             else:
                 print(f"FATAL: 原子性替換 {symbol} 的數據失敗！請手動檢查資料庫狀態。")
         else:
-            print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
+            print(f"由於資料準備階段失敗或無數據可抓取，已跳過 {symbol} 的正式表更新。")
 
 def trigger_recalculations(uids):
+    """觸發所有使用者的後端重算"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
@@ -237,14 +241,11 @@ def trigger_recalculations(uids):
     except Exception as e:
         print(f"觸發重算時發生錯誤: {e}")
 
-# 【修改點三】更新主執行區塊的函式呼叫
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.8) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    # 現在 get_full_refresh_targets 會回傳三個值
-    refresh_targets, benchmarks, all_uids = get_full_refresh_targets()
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.0) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    refresh_targets, _, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
-        # 將 benchmarks 傳遞給 fetch_and_overwrite_market_data
-        fetch_and_overwrite_market_data(refresh_targets, benchmarks)
+        fetch_and_overwrite_market_data(refresh_targets, global_start_date)
         if all_uids:
             trigger_recalculations(all_uids)
     else:
