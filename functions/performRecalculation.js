@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_schema_fix_complete - 最終欄位修正)
+// == 檔案：functions/performRecalculation.js (v_final_dividend_fix - 股息計算修正)
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
@@ -16,9 +16,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, forceCreateL
     }
 
     const snapshotOps = [];
-    // 【修正點】將 'SELECT date' 改為 'SELECT snapshot_date'
     const existingSnapshotsResult = await d1Client.query('SELECT snapshot_date FROM portfolio_snapshots WHERE uid = ?', [uid]);
-    // 【修正點】將 'r.date' 改為 'r.snapshot_date'
     const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.snapshot_date.split('T')[0]));
     const sortedHistoryDates = Object.keys(newFullHistory).sort();
     
@@ -28,7 +26,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, forceCreateL
         const finalState = getPortfolioStateOnDate(evts, currentDate, market);
         const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
         
-        // 【修正點】將 'date' 欄位改為 'snapshot_date'
         snapshotOps.push({
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
             params: [uid, latestDateStr, newFullHistory[latestDateStr], totalCost]
@@ -43,7 +40,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, forceCreateL
                 const finalState = getPortfolioStateOnDate(evts, currentDate, market);
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
                 
-                // 【修正點】將 'date' 欄位改為 'snapshot_date'
                 snapshotOps.push({
                     sql: `INSERT INTO portfolio_snapshots (uid, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?)`,
                     params: [uid, dateStr, newFullHistory[dateStr], totalCost]
@@ -91,7 +87,9 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
             txIndex++;
         }
         const quantity = holdings[divSymbol] || 0;
-        if (quantity > 0) {
+        
+        // 【核心修正】只有當持股數量大於一個微小的閾值時，才將其視為有效配息
+        if (quantity > 0.00001) {
             const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
             pendingDividends.push({
                 symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend,
