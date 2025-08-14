@@ -56,14 +56,16 @@ export function initializeAuth() {
                 currentUserId: null,
                 isAppInitialized: false // 允許下次登入時重新初始化
             });
-
+        
             // 更新 UI
-            document.getElementById('auth-container').style.display = 'block';
+            // 將 style 操作改為 class 操作
+            document.getElementById('auth-container').classList.remove('hidden'); 
             document.querySelector('main').classList.add('hidden');
-            document.getElementById('logout-btn').style.display = 'none';
+            document.getElementById('logout-btn').style.display = 'none'; // style or class is fine here
             document.getElementById('user-info').classList.add('hidden');
-            
+        
             // 確保登出時隱藏讀取畫面
+            const loadingOverlay = document.getElementById('loading-overlay');
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
             }
