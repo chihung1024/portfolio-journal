@@ -1,6 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v1.2 - Final Chart Sync Fix
-// == 職責：處理所有與交易紀錄相關的用戶互動事件。
+// == 交易事件處理模組 (transaction.events.js) v1.3 - 支援分頁事件
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -10,8 +9,6 @@ import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { updateDashboard } from '../ui/dashboard.js';
-
-// 【新增】從各自的模組引入圖表更新函式，這是關鍵的第一步
 import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
@@ -35,10 +32,10 @@ function handleSuccessfulUpdate(result) {
         obj[item.symbol] = item; return obj;
     }, {});
 
-    // 全面更新 state
+    // 全面更新 state，包含後端回傳的所有圖表歷史數據
     setState({
         holdings: holdingsObject,
-        portfolioHistory: result.data.history || {}, // <-- 核心修改：確認鍵名是 "history"
+        portfolioHistory: result.data.history || {},
         twrHistory: result.data.twrHistory || {},
         netProfitHistory: result.data.netProfitHistory || {},
         benchmarkHistory: result.data.benchmarkHistory || {}
@@ -65,7 +62,6 @@ async function handleDelete(button) {
 
     showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
         const originalTransactions = [...transactions];
-        // 樂觀更新：先從畫面上移除
         const updatedTransactions = transactions.filter(t => t.id !== txId);
         setState({ transactions: updatedTransactions });
         renderTransactionsTable();
@@ -74,12 +70,10 @@ async function handleDelete(button) {
         apiRequest('delete_transaction', { txId })
             .then(result => {
                 showNotification('success', '交易紀錄已成功從雲端刪除！');
-                // 【修改】呼叫統一的成功處理函式
                 handleSuccessfulUpdate(result);
             })
             .catch(error => {
                 showNotification('error', `刪除失敗: ${error.message}`);
-                // 回滾
                 setState({ transactions: originalTransactions });
                 renderTransactionsTable();
             });
@@ -113,7 +107,6 @@ async function handleFormSubmit(e) {
     
     closeModal('transaction-modal');
 
-    // 樂觀更新
     if (isEditing) {
         const updatedTransactions = transactions.map(t => 
             t.id === txId ? { ...t, ...transactionData, id: txId } : t
@@ -125,6 +118,7 @@ async function handleFormSubmit(e) {
         const updatedTransactions = [newTransaction, ...transactions];
         setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
     }
+
     renderTransactionsTable();
     showNotification('info', '交易已更新於介面，正在同步至雲端...');
 
@@ -134,18 +128,21 @@ async function handleFormSubmit(e) {
     apiRequest(action, payload)
         .then(result => {
             showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            // 【修改】呼叫統一的成功處理函式
+            
             handleSuccessfulUpdate(result);
-            // 【修正】在新增成功後，需要用後端回傳的真實 ID 更新前端的臨時 ID
+
             if (!isEditing && result.id) {
-                 const finalTransactions = getState().transactions.map(t => t.id === `temp_${Date.now()}` ? { ...t, id: result.id } : t);
-                 setState({ transactions: finalTransactions });
+                // 需要重新獲取一次 state，因為 handleSuccessfulUpdate 可能已經改變了它
+                const currentTxs = getState().transactions;
+                const finalTransactions = currentTxs.map(t => 
+                    t.id.toString().startsWith('temp_') ? { ...t, id: result.id } : t
+                );
+                setState({ transactions: finalTransactions });
                  renderTransactionsTable();
             }
         })
         .catch(error => {
             showNotification('error', `儲存交易失敗: ${error.message}`);
-            // 回滾
             setState({ transactions: originalTransactions });
             renderTransactionsTable();
         });
@@ -166,16 +163,34 @@ export function initializeTransactionEventListeners() {
             handleEdit(editButton);
             return;
         }
+
         const deleteButton = e.target.closest('.delete-btn');
         if (deleteButton) {
             e.preventDefault();
             handleDelete(deleteButton);
+            return;
+        }
+
+        // 【新增】處理分頁按鈕點擊
+        const pageButton = e.target.closest('.page-btn');
+        if (pageButton) {
+            e.preventDefault();
+            const newPage = parseInt(pageButton.dataset.page, 10);
+            if (!isNaN(newPage) && newPage > 0) {
+                setState({ transactionsCurrentPage: newPage });
+                renderTransactionsTable(); // 重新渲染表格
+            }
+            return;
         }
     });
 
     document.getElementById('transactions-tab').addEventListener('change', (e) => {
         if (e.target.id === 'transaction-symbol-filter') {
-            setState({ transactionFilter: e.target.value });
+            // 【修改】當篩選股票時，重置頁碼到第 1 頁
+            setState({ 
+                transactionFilter: e.target.value,
+                transactionsCurrentPage: 1 
+            });
             renderTransactionsTable();
         }
     });
