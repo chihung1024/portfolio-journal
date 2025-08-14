@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.0 - 動態全局起始日策略版)
+# == Python 週末完整校驗腳本 (v2.1 - Benchmark 優先策略版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -82,7 +82,7 @@ def get_full_refresh_targets():
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
-    # 4. 【新增】獲取全域最早的交易日期
+    # 4. 獲取全域最早的交易日期
     global_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
     global_earliest_tx_date = None
     if global_earliest_date_result and global_earliest_date_result[0].get('earliest_date'):
@@ -97,7 +97,7 @@ def get_full_refresh_targets():
     
     return targets, benchmark_symbols, uids, global_earliest_tx_date
 
-def fetch_and_overwrite_market_data(targets, global_earliest_tx_date):
+def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date):
     """
     (安全模式) 為每個標的抓取完整歷史數據，使用統一化的起始日期策略。
     """
@@ -111,21 +111,22 @@ def fetch_and_overwrite_market_data(targets, global_earliest_tx_date):
         if not symbol: continue
 
         is_fx = "=" in symbol
+        is_benchmark = symbol in benchmark_symbols
         
-        # --- 【邏輯修正核心 v2.0】---
+        # --- 【邏輯修正核心 v2.1】---
         start_date = None
         
-        # 1. 優先從該標的自身的交易紀錄中查找最早的日期
-        symbol_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
-        if symbol_earliest_date_result and symbol_earliest_date_result[0].get('earliest_date'):
-            start_date = symbol_earliest_date_result[0]['earliest_date'].split('T')[0]
+        # 1. 如果是 Benchmark 或匯率，必須從全局最早日期開始
+        if is_benchmark or is_fx:
+            start_date = global_earliest_tx_date
+        # 2. 否則 (只是一般持股)，從該標的自身的最早交易日開始
         else:
-            # 2. 如果該標的沒有交易紀錄 (例如純 Benchmark 或匯率)，則使用全域最早的交易日期作為備用
-            if global_earliest_tx_date:
-                start_date = global_earliest_tx_date
+            symbol_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
+            if symbol_earliest_date_result and symbol_earliest_date_result[0].get('earliest_date'):
+                start_date = symbol_earliest_date_result[0]['earliest_date'].split('T')[0]
         
         if not start_date:
-            print(f"警告: 找不到 {symbol} 的有效起始日期 (無自身交易紀錄，且全局無任何交易)。跳過此標的。")
+            print(f"警告: 找不到 {symbol} 的有效起始日期。跳過此標的。")
             continue
         # --- 【邏輯修正結束】---
 
@@ -242,10 +243,10 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.0) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    refresh_targets, _, all_uids, global_start_date = get_full_refresh_targets()
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.1) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
-        fetch_and_overwrite_market_data(refresh_targets, global_start_date)
+        fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
         if all_uids:
             trigger_recalculations(all_uids)
     else:
