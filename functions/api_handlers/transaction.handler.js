@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易 Action 處理模組 (transaction.handler.js)
+// == 交易 Action 處理模組 (transaction.handler.js) v1.1 - Final Chart Sync Fix
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -21,11 +21,10 @@ exports.addTransaction = async (uid, data, res) => {
 
     await performRecalculation(uid, txData.date, false);
 
-    // 【新增】重算後，立刻查詢最新結果
+    // 重算後，立刻查詢最新結果
     const [holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        // 取得完整的 summary 紀錄
-        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid])
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
     ]);
     
     // 解析所有需要的數據
@@ -36,7 +35,7 @@ exports.addTransaction = async (uid, data, res) => {
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
-    // 在回應中包含所有圖表數據
+    // 在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '操作成功。',
@@ -44,7 +43,7 @@ exports.addTransaction = async (uid, data, res) => {
         data: {
             holdings: holdings,
             summary: summary_data,
-            portfolioHistory,
+            history: portfolioHistory, // 使用 'history' 作為鍵名
             twrHistory,
             netProfitHistory,
             benchmarkHistory
@@ -66,21 +65,32 @@ exports.editTransaction = async (uid, data, res) => {
 
     await performRecalculation(uid, txData.date, false);
 
-    // 【新增】重算後，立刻查詢最新結果
+    // 【核心修正】重算後，立刻查詢最新且完整的結果
     const [holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
     ]);
-    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
     
-    // 【修改】在回應中包含新數據
+    // 【核心修正】解析所有需要的數據
+    const summaryRow = summaryResult[0] || {};
+    const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    
+    // 【核心修正】在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '操作成功。',
         id: txId,
         data: {
             holdings: holdings,
-            summary: summary_data
+            summary: summary_data,
+            history: portfolioHistory, // 使用 'history' 作為鍵名
+            twrHistory,
+            netProfitHistory,
+            benchmarkHistory
         }
     });
 };
@@ -102,20 +112,31 @@ exports.deleteTransaction = async (uid, data, res) => {
 
     await performRecalculation(uid, txDate, false);
 
-    // 【新增】重算後，立刻查詢最新結果
+    // 【核心修正】重算後，立刻查詢最新且完整的結果
     const [holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
     ]);
-    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
+    
+    // 【核心修正】解析所有需要的數據
+    const summaryRow = summaryResult[0] || {};
+    const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
-    // 【修改】在回應中包含新數據
+    // 【核心修正】在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '交易已刪除。',
         data: {
             holdings: holdings,
-            summary: summary_data
+            summary: summary_data,
+            history: portfolioHistory, // 使用 'history' 作為鍵名
+            twrHistory,
+            netProfitHistory,
+            benchmarkHistory
         }
     });
 };
