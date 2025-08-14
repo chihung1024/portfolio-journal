@@ -1,3 +1,6 @@
+# =========================================================================================
+# == Python 週末完整校驗腳本 (v1.8 - 動態 Benchmark 策略版)
+# =========================================================================================
 import os
 import yfinance as yf
 import requests
@@ -5,10 +8,6 @@ import json
 from datetime import datetime, timedelta
 import time
 import pandas as pd
-
-# =========================================================================================
-# == Python 週末完整校驗腳本 (v1.7 - 全面校驗版)
-# =========================================================================================
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
@@ -44,16 +43,15 @@ def d1_batch(statements):
         print(f"FATAL: D1 批次操作失敗: {e}")
         return False
 
+# 【修改點一】讓此函式額外回傳 benchmark_symbols 的集合
 def get_full_refresh_targets():
     """
-    【核心修改】從三個來源全面獲取需要更新的標的列表：
-    1. 當前用戶持股
-    2. 所有用戶設定的 Benchmark
-    3. 根據持股幣別推算出的必要匯率
+    從三個來源全面獲取需要更新的標的列表，並額外回傳一份所有 Benchmark 的清單。
     """
     print("正在全面獲取所有需要完整刷新的金融商品列表...")
     
     all_symbols = set()
+    benchmark_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
 
     # 1. 獲取用戶持股並推算匯率
@@ -66,12 +64,15 @@ def get_full_refresh_targets():
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
 
-    # 2. 獲取所有用戶的 Benchmark
+    # 2. 獲取所有用戶的 Benchmark，並加入到 all_symbols 和 benchmark_symbols
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql)
     if benchmark_results:
         for row in benchmark_results:
-            all_symbols.add(row['symbol'])
+            symbol = row['symbol']
+            if symbol:
+                all_symbols.add(symbol)
+                benchmark_symbols.add(symbol)
 
     targets = list(all_symbols)
     
@@ -81,12 +82,15 @@ def get_full_refresh_targets():
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
     print(f"找到 {len(targets)} 個需全面刷新的標的: {targets}")
+    print(f"從資料庫找到 {len(benchmark_symbols)} 個 Benchmark: {benchmark_symbols}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
-    return targets, uids
+    
+    return targets, benchmark_symbols, uids
 
-def fetch_and_overwrite_market_data(targets):
+# 【修改點二】讓此函式接收 benchmark_symbols 集合
+def fetch_and_overwrite_market_data(targets, benchmark_symbols):
     """
-    (安全模式) 為每個標的抓取完整歷史數據到預備表，成功後再原子性地覆蓋正式表。
+    (安全模式) 為每個標的抓取完整歷史數據，並根據其是否為 Benchmark 決定抓取策略。
     """
     if not targets:
         print("沒有需要刷新的標的。")
@@ -97,24 +101,29 @@ def fetch_and_overwrite_market_data(targets):
     for symbol in targets:
         if not symbol: continue
 
-        # 【核心修改】將獲取 start_date 的邏輯移入函式內部
-        # 這樣可以為 benchmark, FX 等沒有交易紀錄的標的提供預設值
         is_fx = "=" in symbol
-        start_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
-        
-        start_date_str = None
-        if start_date_result and start_date_result[0].get('earliest_date'):
-            start_date_str = start_date_result[0]['earliest_date']
-        
-        # 如果是匯率，或在 transaction 中找不到紀錄（例如純 Benchmark），則使用預設起始日期
-        if is_fx or not start_date_str:
+        # 檢查此 symbol 是否為從資料庫中查到的 Benchmark 之一
+        is_benchmark = symbol in benchmark_symbols
+
+        if is_fx or is_benchmark:
+            # 策略 A: 對於匯率和 Benchmark，我們總是希望有長期的歷史數據
+            # 優先從 market_data_coverage 表中尋找已記錄的最早日期
             start_date_from_db = d1_query("SELECT earliest_date FROM market_data_coverage WHERE symbol = ?", [symbol])
             if start_date_from_db and start_date_from_db[0].get('earliest_date'):
                  start_date = start_date_from_db[0]['earliest_date'].split('T')[0]
+                 print(f"資訊: {symbol} 是特殊標的，將從已記錄的最早日期 {start_date} 開始抓取。")
             else:
-                 start_date = "2000-01-01" # 終極預設值
+                 # 如果連 coverage 表都沒有，給一個非常早的預設值
+                 start_date = "2000-01-01" 
+                 print(f"資訊: {symbol} 是特殊標的，且無歷史記錄，將從預設值 {start_date} 開始抓取。")
         else:
-            start_date = start_date_str.split('T')[0]
+            # 策略 B: 對於普通持股，維持原有邏輯，從首次交易日開始
+            start_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
+            if start_date_result and start_date_result[0].get('earliest_date'):
+                start_date = start_date_result[0]['earliest_date'].split('T')[0]
+            else:
+                # 如果普通持股也找不到交易日（不太可能發生），也給一個預設值
+                start_date = "2000-01-01"
 
         print(f"--- [1/3] 開始處理: {symbol} (從 {start_date} 開始) ---")
         
@@ -126,7 +135,6 @@ def fetch_and_overwrite_market_data(targets):
         max_retries = 3
         data_fetched_successfully = False
         
-        # ... 後續的抓取和寫入邏輯與 v1.6 相同 ...
         for attempt in range(max_retries):
             try:
                 stock = yf.Ticker(symbol)
@@ -185,13 +193,20 @@ def fetch_and_overwrite_market_data(targets):
 
             if d1_batch(db_ops_swap):
                 print(f"成功！ {symbol} 的正式表數據已原子性更新。")
-                d1_query("UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?", [start_date, today_str, symbol])
+                # 更新覆蓋範圍紀錄
+                earliest_date_in_hist = hist.index.min().strftime('%Y-%m-%d')
+                
+                # 檢查 coverage 表中是否已存在該 symbol 的紀錄
+                coverage_exists = d1_query("SELECT 1 FROM market_data_coverage WHERE symbol = ?", [symbol])
+                if coverage_exists:
+                    d1_query("UPDATE market_data_coverage SET earliest_date = ?, last_updated = ? WHERE symbol = ?", [earliest_date_in_hist, today_str, symbol])
+                else:
+                    d1_query("INSERT INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)", [symbol, earliest_date_in_hist, today_str])
             else:
                 print(f"FATAL: 原子性替換 {symbol} 的數據失敗！請手動檢查資料庫狀態。")
         else:
             print(f"由於資料準備階段失敗，已跳過 {symbol} 的正式表更新。")
 
-# ... trigger_recalculations 和 main 執行區塊不變 ...
 def trigger_recalculations(uids):
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
@@ -222,11 +237,14 @@ def trigger_recalculations(uids):
     except Exception as e:
         print(f"觸發重算時發生錯誤: {e}")
 
+# 【修改點三】更新主執行區塊的函式呼叫
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.7) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    refresh_targets, all_uids = get_full_refresh_targets()
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v1.8) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    # 現在 get_full_refresh_targets 會回傳三個值
+    refresh_targets, benchmarks, all_uids = get_full_refresh_targets()
     if refresh_targets:
-        fetch_and_overwrite_market_data(refresh_targets)
+        # 將 benchmarks 傳遞給 fetch_and_overwrite_market_data
+        fetch_and_overwrite_market_data(refresh_targets, benchmarks)
         if all_uids:
             trigger_recalculations(all_uids)
     else:
