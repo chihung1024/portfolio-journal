@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v3.4.1 - 新增同步鎖
+// == 狀態管理模組 (state.js) v3.5.0 - 新增交易分頁
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -15,7 +15,7 @@ let state = {
     isAppInitialized: false,
     chart: null,
     twrChart: null,
-    netProfitChart: null, // 【新增】
+    netProfitChart: null, 
     confirmCallback: null,
 
     // [新增] 增加一個旗標來防止重複的數據同步
@@ -23,6 +23,9 @@ let state = {
 
     // 篩選與排序狀態
     transactionFilter: 'all',
+    // 【新增】交易紀錄分頁狀態
+    transactionsPerPage: 15, // 每頁顯示 15 筆
+    transactionsCurrentPage: 1, // 當前頁面為第 1 頁
     dividendFilter: 'all',
     holdingsSort: {
         key: 'marketValueTWD',
@@ -33,10 +36,10 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
-    netProfitHistory: {}, // 【新增】
+    netProfitHistory: {}, 
     assetDateRange: { type: 'all', start: null, end: null },
     twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null } // 【新增】
+    netProfitDateRange: { type: 'all', start: null, end: null } 
 };
 
 // 提供外部讀取狀態的方法
