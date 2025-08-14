@@ -1,12 +1,12 @@
 // =========================================================================================
-// == 檔案：functions/index.js (合併後的最終、完整版本)
+// == File: functions/index.js (Consolidated Entry Point Version)
 // =========================================================================================
 
 const functions = require("firebase-functions");
 const admin = require('firebase-admin');
 const { z } = require("zod");
 
-// 引入所有必要的模組
+// Import all necessary modules
 const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./performRecalculation');
 const { verifyFirebaseToken } = require('./middleware');
@@ -23,9 +23,8 @@ try {
     // Firebase Admin SDK already initialized
 }
 
-
 // =========================================================================================
-// == 主 API 函式 (unifiedPortfolioHandler)
+// == Main API Function (unifiedPortfolioHandler)
 // =========================================================================================
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
     // CORS and OPTIONS request handling
@@ -46,7 +45,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // 處理來自 Python 腳本的服務請求
+    // Handle service requests from Python scripts
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -55,23 +54,23 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
         if (req.body.action === 'recalculate_all_users') {
             try {
                 const createSnapshot = req.body.createSnapshot || false;
-                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
+                console.log(`Received batch recalculation request, createSnapshot: ${createSnapshot}`);
                 const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
                 for (const row of allUidsResult) {
                     await performRecalculation(row.uid, null, createSnapshot);
                 }
-                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
-            } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
+                return res.status(200).send({ success: true, message: 'All users recalculated successfully.' });
+            } catch (error) { return res.status(500).send({ success: false, message: `Error during recalculation: ${error.message}` }); }
         }
-        return res.status(400).send({ success: false, message: '無效的服務操作。' });
+        return res.status(400).send({ success: false, message: 'Invalid service action.' });
     }
 
-    // 處理來自前端的使用者請求
+    // Handle user requests from the frontend
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid;
             const { action, data } = req.body;
-            if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+            if (!action) return res.status(400).send({ success: false, message: 'Error: Missing action.' });
 
             switch (action) {
                 case 'get_data': return await portfolioHandlers.getData(uid, res);
@@ -86,52 +85,51 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 case 'bulk_confirm_all_dividends': return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
                 case 'delete_user_dividend': return await dividendHandlers.deleteUserDividend(uid, data, res);
                 case 'save_stock_note': return await noteHandlers.saveStockNote(uid, data, res);
-                default: return res.status(400).send({ success: false, message: '未知的操作' });
+                default: return res.status(400).send({ success: false, message: 'Unknown action' });
             }
         } catch (error) {
-            console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
-            if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });
-            res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
+            console.error(`Error executing action '${req.body?.action}' for user [${req.user?.uid || 'N/A'}]:`, error);
+            if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "Input data validation failed", errors: error.errors });
+            res.status(500).send({ success: false, message: `Internal server error: ${error.message}` });
         }
     });
 });
 
-
 // =========================================================================================
-// == 背景 Worker 函式 (backgroundTaskHandler)
+// == Background Worker Function (backgroundTaskHandler)
 // =========================================================================================
 exports.backgroundTaskHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
-    // 步驟 1: 安全驗證
+    // Step 1: Security validation
     const internalServiceKey = req.headers['x-internal-service-key'];
     if (internalServiceKey !== process.env.SERVICE_ACCOUNT_KEY) {
-        console.error('無效的內部服務金鑰。');
+        console.error('Invalid internal service key.');
         return res.status(403).send('Unauthorized');
     }
 
     try {
-        // 步驟 2: 解析任務
-        // Cloud Tasks 發送的請求 body 是 base64 編碼的
+        // Step 2: Parse the task
         const body = JSON.parse(Buffer.from(req.body, 'base64').toString());
         const { workerName, payload } = body;
 
-        console.log(`收到背景任務: ${workerName}，Payload:`, payload);
+        console.log(`Received background task: ${workerName}, Payload:`, payload);
 
-        // 步驟 3: 根據任務名稱，分派給對應的 Worker 邏輯
+        // Step 3: Dispatch to the correct worker logic
         switch (workerName) {
             case 'postTransactionWorker':
                 await postTransactionWorker(payload);
                 break;
             default:
-                console.error(`未知的 Worker 名稱: ${workerName}`);
+                console.error(`Unknown worker name: ${workerName}`);
                 return res.status(400).send('Unknown worker name');
         }
 
-        console.log(`背景任務 ${workerName} 成功完成。`);
+        // Step 4: Acknowledge successful completion to Cloud Tasks
+        console.log(`Background task ${workerName} completed successfully.`);
         return res.status(200).send('Task completed successfully.');
 
     } catch (error) {
-        console.error('背景 Worker 執行失敗:', error);
-        // 回傳 500 錯誤，告知 Cloud Tasks 任務失敗，需要重試
+        console.error('Background worker execution failed:', error);
+        // Return a 500 error to let Cloud Tasks know the task failed and should be retried
         return res.status(500).send('Task failed');
     }
 });
