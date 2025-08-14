@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_dividend_fix - 股息計算修正)
+// == 檔案：functions/performRecalculation.js (v_final_realtime_fetch_fix - 即時抓取修正)
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
@@ -132,6 +132,15 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+
+        // =================================================================
+        // == 【核心修改】在讀取市場數據前，先確保所有標的數據都已存在 ==
+        // =================================================================
+        console.log(`[${uid}] 步驟 1: 確保所有標的 (含Benchmark) 的歷史數據存在...`);
+        await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
+        console.log(`[${uid}] 數據覆蓋範圍與新鮮度檢查完畢。`);
+        // =================================================================
+
         const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol); 
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) { return; }
