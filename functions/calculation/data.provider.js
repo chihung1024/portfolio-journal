@@ -198,10 +198,9 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
     return marketData;
 }
 
-module.exports = {
-    fetchAndSaveMarketDataRange,
-    ensureDataCoverage,
-    ensureDataFreshness,
-    getMarketDataFromDb,
-    ensureAllSymbolsData // 新增導出
-};
+// 【核心修正】改為逐一導出，以避免潛在的循環依賴問題
+module.exports.fetchAndSaveMarketDataRange = fetchAndSaveMarketDataRange;
+module.exports.ensureDataCoverage = ensureDataCoverage;
+module.exports.ensureDataFreshness = ensureDataFreshness;
+module.exports.getMarketDataFromDb = getMarketDataFromDb;
+module.exports.ensureAllSymbolsData = ensureAllSymbolsData;
