@@ -11,6 +11,10 @@ import { showNotification } from '../ui/notifications.js';
 // 【新增】引入儀表板和持股列表的渲染函式
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { updateDashboard } from '../ui/dashboard.js';
+// 在檔案頂部引入圖表更新函式
+import { updateAssetChart } from '../ui/charts/assetChart.js';
+import { updateTwrChart } from '../ui/charts/twrChart.js';
+import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 
 // --- Private Functions (only used within this module) ---
 
@@ -68,10 +72,23 @@ async function handleDelete(button) {
                         obj[item.symbol] = item; return obj;
                     }, {});
                     
-                    setState({ holdings: holdingsObject });
+                    // 【新增】全面更新 state，包含圖表歷史數據
+                    setState({
+                        holdings: holdingsObject,
+                        portfolioHistory: result.data.portfolioHistory || {},
+                        twrHistory: result.data.twrHistory || {},
+                        netProfitHistory: result.data.netProfitHistory || {},
+                        benchmarkHistory: result.data.benchmarkHistory || {}
+                    });
 
                     renderHoldingsTable(holdingsObject);
                     updateDashboard(holdingsObject, result.data.summary?.totalRealizedPL, result.data.summary?.overallReturnRate, result.data.summary?.xirr);
+
+                    // 【新增】呼叫圖表更新函式
+                    updateAssetChart();
+                    updateNetProfitChart();
+                    const benchmarkSymbol = result.data.summary?.benchmarkSymbol || 'SPY';
+                    updateTwrChart(benchmarkSymbol);
                 }
             })
             .catch(error => {
