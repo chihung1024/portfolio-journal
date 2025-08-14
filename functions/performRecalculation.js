@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_realtime_fetch_fix - 即時抓取修正)
+// == 檔案：functions/performRecalculation.js (v_final_with_daily_pl - 包含當日損益計算)
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
 const dataProvider = require('./calculation/data.provider');
-const { toDate, isTwStock } = require('./calculation/helpers');
+const { toDate, isTwStock, findNearest, findFxRate } = require('./calculation/helpers'); // 【新增】引入 findNearest 和 findFxRate
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
 
@@ -88,7 +88,6 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
         }
         const quantity = holdings[divSymbol] || 0;
         
-        // 【核心修正】只有當持股數量大於一個微小的閾值時，才將其視為有效配息
         if (quantity > 0.00001) {
             const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
             pendingDividends.push({
@@ -133,14 +132,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-        // =================================================================
-        // == 【核心修改】在讀取市場數據前，先確保所有標的數據都已存在 ==
-        // =================================================================
         console.log(`[${uid}] 步驟 1: 確保所有標的 (含Benchmark) 的歷史數據存在...`);
         await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
         console.log(`[${uid}] 數據覆蓋範圍與新鮮度檢查完畢。`);
-        // =================================================================
-
+        
         const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol); 
         const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
         if (!firstBuyDate) { return; }
@@ -171,9 +166,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
         
         const partialHistory = {};
+        const todayForCalc = new Date(); todayForCalc.setUTCHours(0, 0, 0, 0);
         let curDate = new Date(calculationStartDate);
-        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
-        while (curDate <= today) {
+        while (curDate <= todayForCalc) {
             const dateStr = curDate.toISOString().split('T')[0];
             partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
             curDate.setDate(curDate.getDate() + 1);
@@ -195,10 +190,24 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const { holdingsToUpdate } = portfolioResult.holdings;
         const holdingsOps = [{ sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] }];
+
+        const today = new Date();
+        const yesterday = new Date();
+        yesterday.setDate(today.getDate() - 1);
+
         Object.values(holdingsToUpdate).forEach(h => {
+            // 【新增】計算當日損益所需數據
+            const todayPrice = h.currentPriceOriginal;
+            const yesterdayPriceInfo = findNearest(market[h.symbol.toUpperCase()]?.prices, yesterday, 7);
+            const yesterdayPrice = yesterdayPriceInfo ? yesterdayPriceInfo.value : todayPrice;
+            const dailyChangePercent = yesterdayPrice > 0 ? ((todayPrice - yesterdayPrice) / yesterdayPrice) * 100 : 0;
+            const fx = findFxRate(market, h.currency, today);
+            const dailyPLTWD = (todayPrice - yesterdayPrice) * h.quantity * fx;
+
+            // 【修改】在 INSERT 語句中增加新欄位 daily_change_percent 和 daily_pl_twd
             holdingsOps.push({
-                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-                params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate]
+                sql: `INSERT INTO holdings (uid, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+                params: [uid, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate, dailyChangePercent, dailyPLTWD]
             });
         });
         
