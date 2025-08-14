@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 市場數據提供者 (data.provider.js)
+// == 市場數據提供者 (data.provider.js) (v_final_realtime_fetch_fix - 即時抓取修正)
 // == 職責：處理所有從外部 API 或資料庫獲取、儲存及準備市場數據的相關邏輯。
 // =========================================================================================
 
@@ -45,6 +45,7 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
 
     if (coverageData.length === 0) {
         // 全新商品，直接抓取完整歷史數據
+        console.log(`[Data Provider] ${symbol} 是全新商品，將從 ${requiredStartDate} 開始抓取完整歷史數據...`);
         const fetchedData = await fetchAndSaveMarketDataRange(symbol, requiredStartDate, today);
         if (fetchedData && fetchedData.length > 0) {
             const actualEarliestDate = fetchedData[0].date.toISOString().split('T')[0];
@@ -56,6 +57,7 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
     const currentEarliestDate = coverageData[0].earliest_date;
     if (requiredStartDate < currentEarliestDate) {
         // 需要的日期比現有的還早，必須刪除舊的並抓取更完整的數據
+        console.log(`[Data Provider] ${symbol} 需要的日期 ${requiredStartDate} 早於現有的 ${currentEarliestDate}，將重新抓取...`);
         const isFx = symbol.includes("=");
         const priceTable = isFx ? "exchange_rates" : "price_history";
         const deleteOps = [{ sql: `DELETE FROM ${priceTable} WHERE symbol = ?`, params: [symbol] }];
@@ -92,12 +94,66 @@ async function ensureDataFreshness(symbols) {
             const startDate = new Date(latestDateStr || '2000-01-01');
             startDate.setDate(startDate.getDate() + 1);
             const startDateStr = startDate.toISOString().split('T')[0];
+            console.log(`[Data Provider] ${symbol} 的數據不是最新的，將從 ${startDateStr} 開始抓取增量數據...`);
             return fetchAndSaveMarketDataRange(symbol, startDateStr, today.toISOString().split('T')[0]);
         }
     });
 
     await Promise.all(fetchPromises);
 }
+
+/**
+ * 【新增】確保所有需要的金融商品數據都存在於資料庫中
+ * @param {Array} txs - 所有交易紀錄
+ * @param {string} benchmarkSymbol - 比較基準的股票代碼
+ */
+async function ensureAllSymbolsData(txs, benchmarkSymbol) {
+    if (!txs || txs.length === 0) return;
+
+    const allSymbols = new Set(txs.map(t => t.symbol.toUpperCase()));
+    if (benchmarkSymbol) {
+        allSymbols.add(benchmarkSymbol.toUpperCase());
+    }
+
+    const requiredFxSymbols = new Set();
+    txs.forEach(t => {
+        if (t.currency && currencyToFx[t.currency]) {
+            requiredFxSymbols.add(currencyToFx[t.currency]);
+        }
+    });
+
+    const allRequiredSymbols = [...allSymbols, ...requiredFxSymbols];
+
+    // 找到全局最早的交易日期，作為 benchmark 和匯率的起始點
+    const globalFirstTxDate = txs.reduce((earliest, tx) => {
+        const txDate = new Date(tx.date);
+        return txDate < earliest ? txDate : earliest;
+    }, new Date());
+    const globalFirstTxDateStr = globalFirstTxDate.toISOString().split('T')[0];
+
+    const coveragePromises = allRequiredSymbols.map(symbol => {
+        let requiredStartDate = globalFirstTxDateStr;
+
+        // 如果不是匯率或 benchmark，則使用該個股自己的最早交易日期
+        if (!requiredFxSymbols.has(symbol) && symbol !== benchmarkSymbol.toUpperCase()) {
+             const symbolTxs = txs.filter(t => t.symbol.toUpperCase() === symbol);
+             if (symbolTxs.length > 0) {
+                 const symbolFirstDate = symbolTxs.reduce((earliest, tx) => {
+                     const txDate = new Date(tx.date);
+                     return txDate < earliest ? txDate : earliest;
+                 }, new Date());
+                 requiredStartDate = symbolFirstDate.toISOString().split('T')[0];
+             }
+        }
+        
+        return ensureDataCoverage(symbol, requiredStartDate);
+    });
+
+    await Promise.all(coveragePromises);
+    // 在確保覆蓋範圍後，再統一更新到最新
+    await ensureDataFreshness(allRequiredSymbols);
+}
+
 
 /**
  * 從 D1 資料庫中獲取所有計算需要的市場數據（股價、股利、匯率）
@@ -133,7 +189,6 @@ async function getMarketDataFromDb(txs, benchmarkSymbol) {
     stockDividendsFlat.forEach(row => { marketData[row.symbol].dividends[row.date.split('T')[0]] = row.dividend; });
     fxRatesFlat.forEach(row => { marketData[row.symbol].prices[row.date.split('T')[0]] = row.price; });
     
-    // 為了語意清晰，為匯率物件增加一個 'rates' 的別名
     requiredFxSymbols.forEach(fxSymbol => {
         if (marketData[fxSymbol]) {
             marketData[fxSymbol].rates = marketData[fxSymbol].prices;
@@ -147,5 +202,6 @@ module.exports = {
     fetchAndSaveMarketDataRange,
     ensureDataCoverage,
     ensureDataFreshness,
-    getMarketDataFromDb
+    getMarketDataFromDb,
+    ensureAllSymbolsData // 新增導出
 };
