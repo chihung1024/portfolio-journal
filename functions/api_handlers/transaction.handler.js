@@ -24,18 +24,30 @@ exports.addTransaction = async (uid, data, res) => {
     // 【新增】重算後，立刻查詢最新結果
     const [holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ?', [uid])
+        // 取得完整的 summary 紀錄
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid])
     ]);
-    const summary_data = summaryResult[0] ? JSON.parse(summaryResult[0].summary_data) : {};
+    
+    // 解析所有需要的數據
+    const summaryRow = summaryResult[0] || {};
+    const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
-    // 【修改】在回應中包含新數據
+    // 在回應中包含所有圖表數據
     return res.status(200).send({
         success: true,
         message: '操作成功。',
         id: txId,
         data: {
             holdings: holdings,
-            summary: summary_data
+            summary: summary_data,
+            portfolioHistory,
+            twrHistory,
+            netProfitHistory,
+            benchmarkHistory
         }
     });
 };
