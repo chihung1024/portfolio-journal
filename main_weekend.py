@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.1 - Benchmark 優先策略版)
+# == Python 週末完整校驗腳本 (v2.2 - 涵蓋已出清持股策略版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -48,6 +48,7 @@ def d1_batch(statements):
 def get_full_refresh_targets():
     """
     全面獲取需要更新的標的列表、Benchmark 列表、使用者列表，以及全局最早的交易日期。
+    v2.2: 標的來源改為所有歷史交易紀錄，確保已出清持股也能被更新。
     """
     print("正在全面獲取所有需要完整刷新的金融商品列表...")
     
@@ -55,17 +56,23 @@ def get_full_refresh_targets():
     benchmark_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
 
-    # 1. 獲取用戶持股並推算匯率
-    holdings_sql = "SELECT DISTINCT symbol, currency FROM holdings"
-    holdings_results = d1_query(holdings_sql)
-    if holdings_results:
-        for row in holdings_results:
+    # 1. 【核心修改】從 `transactions` 表獲取所有曾交易過的標的
+    transactions_sql = "SELECT DISTINCT symbol FROM transactions"
+    tx_symbols_results = d1_query(transactions_sql)
+    if tx_symbols_results:
+        for row in tx_symbols_results:
             all_symbols.add(row['symbol'])
+
+    # 2. 根據交易紀錄中的幣別，推算所需匯率
+    currencies_sql = "SELECT DISTINCT currency FROM transactions"
+    currencies_results = d1_query(currencies_sql)
+    if currencies_results:
+        for row in currencies_results:
             currency = row.get('currency')
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
 
-    # 2. 獲取所有用戶的 Benchmark
+    # 3. 獲取所有用戶的 Benchmark
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql)
     if benchmark_results:
@@ -77,12 +84,12 @@ def get_full_refresh_targets():
 
     targets = list(all_symbols)
     
-    # 3. 獲取所有活躍的使用者 ID
+    # 4. 獲取所有活躍的使用者 ID
     uid_sql = "SELECT DISTINCT uid FROM transactions"
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
-    # 4. 獲取全域最早的交易日期
+    # 5. 獲取全域最早的交易日期
     global_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
     global_earliest_tx_date = None
     if global_earliest_date_result and global_earliest_date_result[0].get('earliest_date'):
@@ -243,7 +250,7 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.1) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.2) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
