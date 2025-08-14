@@ -35,10 +35,10 @@ function handleSuccessfulUpdate(result) {
         obj[item.symbol] = item; return obj;
     }, {});
 
-    // 【核心修正】全面更新 state，包含後端回傳的所有圖表歷史數據
+    // 全面更新 state
     setState({
         holdings: holdingsObject,
-        portfolioHistory: result.data.portfolioHistory || {},
+        portfolioHistory: result.data.history || {}, // <-- 核心修改：確認鍵名是 "history"
         twrHistory: result.data.twrHistory || {},
         netProfitHistory: result.data.netProfitHistory || {},
         benchmarkHistory: result.data.benchmarkHistory || {}
@@ -48,7 +48,7 @@ function handleSuccessfulUpdate(result) {
     renderHoldingsTable(holdingsObject);
     updateDashboard(holdingsObject, result.data.summary?.totalRealizedPL, result.data.summary?.overallReturnRate, result.data.summary?.xirr);
 
-    // 【核心修正】主動呼叫圖表更新函式
+    // 主動呼叫圖表更新函式
     updateAssetChart();
     updateNetProfitChart();
     const benchmarkSymbol = result.data.summary?.benchmarkSymbol || 'SPY';
