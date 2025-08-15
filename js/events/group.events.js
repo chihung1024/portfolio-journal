@@ -8,6 +8,7 @@ import { apiRequest } from '../api.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
+import { updateGroupSelector } from './group.events.js';
 
 /**
  * 載入所有群組並更新 UI
@@ -28,7 +29,7 @@ async function loadGroups() {
 /**
  * 更新頂部的全局群組篩選器下拉選單
  */
-function updateGroupSelector() {
+function updateGroupSelectorInternal() {
     const { groups } = getState();
     const selector = document.getElementById('group-selector');
     if (!selector) return;
@@ -147,4 +148,4 @@ export function initializeGroupEventListeners() {
     document.getElementById('cancel-group-btn').addEventListener('click', () => closeModal('group-modal'));
 }
 
-export { loadGroups, updateGroupSelector }; // 匯出 updateGroupSelector 供主程式使用
+export { loadGroups, updateGroupSelectorInternal as updateGroupSelector };
