@@ -59,6 +59,46 @@ export async function apiRequest(action, data) {
 }
 
 /**
+ * 【新增】高階 API 執行器，封裝了載入狀態、通知和數據刷新邏輯
+ * @param {string} action - 要執行的 API action 名稱
+ * @param {object} payload - 傳遞給 API 的數據
+ * @param {object} options - 選項配置
+ * @param {string} options.loadingText - 載入時顯示的文字
+ * @param {string} options.successMessage - 操作成功時顯示的通知訊息
+ * @param {boolean} [options.shouldRefreshData=true] - 操作成功後是否需要刷新整個投資組合數據
+ * @returns {Promise<object>} - 返回 API 的原始成功結果
+ */
+export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTextElement = document.getElementById('loading-text');
+    loadingTextElement.textContent = loadingText;
+    loadingOverlay.style.display = 'flex';
+    
+    try {
+        const result = await apiRequest(action, payload);
+        
+        // 只有在操作成功後才刷新數據
+        if (shouldRefreshData) {
+            await loadPortfolioData();
+        }
+        
+        // 在數據刷新後再顯示成功訊息，體驗更流暢
+        if (successMessage) {
+            showNotification('success', successMessage);
+        }
+        
+        return result; 
+    } catch (error) {
+        showNotification('error', `操作失敗: ${error.message}`);
+        throw error; 
+    } finally {
+        loadingOverlay.style.display = 'none';
+        loadingTextElement.textContent = '正在從雲端同步資料...'; // 恢復預設文字
+    }
+}
+
+
+/**
  * 【核心修改】一個統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
 function updateAppWithData(portfolioData) {
@@ -131,7 +171,7 @@ export async function loadPortfolioData() {
             userSplits: result.data.splits || [],
         });
 
-        showNotification('success', '資料同步完成！');
+        // showNotification('success', '資料同步完成！'); // 在 executeApiAction 中統一處理
     } catch (error) {
         console.error('Failed to load portfolio data:', error);
         showNotification('error', `讀取資料失敗: ${error.message}`);
