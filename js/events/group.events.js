@@ -120,6 +120,7 @@ export function initializeGroupEventListeners() {
     document.getElementById('groups-tab').addEventListener('click', (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
+            // 對於新增，順序不影響
             renderGroupModal(null);
             openModal('group-modal');
             return;
@@ -128,11 +129,13 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const { groups } = getState();
-            // 【核心修正點】確保從 state 中正確找到完整的群組物件
             const groupToEdit = groups.find(g => g.id === editBtn.dataset.groupId);
             if (groupToEdit) {
-                renderGroupModal(groupToEdit); // 將找到的物件傳遞給渲染函式
+                // 【核心修正】調整函式呼叫順序
+                // 1. 先呼叫 openModal，讓它清空舊表單並準備好視窗
                 openModal('group-modal');
+                // 2. 再呼叫 renderGroupModal，將新資料填入剛被清空的表單
+                renderGroupModal(groupToEdit);
             }
             return;
         }
