@@ -13,9 +13,9 @@ import {
 
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
-import { loadPortfolioData } from './api.js';
-import { showNotification } from './ui/notifications.js'; // [核心修改] 導入路徑已從 './ui.js' 改為 './ui/notifications.js'
-import { initializeAppUI } from './main.js'; // [修改] 引入主程式的 UI 初始化函式
+import { showNotification } from './ui/notifications.js';
+// 【核心修改】引入新的輕量級載入函式，取代舊的 loadPortfolioData
+import { initializeAppUI, loadInitialDashboardAndHoldings } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -34,7 +34,8 @@ export function initializeAuth() {
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // 更新 UI
+            // --- 【核心修改】---
+            // 1. 立即顯示 App 主 UI 介面
             document.getElementById('auth-container').style.display = 'none';
             document.querySelector('main').classList.remove('hidden');
             document.getElementById('logout-btn').style.display = 'block';
@@ -42,30 +43,31 @@ export function initializeAuth() {
             document.getElementById('user-id').textContent = user.email;
             document.getElementById('auth-status').textContent = '已連線';
             
-            // [關鍵修改] 只有在登入成功後，才去初始化主應用的 UI
+            // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
             initializeAppUI();
-
-            loadingText.textContent = '正在從雲端同步資料...';
-            loadPortfolioData();
+            
+            // 3. 執行新的、更輕量的初始資料載入函式
+            loadingText.textContent = '正在讀取核心資產數據...';
+            loadingOverlay.style.display = 'flex';
+            
+            loadInitialDashboardAndHoldings(); // <--- 呼叫新的輕量級載入函式
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
-            // [修改] 登出時，重設 App 狀態
+            // 登出時，重設 App 狀態
             setState({ 
                 currentUserId: null,
                 isAppInitialized: false // 允許下次登入時重新初始化
             });
         
             // 更新 UI
-            // 將 style 操作改為 class 操作
             document.getElementById('auth-container').classList.remove('hidden'); 
             document.querySelector('main').classList.add('hidden');
-            document.getElementById('logout-btn').style.display = 'none'; // style or class is fine here
+            document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('user-info').classList.add('hidden');
         
             // 確保登出時隱藏讀取畫面
-            const loadingOverlay = document.getElementById('loading-overlay');
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
             }
