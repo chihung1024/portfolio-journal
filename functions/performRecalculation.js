@@ -9,7 +9,7 @@ const { runCalculationEngine } = require('./calculation/engine');
 const { getPortfolioStateOnDate } = require('./calculation/state.calculator');
 
 /**
- * 【新增】一個強健的輔助函式，確保數值是有限的，否則回傳 0。
+ * 一個強健的輔助函式，確保數值是有限的，否則回傳 0。
  * @param {*} value - 任何需要清理的值
  * @returns {number} - 一個有效的、有限的數字
  */
@@ -18,8 +18,6 @@ const sanitizeNumber = (value) => {
     return isFinite(num) ? num : 0;
 };
 
-
-// 完整、未省略的 maintainSnapshots 函式
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
     console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
@@ -69,7 +67,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 }
 
-// 完整、未省略的 calculateAndCachePendingDividends 函式
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
@@ -121,10 +118,6 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
 }
 
-
-/**
- * 協調函式：準備數據、呼叫計算引擎、並儲存結果
- */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
     console.log(`--- [${uid}] 儲存式重算程序開始 (最終穩健版) ---`);
     try {
@@ -163,14 +156,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         await maintainSnapshots(uid, fullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
-        // 步驟 3A: 執行刪除操作
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
 
-        // 步驟 3B: 準備並執行批次插入操作
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            // 【最終修正】使用 sanitizeNumber 函式清理所有數值欄位
             params: [
                 uid, 
                 ALL_GROUP_ID, 
