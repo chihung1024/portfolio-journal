@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v1.1 - 修正 group_id 讀取)
+// == 檔案：functions/api_handlers/portfolio.handler.js (v1.2 - 最終 group_id 讀取修正)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
@@ -9,7 +9,7 @@ const { performRecalculation } = require('../performRecalculation');
  * 獲取使用者所有核心資料 (預設為 'all' 群組)
  */
 exports.getData = async (uid, res) => {
-    const ALL_GROUP_ID = 'all'; // 定義預設群組 ID
+    const ALL_GROUP_ID = 'all'; // 【核心修正】定義一個常量來代表 "全部股票"
 
     // 【核心修正】在查詢 holdings 和 portfolio_summary 時，明確篩選 group_id = 'all'
     const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
