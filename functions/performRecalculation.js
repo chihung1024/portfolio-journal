@@ -8,6 +8,17 @@ const { toDate, isTwStock } = require('./calculation/helpers');
 const { runCalculationEngine } = require('./calculation/engine');
 const { getPortfolioStateOnDate } = require('./calculation/state.calculator');
 
+/**
+ * 【新增】一個強健的輔助函式，確保數值是有限的，否則回傳 0。
+ * @param {*} value - 任何需要清理的值
+ * @returns {number} - 一個有效的、有限的數字
+ */
+const sanitizeNumber = (value) => {
+    const num = Number(value);
+    return isFinite(num) ? num : 0;
+};
+
+
 // 完整、未省略的 maintainSnapshots 函式
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
@@ -30,7 +41,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
         
         snapshotOps.push({
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
-            params: [uid, groupId, latestDateStr, newFullHistory[latestDateStr] || 0, totalCost || 0]
+            params: [uid, groupId, latestDateStr, sanitizeNumber(newFullHistory[latestDateStr]), sanitizeNumber(totalCost)]
         });
         existingSnapshotDates.add(latestDateStr);
     }
@@ -44,7 +55,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
                 
                 snapshotOps.push({
                     sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
-                    params: [uid, groupId, dateStr, newFullHistory[dateStr] || 0, totalCost || 0]
+                    params: [uid, groupId, dateStr, sanitizeNumber(newFullHistory[dateStr]), sanitizeNumber(totalCost)]
                 });
             }
         }
@@ -159,22 +170,22 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         // 步驟 3B: 準備並執行批次插入操作
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            // 【最終修正】為所有可能為 null 或 NaN 的數值欄位提供預設值 0
+            // 【最終修正】使用 sanitizeNumber 函式清理所有數值欄位
             params: [
                 uid, 
                 ALL_GROUP_ID, 
                 h.symbol, 
-                h.quantity || 0,
+                sanitizeNumber(h.quantity),
                 h.currency, 
-                h.avgCostOriginal || 0, 
-                h.totalCostTWD || 0,
-                h.currentPriceOriginal || 0,
-                h.marketValueTWD || 0,
-                h.unrealizedPLTWD || 0,
-                h.realizedPLTWD || 0,
-                h.returnRate || 0,
-                h.daily_change_percent || 0,
-                h.daily_pl_twd || 0
+                sanitizeNumber(h.avgCostOriginal),
+                sanitizeNumber(h.totalCostTWD),
+                sanitizeNumber(h.currentPriceOriginal),
+                sanitizeNumber(h.marketValueTWD),
+                sanitizeNumber(h.unrealizedPLTWD),
+                sanitizeNumber(h.realizedPLTWD),
+                sanitizeNumber(h.returnRate),
+                sanitizeNumber(h.daily_change_percent),
+                sanitizeNumber(h.daily_pl_twd)
             ]
         }));
 
