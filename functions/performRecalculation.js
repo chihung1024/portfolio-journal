@@ -17,6 +17,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 
     const snapshotOps = [];
+    // 【核心修正】查詢時使用明確的 group_id
     const existingSnapshotsResult = await d1Client.query('SELECT snapshot_date FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, groupId]);
     const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.snapshot_date.split('T')[0]));
     const sortedHistoryDates = Object.keys(newFullHistory).sort();
@@ -28,6 +29,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
         const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
         
         snapshotOps.push({
+            // 【核心修正】插入時使用明確的 group_id
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
             params: [uid, groupId, latestDateStr, newFullHistory[latestDateStr], totalCost]
         });
@@ -42,6 +44,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
                 
                 snapshotOps.push({
+                    // 【核心修正】插入時使用明確的 group_id
                     sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
                     params: [uid, groupId, dateStr, newFullHistory[dateStr], totalCost]
                 });
