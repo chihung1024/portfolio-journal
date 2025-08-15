@@ -1,5 +1,6 @@
+
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_snapshot_perf_optimized - TWR 增量計算優化版)
+// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -14,11 +15,11 @@ const sanitizeNumber = (value) => {
     return isFinite(num) ? num : 0;
 };
 
-async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, createSnapshot = false, groupId = 'all') {
+async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
-    console.log(`${logPrefix} 開始維護快照 (含 TWR 狀態)... 強制建立最新快照: ${createSnapshot}`);
+    console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
     if (!market || Object.keys(newFullHistory).length === 0) {
-        console.log(`${logPrefix} 沒有歷史數據，跳過快照維護。`);
+        console.log(`${logPrefix} 沒有歷史數據或市場數據，跳過快照維護。`);
         return;
     }
     const snapshotOps = [];
@@ -26,16 +27,13 @@ async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, 
     const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.snapshot_date.split('T')[0]));
     const sortedHistoryDates = Object.keys(newFullHistory).sort();
     const latestDateStr = sortedHistoryDates[sortedHistoryDates.length - 1];
-
     if (latestDateStr && (createSnapshot || !existingSnapshotDates.has(latestDateStr))) {
         const currentDate = new Date(latestDateStr);
         const finalState = getPortfolioStateOnDate(evts, currentDate, market);
-        const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWR, 0), 0);
-        const latestTwr = twrHistory[latestDateStr] || {};
-        
+        const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
         snapshotOps.push({
-            sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd, cumulative_hpr) VALUES (?, ?, ?, ?, ?, ?)`,
-            params: [uid, groupId, latestDateStr, sanitizeNumber(newFullHistory[latestDateStr]), sanitizeNumber(totalCost), sanitizeNumber(latestTwr.cumulativeHpr)]
+            sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
+            params: [uid, groupId, latestDateStr, sanitizeNumber(newFullHistory[latestDateStr]), sanitizeNumber(totalCost)]
         });
         existingSnapshotDates.add(latestDateStr);
     }
@@ -45,10 +43,9 @@ async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, 
             if (!existingSnapshotDates.has(dateStr)) {
                 const finalState = getPortfolioStateOnDate(evts, currentDate, market);
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
-                const weeklyTwr = twrHistory[dateStr] || {};
                 snapshotOps.push({
-                    sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd, cumulative_hpr) VALUES (?, ?, ?, ?, ?, ?)`,
-                    params: [uid, groupId, dateStr, sanitizeNumber(newFullHistory[dateStr]), sanitizeNumber(totalCost), sanitizeNumber(weeklyTwr.cumulativeHpr)]
+                    sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
+                    params: [uid, groupId, dateStr, sanitizeNumber(newFullHistory[dateStr]), sanitizeNumber(totalCost)]
                 });
             }
         }
@@ -110,10 +107,11 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
 }
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 儲存式重算程序開始 (v_snapshot_perf_optimized) ---`);
+    console.log(`--- [${uid}] 儲存式重算程序開始 (v_snapshot_integrated) ---`);
     try {
         const ALL_GROUP_ID = 'all';
 
+        // [核心修正] 如果是週末腳本觸發的強制重算，先清除所有快照
         if (createSnapshot === true) {
             console.log(`[${uid}] 收到強制完整重算指令 (createSnapshot=true)，正在清除所有舊快照...`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
@@ -124,7 +122,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
-            d1Client.query('SELECT history, twrHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+            d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, userDividends);
@@ -148,10 +146,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
-        let oldTwrHistory = {};
-        let twrInitialState = {};
         let baseSnapshot = null;
-
+        
+        // [核心修正] 只有在非強制重算的情況下，才去尋找快照
         if (createSnapshot === false) {
             const LATEST_SNAPSHOT_SQL = modifiedTxDate
                 ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
@@ -163,27 +160,17 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         if (baseSnapshot) {
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
-            twrInitialState = {
-                cumulativeHpr: baseSnapshot.cumulative_hpr || 1.0,
-                lastMarketValue: baseSnapshot.market_value_twd || 0.0
-            };
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshot.snapshot_date]);
             const snapshotDate = toDate(baseSnapshot.snapshot_date);
-
-            if (summaryResult[0]) {
-                if (summaryResult[0].history) {
-                    oldHistory = JSON.parse(summaryResult[0].history);
-                    Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
-                }
-                if (summaryResult[0].twrHistory) {
-                    oldTwrHistory = JSON.parse(summaryResult[0].twrHistory);
-                    Object.keys(oldTwrHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldTwrHistory[date]; });
-                }
+            if (summaryResult[0] && summaryResult[0].history) {
+                oldHistory = JSON.parse(summaryResult[0].history);
+                Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
             }
             const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
             calculationStartDate = nextDay;
         } else {
             console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
+            // 因為可能已被上面的邏輯刪除，這裡確保清理乾淨
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
@@ -195,13 +182,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
             curDate.setDate(curDate.getDate() + 1);
         }
-        
         const newFullHistory = { ...oldHistory, ...partialHistory };
 
         const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
-        const { twrHistory: partialTwrHistory, benchmarkHistory } = metrics.calculateTwrHistory(partialHistory, dailyCashflows, market, benchmarkSymbol, firstBuyDate, twrInitialState);
-        const newFullTwrHistory = { ...oldTwrHistory, ...partialTwrHistory };
-
+        const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
         const portfolioResult = metrics.calculateCoreMetrics(evts, market);
         const netProfitHistory = {};
         let cumulativeCashflow = 0;
@@ -210,37 +194,33 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             netProfitHistory[dateStr] = newFullHistory[dateStr] - cumulativeCashflow;
         });
 
-        await maintainSnapshots(uid, newFullHistory, newFullTwrHistory, evts, market, createSnapshot, ALL_GROUP_ID);
+        await maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
 
         const { holdingsToUpdate } = portfolioResult.holdings;
+        
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            params: [uid, ALL_GROUP_ID, h.symbol, sanitizeNumber(h.quantity), h.currency, sanitizeNumber(h.avgCostOriginal), sanitizeNumber(h.totalCostTWD), sanitizeNumber(h.currentPriceOriginal), sanitizeNumber(h.marketValueTWD), sanitizeNumber(h.unrealizedPLTWD), sanitizeNumber(h.realizedPLTWD), sanitizeNumber(h.returnRate), sanitizeNumber(h.daily_change_percent), sanitizeNumber(h.daily_pl_twd)]
+            params: [
+                uid, ALL_GROUP_ID, h.symbol, sanitizeNumber(h.quantity), h.currency, 
+                sanitizeNumber(h.avgCostOriginal), sanitizeNumber(h.totalCostTWD),
+                sanitizeNumber(h.currentPriceOriginal), sanitizeNumber(h.marketValueTWD),
+                sanitizeNumber(h.unrealizedPLTWD), sanitizeNumber(h.realizedPLTWD),
+                sanitizeNumber(h.returnRate), sanitizeNumber(h.daily_change_percent),
+                sanitizeNumber(h.daily_pl_twd)
+            ]
         }));
-        
         const summaryData = {
             totalRealizedPL: portfolioResult.totalRealizedPL,
             xirr: portfolioResult.xirr,
             overallReturnRate: portfolioResult.overallReturnRate,
             benchmarkSymbol: benchmarkSymbol
         };
-
-        // [核心修正] 在儲存前，清理 twrHistory，使其能夠處理來自舊歷史的 "number" 和來自新計算的 "object"
-        const finalTwrHistoryForStorage = Object.entries(newFullTwrHistory).reduce((acc, [date, data]) => {
-            if (typeof data === 'object' && data !== null && data.value !== undefined) {
-                acc[date] = data.value;
-            } else if (typeof data === 'number') {
-                acc[date] = data;
-            }
-            return acc;
-        }, {});
-
         const summaryOps = [{
             sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(finalTwrHistoryForStorage), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
+            params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
         }];
         if (summaryOps.length > 0) await d1Client.batch(summaryOps);
         if (holdingsOps.length > 0) await d1Client.batch(holdingsOps);
