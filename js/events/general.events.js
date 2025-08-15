@@ -4,10 +4,10 @@
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, loadPortfolioData } from '../api.js';
+// [核心修改] 導入 executeApiAction
+import { executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-// 【修正前】: import { openModal, closeModal, showNotification } from '../ui/modals.js';
-// 【修正後】: 分開從各自的模組引入
+// [核心修改] 分開從各自的模組引入，loadPortfolioData 不再需要
 import { openModal, closeModal } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
@@ -23,42 +23,42 @@ async function handleUpdateBenchmark() {
         showNotification('error', '請輸入 Benchmark 的股票代碼。');
         return;
     }
-    try {
-        document.getElementById('loading-overlay').style.display = 'flex';
-        await apiRequest('update_benchmark', { benchmarkSymbol: newBenchmark });
-        await loadPortfolioData();
-    } catch (error) {
-        showNotification('error', `更新 Benchmark 失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
+    // [核心修改] 使用 executeApiAction 處理
+    executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
+        loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
+        successMessage: 'Benchmark 已成功更新！'
+    }).catch(error => {
+        console.error("更新 Benchmark 最終失敗:", error);
+    });
 }
 
 async function handleNotesFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('save-notes-btn');
-    saveBtn.disabled = true;
-    saveBtn.textContent = '儲存中...';
     const noteData = {
         symbol: document.getElementById('notes-symbol').value,
         target_price: parseFloat(document.getElementById('target-price').value) || null,
         stop_loss_price: parseFloat(document.getElementById('stop-loss-price').value) || null,
         notes: document.getElementById('notes-content').value.trim()
     };
-    try {
-        await apiRequest('save_stock_note', noteData);
-        closeModal('notes-modal');
+    
+    closeModal('notes-modal');
+
+    // [核心修改] 使用 executeApiAction 處理，但不刷新整個 Portfolio
+    executeApiAction('save_stock_note', noteData, {
+        loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
+        successMessage: `${noteData.symbol} 的筆記已儲存！`,
+        shouldRefreshData: false // 因為儲存筆記不需要重算整個投資組合
+    }).then(() => {
+        // 操作成功後，僅在前端更新 state 和 holdings 表格
         const { holdings, stockNotes } = getState();
         stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
         setState({ stockNotes });
         renderHoldingsTable(holdings);
-        showNotification('success', `${noteData.symbol} 的筆記已儲存！`);
-    } catch (error) {
-        showNotification('error', `儲存筆記失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存筆記';
-    }
+    }).catch(error => {
+        console.error("儲存筆記最終失敗:", error);
+        // 如果失敗，可以考慮重新打開 modal 或其他恢復操作
+    });
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
