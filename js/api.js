@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v3.6.0 - Fully Refactored
+// == API 通訊模組 (api.js) v4.0.0 - 支援群組視圖計算
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -59,7 +59,58 @@ export async function apiRequest(action, data) {
 }
 
 /**
- * 從後端載入所有投資組合資料並更新畫面
+ * 【核心修改】一個統一的函式，用來接收計算結果並更新整個 App 的 UI
+ */
+function updateAppWithData(portfolioData) {
+    const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
+        map[note.symbol] = note;
+        return map;
+    }, {});
+
+    const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+        obj[item.symbol] = item; return obj;
+    }, {});
+    
+    // 更新 state
+    setState({
+        // 僅更新會被改變的數據，保留 transactions, userSplits 等母數據
+        stockNotes: stockNotesMap,
+        holdings: holdingsObject,
+        portfolioHistory: portfolioData.history || {},
+        twrHistory: portfolioData.twrHistory || {},
+        benchmarkHistory: portfolioData.benchmarkHistory || {},
+        netProfitHistory: portfolioData.netProfitHistory || {}
+    });
+    
+    // 渲染 UI
+    renderHoldingsTable(holdingsObject);
+    renderTransactionsTable(); 
+    renderSplitsTable();
+    updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+    
+    updateAssetChart(); 
+    updateNetProfitChart();
+    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+    updateTwrChart(benchmarkSymbol);
+
+    document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+
+    // 更新圖表日期範圍選擇器
+    const { portfolioHistory, twrHistory, netProfitHistory } = getState();
+    const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
+    document.getElementById('asset-start-date').value = assetDates.startDate;
+    document.getElementById('asset-end-date').value = assetDates.endDate;
+    const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
+    document.getElementById('twr-start-date').value = twrDates.startDate;
+    document.getElementById('twr-end-date').value = twrDates.endDate;
+    const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
+    document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
+    document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
+}
+
+
+/**
+ * 從後端載入所有「全部股票」的投資組合資料並更新畫面
  */
 export async function loadPortfolioData() {
     const { currentUserId } = getState();
@@ -71,60 +122,51 @@ export async function loadPortfolioData() {
     try {
         const result = await apiRequest('get_data', {});
         
-        const portfolioData = result.data;
+        // 【修改】將 UI 更新邏輯抽離到新函式
+        updateAppWithData(result.data);
         
-        const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note;
-            return map;
-        }, {});
-
-        const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
-        
+        // 額外設定母數據
         setState({
-            transactions: portfolioData.transactions || [],
-            userSplits: portfolioData.splits || [],
-            marketDataForFrontend: portfolioData.marketData || {},
-            stockNotes: stockNotesMap,
-            holdings: holdingsObject,
-            portfolioHistory: portfolioData.history || {},
-            twrHistory: portfolioData.twrHistory || {},
-            benchmarkHistory: portfolioData.benchmarkHistory || {},
-            netProfitHistory: portfolioData.netProfitHistory || {}
+            transactions: result.data.transactions || [],
+            userSplits: result.data.splits || [],
         });
-        
-        renderHoldingsTable(holdingsObject);
-        renderTransactionsTable(); 
-        renderSplitsTable();
-        updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
-        
-        updateAssetChart(); 
-        updateNetProfitChart();
-        const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
-        updateTwrChart(benchmarkSymbol);
 
-        document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
-
-        const { portfolioHistory, twrHistory, netProfitHistory } = getState();
-
-        const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
-        document.getElementById('asset-start-date').value = assetDates.startDate;
-        document.getElementById('asset-end-date').value = assetDates.endDate;
-
-        const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
-        document.getElementById('twr-start-date').value = twrDates.startDate;
-        document.getElementById('twr-end-date').value = twrDates.endDate;
-        
-        const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
-        document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
-        document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
-        
         showNotification('success', '資料同步完成！');
     } catch (error) {
         console.error('Failed to load portfolio data:', error);
         showNotification('error', `讀取資料失敗: ${error.message}`);
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
+    }
+}
+
+/**
+ * 【新增】請求後端按需計算特定群組的數據，並更新畫面
+ */
+export async function applyGroupView(groupId) {
+    if (!groupId || groupId === 'all') {
+        await loadPortfolioData(); // 如果是'all'，就載入完整的儲存數據
+        return;
+    }
+
+    const loadingText = document.getElementById('loading-text');
+    document.getElementById('loading-overlay').style.display = 'flex';
+    loadingText.textContent = '正在為您即時計算群組績效...';
+
+    try {
+        const result = await apiRequest('calculate_group_on_demand', { groupId });
+        if (result.success) {
+            // 直接使用回傳的一次性計算結果來更新 UI
+            updateAppWithData(result.data);
+            showNotification('success', '群組績效計算完成！');
+        }
+    } catch (error) {
+        showNotification('error', `計算群組績效失敗: ${error.message}`);
+        // 如果失敗，可以選擇切回 'all' 視圖
+        document.getElementById('group-selector').value = 'all';
+        await loadPortfolioData();
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+        loadingText.textContent = '正在從雲端同步資料...'; // 恢復預設文字
     }
 }
