@@ -145,12 +145,14 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             txs, splits, userDividends, benchmarkSymbol
         );
 
+        // 【修正】解構出 market 物件
         const {
             summaryData, holdingsToUpdate, fullHistory, twrHistory,
-            benchmarkHistory, netProfitHistory, evts
+            benchmarkHistory, netProfitHistory, evts, market
         } = calculationResult;
 
-        await maintainSnapshots(uid, fullHistory, evts, null, createSnapshot, ALL_GROUP_ID);
+        // 【修正】將 market 物件傳遞給 maintainSnapshots
+        await maintainSnapshots(uid, fullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
         // 【核心修正】將刪除和寫入操作分離，避免潛在的 D1 批次處理衝突
 
