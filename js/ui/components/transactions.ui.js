@@ -5,20 +5,38 @@
 import { getState } from '../../state.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
 
+/**
+ * 【核心修正】產生智慧型自適應分頁控制項的 HTML
+ * @param {number} totalItems - 總項目數
+ * @param {number} itemsPerPage - 每頁項目數
+ * @param {number} currentPage - 當前頁碼
+ * @returns {string} - 分頁控制項的 HTML 字串
+ */
 function renderPaginationControls(totalItems, itemsPerPage, currentPage) {
     const totalPages = Math.ceil(totalItems / itemsPerPage);
     if (totalPages <= 1) return ''; // 如果只有一頁或沒有，則不顯示分頁
 
-    let paginationHtml = '<div class="flex justify-center items-center space-x-2 mt-4 transaction-pagination">';
+    let paginationHtml = '<div class="flex flex-wrap justify-center items-center gap-2 mt-4 transaction-pagination">';
     
     // 上一頁按鈕
     paginationHtml += `<button data-page="${currentPage - 1}" class="page-btn px-3 py-1 rounded-md text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}" ${currentPage === 1 ? 'disabled' : ''}>上一頁</button>`;
 
-    // 頁碼按鈕
-    // 為了在頁數過多時保持簡潔，這裡可以加入更複雜的頁碼顯示邏輯，但目前我們先顯示全部
+    let lastPageRendered = 0;
     for (let i = 1; i <= totalPages; i++) {
-        const isActive = i === currentPage;
-        paginationHtml += `<button data-page="${i}" class="page-btn px-3 py-1 rounded-md text-sm font-medium border ${isActive ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}">${i}</button>`;
+        const isFirstPage = i === 1;
+        const isLastPage = i === totalPages;
+        const isInContext = Math.abs(i - currentPage) <= 1; // 顯示當前頁的前後1頁
+
+        if (isFirstPage || isLastPage || isInContext) {
+            // 如果當前頁與上一頁之間有間隔，則插入省略號
+            if (i > lastPageRendered + 1) {
+                paginationHtml += `<span class="px-3 py-1 text-sm text-gray-500">...</span>`;
+            }
+            
+            const isActive = i === currentPage;
+            paginationHtml += `<button data-page="${i}" class="page-btn px-3 py-1 rounded-md text-sm font-medium border ${isActive ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}">${i}</button>`;
+            lastPageRendered = i;
+        }
     }
 
     // 下一頁按鈕
@@ -27,6 +45,7 @@ function renderPaginationControls(totalItems, itemsPerPage, currentPage) {
     paginationHtml += '</div>';
     return paginationHtml;
 }
+
 
 export function renderTransactionsTable() {
     const { transactions, transactionFilter, transactionsPerPage, transactionsCurrentPage } = getState();
