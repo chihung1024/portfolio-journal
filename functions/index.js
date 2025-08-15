@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v3.9.0 - Refactored)
+// == GCP Cloud Function 主入口 (v4.0.0 - 支援群組管理)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -10,12 +10,13 @@ const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./performRecalculation');
 const { verifyFirebaseToken } = require('./middleware');
 
-// 【修改】引入所有 handlers
+// 引入所有 handlers
 const transactionHandlers = require('./api_handlers/transaction.handler');
 const dividendHandlers = require('./api_handlers/dividend.handler');
 const splitHandlers = require('./api_handlers/split.handler');
 const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
+const groupHandlers = require('./api_handlers/group.handler'); // 【新增】引入新的群組處理器
 
 try {
     admin.initializeApp();
@@ -24,7 +25,7 @@ try {
 }
 
 exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest(async (req, res) => {
-    // CORS and OPTIONS request handling (no changes)
+    // CORS and OPTIONS request handling (維持不變)
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
         'https://portfolio-journal-467915.firebaseapp.com'
@@ -42,7 +43,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // Service Account request handling (no changes)
+    // Service Account request handling (維持不變)
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -70,7 +71,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
-            // 【重構】路由分發到對應的 handler
+            // 【核心修改】在路由分發中增加群組相關的 actions
             switch (action) {
                 // Portfolio
                 case 'get_data':
@@ -105,6 +106,16 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 // Notes
                 case 'save_stock_note':
                     return await noteHandlers.saveStockNote(uid, data, res);
+
+                // 【新增】Groups
+                case 'get_groups':
+                    return await groupHandlers.getGroups(uid, res);
+                case 'save_group':
+                    return await groupHandlers.saveGroup(uid, data, res);
+                case 'delete_group':
+                    return await groupHandlers.deleteGroup(uid, data, res);
+                case 'calculate_group_on_demand':
+                    return await groupHandlers.calculateGroupOnDemand(uid, data, res);
 
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
