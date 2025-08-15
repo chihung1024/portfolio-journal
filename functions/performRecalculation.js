@@ -14,7 +14,6 @@ const sanitizeNumber = (value) => {
     return isFinite(num) ? num : 0;
 };
 
-// [核心優化] maintainSnapshots 現在需要 twrHistory 來儲存 cumulative_hpr
 async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
     console.log(`${logPrefix} 開始維護快照 (含 TWR 狀態)... 強制建立最新快照: ${createSnapshot}`);
@@ -31,8 +30,8 @@ async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, 
     if (latestDateStr && (createSnapshot || !existingSnapshotDates.has(latestDateStr))) {
         const currentDate = new Date(latestDateStr);
         const finalState = getPortfolioStateOnDate(evts, currentDate, market);
-        const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
-        const latestTwr = twrHistory[latestDateStr] || {}; // 從 twrHistory 獲取
+        const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWR, 0), 0);
+        const latestTwr = twrHistory[latestDateStr] || {};
         
         snapshotOps.push({
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd, cumulative_hpr) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -42,7 +41,7 @@ async function maintainSnapshots(uid, newFullHistory, twrHistory, evts, market, 
     }
     for (const dateStr of sortedHistoryDates) {
         const currentDate = new Date(dateStr);
-        if (currentDate.getUTCDay() === 6) { //週六
+        if (currentDate.getUTCDay() === 6) {
             if (!existingSnapshotDates.has(dateStr)) {
                 const finalState = getPortfolioStateOnDate(evts, currentDate, market);
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
@@ -150,7 +149,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
         let oldTwrHistory = {};
-        let twrInitialState = {}; // [核心優化]
+        let twrInitialState = {};
         let baseSnapshot = null;
 
         if (createSnapshot === false) {
@@ -164,7 +163,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         if (baseSnapshot) {
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
-            twrInitialState = { // [核心優化] 設定 TWR 初始狀態
+            twrInitialState = {
                 cumulativeHpr: baseSnapshot.cumulative_hpr || 1.0,
                 lastMarketValue: baseSnapshot.market_value_twd || 0.0
             };
@@ -200,7 +199,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const newFullHistory = { ...oldHistory, ...partialHistory };
 
         const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
-        // [核心優化] 將 twrInitialState 傳入計算函式
         const { twrHistory: partialTwrHistory, benchmarkHistory } = metrics.calculateTwrHistory(partialHistory, dailyCashflows, market, benchmarkSymbol, firstBuyDate, twrInitialState);
         const newFullTwrHistory = { ...oldTwrHistory, ...partialTwrHistory };
 
@@ -230,9 +228,13 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             benchmarkSymbol: benchmarkSymbol
         };
 
-        // [核心優化] 在儲存前，清理 twrHistory，只保留百分比值
+        // [核心修正] 在儲存前，清理 twrHistory，使其能夠處理來自舊歷史的 "number" 和來自新計算的 "object"
         const finalTwrHistoryForStorage = Object.entries(newFullTwrHistory).reduce((acc, [date, data]) => {
-            acc[date] = data.value;
+            if (typeof data === 'object' && data !== null && data.value !== undefined) {
+                acc[date] = data.value;
+            } else if (typeof data === 'number') {
+                acc[date] = data;
+            }
             return acc;
         }, {});
 
