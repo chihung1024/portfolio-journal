@@ -110,6 +110,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
     try {
         const ALL_GROUP_ID = 'all';
 
+        // [核心修正] 如果是週末腳本觸發的強制重算，先清除所有快照
+        if (createSnapshot === true) {
+            console.log(`[${uid}] 收到強制完整重算指令 (createSnapshot=true)，正在清除所有舊快照...`);
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+        }
+
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -139,13 +145,17 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         let calculationStartDate = firstBuyDate;
         let oldHistory = {};
-
-        const LATEST_SNAPSHOT_SQL = modifiedTxDate
-            ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
-            : `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? ORDER BY snapshot_date DESC LIMIT 1`;
-        const params = modifiedTxDate ? [uid, ALL_GROUP_ID, modifiedTxDate] : [uid, ALL_GROUP_ID];
-        const latestValidSnapshotResult = await d1Client.query(LATEST_SNAPSHOT_SQL, params);
-        const baseSnapshot = latestValidSnapshotResult[0];
+        let baseSnapshot = null;
+        
+        // [核心修正] 只有在非強制重算的情況下，才去尋找快照
+        if (createSnapshot === false) {
+            const LATEST_SNAPSHOT_SQL = modifiedTxDate
+                ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
+                : `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? ORDER BY snapshot_date DESC LIMIT 1`;
+            const params = modifiedTxDate ? [uid, ALL_GROUP_ID, modifiedTxDate] : [uid, ALL_GROUP_ID];
+            const latestValidSnapshotResult = await d1Client.query(LATEST_SNAPSHOT_SQL, params);
+            baseSnapshot = latestValidSnapshotResult[0];
+        }
 
         if (baseSnapshot) {
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
@@ -158,7 +168,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
             calculationStartDate = nextDay;
         } else {
-            console.log(`[${uid}] 找不到有效快照，將執行完整計算並清理所有舊快照。`);
+            console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
+            // 因為可能已被上面的邏輯刪除，這裡確保清理乾淨
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
@@ -187,7 +198,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
 
-        // 【最終修正】從正確的巢狀結構中解構出 holdingsToUpdate
         const { holdingsToUpdate } = portfolioResult.holdings;
         
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
