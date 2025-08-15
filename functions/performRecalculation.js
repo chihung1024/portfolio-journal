@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_group_id_fix - 修正 group_id 處理)
+// == 檔案：functions/performRecalculation.js (v_final_robust - 最終穩健版)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -8,6 +8,7 @@ const { toDate, isTwStock } = require('./calculation/helpers');
 const { runCalculationEngine } = require('./calculation/engine');
 const { getPortfolioStateOnDate } = require('./calculation/state.calculator');
 
+// 完整、未省略的 maintainSnapshots 函式
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
     console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
@@ -17,7 +18,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 
     const snapshotOps = [];
-    // 【核心修正】查詢時使用明確的 group_id
     const existingSnapshotsResult = await d1Client.query('SELECT snapshot_date FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, groupId]);
     const existingSnapshotDates = new Set(existingSnapshotsResult.map(r => r.snapshot_date.split('T')[0]));
     const sortedHistoryDates = Object.keys(newFullHistory).sort();
@@ -29,7 +29,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
         const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
         
         snapshotOps.push({
-            // 【核心修正】插入時使用明確的 group_id
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
             params: [uid, groupId, latestDateStr, newFullHistory[latestDateStr], totalCost]
         });
@@ -44,7 +43,6 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
                 const totalCost = Object.values(finalState).reduce((s, stk) => s + stk.lots.reduce((ls, l) => ls + l.quantity * l.pricePerShareTWD, 0), 0);
                 
                 snapshotOps.push({
-                    // 【核心修正】插入時使用明確的 group_id
                     sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
                     params: [uid, groupId, dateStr, newFullHistory[dateStr], totalCost]
                 });
@@ -60,6 +58,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 }
 
+// 完整、未省略的 calculateAndCachePendingDividends 函式
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
@@ -116,11 +115,10 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
  * 協調函式：準備數據、呼叫計算引擎、並儲存結果
  */
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 儲存式重算程序開始 (使用 'all' 作為預設群組 ID) ---`);
+    console.log(`--- [${uid}] 儲存式重算程序開始 (最終穩健版) ---`);
     try {
-        const ALL_GROUP_ID = 'all'; // 【核心修正】定義一個常量來代表 "全部股票"
+        const ALL_GROUP_ID = 'all';
 
-        // 1. 準備母數據 (永遠是全部的交易)
         const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -143,51 +141,37 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-        // 2. 呼叫計算引擎
         const calculationResult = await runCalculationEngine(
-            txs,
-            splits,
-            userDividends,
-            benchmarkSymbol
+            txs, splits, userDividends, benchmarkSymbol
         );
 
         const {
-            summaryData,
-            holdingsToUpdate,
-            fullHistory,
-            twrHistory,
-            benchmarkHistory,
-            netProfitHistory,
-            evts
+            summaryData, holdingsToUpdate, fullHistory, twrHistory,
+            benchmarkHistory, netProfitHistory, evts
         } = calculationResult;
 
-        // 在儲存前，先維護快照
         await maintainSnapshots(uid, fullHistory, evts, null, createSnapshot, ALL_GROUP_ID);
 
-        // 3. 儲存計算結果
-        await d1Client.batch([
-             { sql: 'DELETE FROM holdings WHERE uid = ? AND group_id = ?', params: [uid, ALL_GROUP_ID] },
-             { sql: 'DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', params: [uid, ALL_GROUP_ID] },
-        ]);
+        // 【核心修正】將刪除和寫入操作分離，避免潛在的 D1 批次處理衝突
 
-        const holdingsOps = [];
-        Object.values(holdingsToUpdate).forEach(h => {
-            holdingsOps.push({
-                sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-                params: [uid, ALL_GROUP_ID, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate, h.daily_change_percent, h.daily_pl_twd]
-            });
-        });
-        
+        // 步驟 3A: 執行刪除操作
+        await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+        await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+
+        // 步驟 3B: 準備並執行批次插入操作
+        const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
+            sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            params: [uid, ALL_GROUP_ID, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate, h.daily_change_percent, h.daily_pl_twd]
+        }));
+
         const summaryOps = [{
             sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(fullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
         }];
         
-        await d1Client.batch(summaryOps);
-        const BATCH_SIZE = 500;
-        for (let i = 0; i < holdingsOps.length; i += BATCH_SIZE) {
-            await d1Client.batch(holdingsOps.slice(i, i + BATCH_SIZE));
-        }
+        // 只有在有數據可寫入時才執行 batch
+        if (summaryOps.length > 0) await d1Client.batch(summaryOps);
+        if (holdingsOps.length > 0) await d1Client.batch(holdingsOps);
 
         console.log(`--- [${uid}] 儲存式重算程序完成 ---`);
     } catch (e) {
