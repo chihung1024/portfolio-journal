@@ -3,7 +3,8 @@
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest } from '../api.js';
+// [核心修改] 導入 executeApiAction
+import { executeApiAction } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
@@ -24,68 +25,73 @@ function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
-// 統一處理成功回應的邏輯
+// [核心修改] 此函式現在作為 executeApiAction 成功後的回呼，專門處理後端返回的數據包
 function handleSuccessfulUpdate(result) {
-    if (!result.data) return;
+    if (!result || !result.data) {
+        console.error("handleSuccessfulUpdate 收到的結果無效:", result);
+        return;
+    }
+    
+    // 後端在交易操作後會返回完整的最新數據，我們用它來更新前端
+    const { holdings, summary, history, twrHistory, netProfitHistory, benchmarkHistory } = result.data;
 
-    const holdingsObject = (result.data.holdings || []).reduce((obj, item) => {
+    const holdingsObject = (holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
 
     // 全面更新 state，包含後端回傳的所有圖表歷史數據
     setState({
         holdings: holdingsObject,
-        portfolioHistory: result.data.history || {},
-        twrHistory: result.data.twrHistory || {},
-        netProfitHistory: result.data.netProfitHistory || {},
-        benchmarkHistory: result.data.benchmarkHistory || {}
+        portfolioHistory: history || {},
+        twrHistory: twrHistory || {},
+        netProfitHistory: netProfitHistory || {},
+        benchmarkHistory: benchmarkHistory || {}
     });
 
     // 更新儀表板和持股列表
     renderHoldingsTable(holdingsObject);
-    updateDashboard(holdingsObject, result.data.summary?.totalRealizedPL, result.data.summary?.overallReturnRate, result.data.summary?.xirr);
+    updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
 
     // 主動呼叫圖表更新函式
     updateAssetChart();
     updateNetProfitChart();
-    const benchmarkSymbol = result.data.summary?.benchmarkSymbol || 'SPY';
+    const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol);
+    
+    // 最後，刷新交易列表本身
+    // 這裡我們假設需要一個新的API來獲取最新的交易列表，或者從 get_data 獲取
+    // 為了簡化，我們先重新渲染一次
+    renderTransactionsTable();
 }
 
 
 async function handleDelete(button) {
-    const { transactions } = getState();
     const txId = button.dataset.id;
     
-    const transactionToDelete = transactions.find(t => t.id === txId);
-    if (!transactionToDelete) return;
-
     showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-        const originalTransactions = [...transactions];
-        const updatedTransactions = transactions.filter(t => t.id !== txId);
-        setState({ transactions: updatedTransactions });
-        renderTransactionsTable();
-        showNotification('info', '交易已於介面移除，正在同步至雲端...');
-
-        apiRequest('delete_transaction', { txId })
-            .then(result => {
-                showNotification('success', '交易紀錄已成功從雲端刪除！');
-                handleSuccessfulUpdate(result);
-            })
-            .catch(error => {
-                showNotification('error', `刪除失敗: ${error.message}`);
-                setState({ transactions: originalTransactions });
-                renderTransactionsTable();
-            });
+        // [核心修改] 使用 executeApiAction 處理，並在成功後更新 UI
+        executeApiAction('delete_transaction', { txId }, {
+            loadingText: '正在刪除交易紀錄...',
+            successMessage: '交易紀錄已成功刪除！',
+            shouldRefreshData: false // 因為後端會直接返回更新後的數據
+        }).then(result => {
+            // 更新 state 中的 transactions 列表
+            const { transactions } = getState();
+            const updatedTransactions = transactions.filter(t => t.id !== txId);
+            setState({ transactions: updatedTransactions });
+            
+            // 使用後端返回的數據包更新所有相關 UI
+            handleSuccessfulUpdate(result);
+        }).catch(error => {
+            console.error("刪除交易最終失敗:", error);
+            // 由於我們不再做樂觀更新，失敗時無需恢復 UI
+        });
     });
 }
 
 async function handleFormSubmit(e) {
     e.preventDefault();
     
-    const { transactions } = getState();
-    const originalTransactions = [...transactions];
-
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
 
@@ -107,45 +113,34 @@ async function handleFormSubmit(e) {
     
     closeModal('transaction-modal');
 
-    if (isEditing) {
-        const updatedTransactions = transactions.map(t => 
-            t.id === txId ? { ...t, ...transactionData, id: txId } : t
-        );
-        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
-    } else {
-        const tempId = `temp_${Date.now()}`;
-        const newTransaction = { id: tempId, ...transactionData };
-        const updatedTransactions = [newTransaction, ...transactions];
-        setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
-    }
-
-    renderTransactionsTable();
-    showNotification('info', '交易已更新於介面，正在同步至雲端...');
-
     const action = isEditing ? 'edit_transaction' : 'add_transaction';
     const payload = isEditing ? { txId, txData: transactionData } : transactionData;
+    const successMessage = isEditing ? '交易已成功更新！' : '交易已成功新增！';
 
-    apiRequest(action, payload)
-        .then(result => {
-            showNotification('success', isEditing ? '交易已成功更新！' : '交易已成功新增！');
-            
-            handleSuccessfulUpdate(result);
-
-            if (!isEditing && result.id) {
-                // 需要重新獲取一次 state，因為 handleSuccessfulUpdate 可能已經改變了它
-                const currentTxs = getState().transactions;
-                const finalTransactions = currentTxs.map(t => 
-                    t.id.toString().startsWith('temp_') ? { ...t, id: result.id } : t
-                );
-                setState({ transactions: finalTransactions });
-                 renderTransactionsTable();
-            }
-        })
-        .catch(error => {
-            showNotification('error', `儲存交易失敗: ${error.message}`);
-            setState({ transactions: originalTransactions });
-            renderTransactionsTable();
-        });
+    // [核心修改] 使用 executeApiAction 處理
+    executeApiAction(action, payload, {
+        loadingText: '正在同步交易紀錄...',
+        successMessage: successMessage,
+        shouldRefreshData: false // 後端會直接返回更新後的數據
+    }).then(result => {
+        // 更新 state 中的 transactions 列表
+        const { transactions } = getState();
+        if (isEditing) {
+            const updatedTransactions = transactions.map(t => 
+                t.id === txId ? { ...t, ...transactionData, id: txId } : t
+            );
+            setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
+        } else {
+            const newTransaction = { ...transactionData, id: result.id };
+            const updatedTransactions = [newTransaction, ...transactions];
+             setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
+        }
+        
+        // 使用後端返回的數據包更新所有相關 UI
+        handleSuccessfulUpdate(result);
+    }).catch(error => {
+        console.error("儲存交易最終失敗:", error);
+    });
 }
 
 
