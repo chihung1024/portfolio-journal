@@ -3,8 +3,8 @@
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// [核心修改] 導入 executeApiAction
-import { executeApiAction } from '../api.js';
+// [核心修改] 導入 executeApiAction 和 apiRequest
+import { apiRequest, executeApiAction } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
@@ -59,8 +59,6 @@ function handleSuccessfulUpdate(result) {
     updateTwrChart(benchmarkSymbol);
     
     // 最後，刷新交易列表本身
-    // 這裡我們假設需要一個新的API來獲取最新的交易列表，或者從 get_data 獲取
-    // 為了簡化，我們先重新渲染一次
     renderTransactionsTable();
 }
 
@@ -69,22 +67,24 @@ async function handleDelete(button) {
     const txId = button.dataset.id;
     
     showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-        // [核心修改] 使用 executeApiAction 處理，並在成功後更新 UI
+        // [核心修改] 使用 executeApiAction 處理指令式流程
         executeApiAction('delete_transaction', { txId }, {
             loadingText: '正在刪除交易紀錄...',
             successMessage: '交易紀錄已成功刪除！',
-            shouldRefreshData: false // 因為後端會直接返回更新後的數據
+            // 關鍵：我們依賴後端返回的數據包，所以不在 executeApiAction 內部自動刷新
+            shouldRefreshData: false 
         }).then(result => {
-            // 更新 state 中的 transactions 列表
+            // API 成功後，用權威數據更新前端
+            // 首先手動更新交易列表本身
             const { transactions } = getState();
             const updatedTransactions = transactions.filter(t => t.id !== txId);
             setState({ transactions: updatedTransactions });
             
-            // 使用後端返回的數據包更新所有相關 UI
+            // 然後用後端返回的數據包更新所有其他相關 UI
             handleSuccessfulUpdate(result);
         }).catch(error => {
             console.error("刪除交易最終失敗:", error);
-            // 由於我們不再做樂觀更新，失敗時無需恢復 UI
+            // 失敗時，錯誤通知已由 executeApiAction 自動顯示，我們無需做任何 UI 回滾
         });
     });
 }
@@ -117,29 +117,25 @@ async function handleFormSubmit(e) {
     const payload = isEditing ? { txId, txData: transactionData } : transactionData;
     const successMessage = isEditing ? '交易已成功更新！' : '交易已成功新增！';
 
-    // [核心修改] 使用 executeApiAction 處理
+    // [核心修改] 使用 executeApiAction 處理指令式流程
     executeApiAction(action, payload, {
         loadingText: '正在同步交易紀錄...',
         successMessage: successMessage,
-        shouldRefreshData: false // 後端會直接返回更新後的數據
+        shouldRefreshData: false
     }).then(result => {
-        // 更新 state 中的 transactions 列表
-        const { transactions } = getState();
-        if (isEditing) {
-            const updatedTransactions = transactions.map(t => 
-                t.id === txId ? { ...t, ...transactionData, id: txId } : t
-            );
-            setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
-        } else {
-            const newTransaction = { ...transactionData, id: result.id };
-            const updatedTransactions = [newTransaction, ...transactions];
-             setState({ transactions: updatedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)) });
-        }
-        
-        // 使用後端返回的數據包更新所有相關 UI
-        handleSuccessfulUpdate(result);
+        // API 成功後，用權威數據更新前端
+        // 為了確保交易列表（包含新增的ID或編輯的內容）完全正確，
+        // 我們需要一個包含最新交易列表的數據源。
+        // 最可靠的方式是重新請求一次 get_data。
+        apiRequest('get_data', {}).then(fullData => {
+            setState({ transactions: fullData.data.transactions || [] });
+            
+            // 然後使用先前操作返回的、計算好的數據包更新所有其他UI
+            handleSuccessfulUpdate(result);
+        });
     }).catch(error => {
         console.error("儲存交易最終失敗:", error);
+        // 同樣，失敗時無需做任何 UI 回滾
     });
 }
 
@@ -166,14 +162,13 @@ export function initializeTransactionEventListeners() {
             return;
         }
 
-        // 【新增】處理分頁按鈕點擊
         const pageButton = e.target.closest('.page-btn');
         if (pageButton) {
             e.preventDefault();
             const newPage = parseInt(pageButton.dataset.page, 10);
             if (!isNaN(newPage) && newPage > 0) {
                 setState({ transactionsCurrentPage: newPage });
-                renderTransactionsTable(); // 重新渲染表格
+                renderTransactionsTable(); 
             }
             return;
         }
@@ -181,7 +176,6 @@ export function initializeTransactionEventListeners() {
 
     document.getElementById('transactions-tab').addEventListener('change', (e) => {
         if (e.target.id === 'transaction-symbol-filter') {
-            // 【修改】當篩選股票時，重置頁碼到第 1 頁
             setState({ 
                 transactionFilter: e.target.value,
                 transactionsCurrentPage: 1 
