@@ -82,39 +82,40 @@ exports.calculateGroupOnDemand = async (uid, data, res) => {
 
     console.log(`--- [${uid}|G:${groupId.substring(0,4)}] 按需計算程序開始 ---`);
 
-    // 1. 根據 groupId 撈取計算所需的母數據
-    // 注意：分割 (splits) 和已確認股利 (userDividends) 永遠是全域的，因為它們可能影響任何交易
-    const [groupSymbolsResult, splits, userDividends, controlsData] = await Promise.all([
-        d1Client.query('SELECT symbol FROM stock_groups WHERE uid = ? AND group_id = ?', [uid, groupId]),
+    // 1. 根據 groupId 撈取群組內的股票代碼
+    const groupSymbolsResult = await d1Client.query('SELECT symbol FROM stock_groups WHERE uid = ? AND group_id = ?', [uid, groupId]);
+    if (groupSymbolsResult.length === 0) {
+        // 如果群組是空的，直接回傳空結果
+        return res.status(200).send({ success: true, data: { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {} } });
+    }
+    const symbolsInGroup = groupSymbolsResult.map(s => s.symbol.toUpperCase());
+    const placeholders = symbolsInGroup.map(() => '?').join(',');
+
+    // 2. 撈取計算所需的【全域】母數據，並在稍後進行過濾
+    const [allSplits, allUserDividends, controlsData] = await Promise.all([
         d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
         d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
         d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
     ]);
 
-    if (groupSymbolsResult.length === 0) {
-        // 如果群組是空的，直接回傳空結果
-        return res.status(200).send({ success: true, data: { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {} } });
-    }
-    
-    const symbolsInGroup = groupSymbolsResult.map(s => s.symbol);
-    const placeholders = symbolsInGroup.map(() => '?').join(',');
-
-    // 只撈取與群組內股票相關的交易紀錄
+    // 3. 【核心修正】只撈取與群組內股票相關的交易、拆股和股利紀錄
     const txs = await d1Client.query(`SELECT * FROM transactions WHERE uid = ? AND symbol IN (${placeholders}) ORDER BY date ASC`, [uid, ...symbolsInGroup]);
+    const splitsInGroup = allSplits.filter(split => symbolsInGroup.includes(split.symbol.toUpperCase()));
+    const dividendsInGroup = allUserDividends.filter(dividend => symbolsInGroup.includes(dividend.symbol.toUpperCase()));
     
     const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-    // 2. 呼叫計算引擎
+    // 4. 呼叫計算引擎，傳入【已過濾】的數據
     const result = await runCalculationEngine(
         txs,
-        splits,
-        userDividends,
+        splitsInGroup,
+        dividendsInGroup,
         benchmarkSymbol
     );
     
-    // 3. 將計算結果直接打包回傳，不進行任何儲存
+    // 5. 將計算結果直接打包回傳
     const responseData = {
-        holdings: Object.values(result.holdingsToUpdate), // 將物件轉為陣列，方便前端處理
+        holdings: Object.values(result.holdingsToUpdate),
         summary: result.summaryData,
         history: result.fullHistory,
         twrHistory: result.twrHistory,
