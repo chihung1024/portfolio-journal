@@ -14,7 +14,7 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { loadPortfolioData } from './api.js';
-import { showNotification } from './ui.js';
+import { showNotification } from './ui/notifications.js'; // [核心修改] 導入路徑已從 './ui.js' 改為 './ui/notifications.js'
 import { initializeAppUI } from './main.js'; // [修改] 引入主程式的 UI 初始化函式
 
 // 初始化 Firebase
