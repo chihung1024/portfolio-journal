@@ -1,39 +1,34 @@
 name: Update Stock Prices
 
 on:
-  workflow_dispatch:          # 允許手動觸發
+  workflow_dispatch:
   schedule:
-    - cron: '*/30 0-6 * * 1-5'   # 台股開盤：每 30 分
-    - cron: '*/15 13-16 * * 1-5' # 美股盤前：每 15 分
+    - cron: '*/30 0-6 * * 1-5'   # 台股盤中，每 30 分
+    - cron: '*/15 13-16 * * 1-5' # 美股盤前，每 15 分
 
 jobs:
   update-prices:
     runs-on: ubuntu-latest
 
-    # 避免排程堆疊：永遠保留最新一次執行
-    concurrency:
+    concurrency:                 # 避免佇列堆疊
       group: update-prices
       cancel-in-progress: true
 
-    timeout-minutes: 10          # 最長執行時間
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      # ---------- pip wheel 快取 ----------
       - name: Cache pip wheels
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          restore-keys: ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
@@ -42,8 +37,8 @@ jobs:
 
       - name: Run price-update script
         env:
-          D1_WORKER_URL: ${{ secrets.D1_WORKER_URL }}
-          D1_API_KEY: ${{ secrets.D1_API_KEY }}
-          GCP_API_URL: ${{ secrets.GCP_API_URL }}
+          D1_WORKER_URL:      ${{ secrets.D1_WORKER_URL }}
+          D1_API_KEY:         ${{ secrets.D1_API_KEY }}
+          GCP_API_URL:        ${{ secrets.GCP_API_URL }}
           SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
         run: python main.py
