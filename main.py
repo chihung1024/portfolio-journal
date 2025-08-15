@@ -137,7 +137,7 @@ def process_single_symbol(symbol, today_str, latest_dates, first_tx_dates):
     else:
         start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
-    if start_date > today_str:
+    if start_date >= today_str:
         d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
         return None
 
