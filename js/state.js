@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v3.5.0 - 新增交易分頁
+// == 狀態管理模組 (state.js) v3.6.0 - 新增群組管理狀態
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -18,14 +18,16 @@ let state = {
     netProfitChart: null, 
     confirmCallback: null,
 
-    // [新增] 增加一個旗標來防止重複的數據同步
     isSyncing: false,
+
+    // 【新增】群組相關狀態
+    groups: [], // 存放所有使用者自訂的群組
+    selectedGroupId: 'all', // 當前查看的群組ID, 'all' 代表全部股票
 
     // 篩選與排序狀態
     transactionFilter: 'all',
-    // 【新增】交易紀錄分頁狀態
-    transactionsPerPage: 15, // 每頁顯示 15 筆
-    transactionsCurrentPage: 1, // 當前頁面為第 1 頁
+    transactionsPerPage: 15, 
+    transactionsCurrentPage: 1, 
     dividendFilter: 'all',
     holdingsSort: {
         key: 'marketValueTWD',
