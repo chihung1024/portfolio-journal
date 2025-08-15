@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (新增檔案)
+// == 檔案：js/events/group.events.js (最終修正版)
 // == 職責：處理所有與群組管理相關的用戶互動事件
 // =========================================================================================
 
@@ -8,7 +8,6 @@ import { apiRequest } from '../api.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
-import { loadPortfolioData } from '../api.js'; // 引入以更新全局選擇器
 
 /**
  * 載入所有群組並更新 UI
@@ -30,14 +29,13 @@ async function loadGroups() {
  * 更新頂部的全局群組篩選器下拉選單
  */
 function updateGroupSelector() {
-    const { groups, selectedGroupId } = getState();
+    const { groups } = getState();
     const selector = document.getElementById('group-selector');
     if (!selector) return;
 
-    // 保存當前選中的值
     const currentValue = selector.value;
 
-    selector.innerHTML = '<option value="all">全部股票</option>'; // 重置並加入預設選項
+    selector.innerHTML = '<option value="all">全部股票</option>';
     groups.forEach(group => {
         const option = document.createElement('option');
         option.value = group.id;
@@ -45,12 +43,14 @@ function updateGroupSelector() {
         selector.appendChild(option);
     });
 
-    // 嘗試恢復之前的選中值，如果不存在則預設為 'all'
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
+    
+    // 根據選擇決定是否顯示計算按鈕
+    const recalcBtn = document.getElementById('recalculate-group-btn');
     if (selector.value !== 'all') {
-         document.getElementById('recalculate-group-btn').classList.remove('hidden');
+         recalcBtn.classList.remove('hidden');
     } else {
-         document.getElementById('recalculate-group-btn').classList.add('hidden');
+         recalcBtn.classList.add('hidden');
     }
 }
 
@@ -83,7 +83,7 @@ async function handleGroupFormSubmit(e) {
         await apiRequest('save_group', groupData);
         closeModal('group-modal');
         showNotification('success', '群組已成功儲存！');
-        await loadGroups(); // 重新載入群組列表
+        await loadGroups();
     } catch (error) {
         showNotification('error', `儲存群組失敗: ${error.message}`);
     } finally {
@@ -105,7 +105,7 @@ function handleDeleteGroup(button) {
         try {
             await apiRequest('delete_group', { groupId });
             showNotification('success', '群組已刪除。');
-            await loadGroups(); // 重新載入群組列表
+            await loadGroups();
         } catch (error) {
             showNotification('error', `刪除群組失敗: ${error.message}`);
         }
@@ -116,11 +116,10 @@ function handleDeleteGroup(button) {
  * 初始化所有與群組相關的事件監聽器
  */
 export function initializeGroupEventListeners() {
-    // 監聽 "群組管理" 分頁內的點擊
     document.getElementById('groups-tab').addEventListener('click', (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
-            renderGroupModal(null); // 傳入 null 表示新增
+            renderGroupModal(null);
             openModal('group-modal');
             return;
         }
@@ -128,9 +127,10 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const { groups } = getState();
-            const group = groups.find(g => g.id === editBtn.dataset.groupId);
-            if (group) {
-                renderGroupModal(group); // 傳入要編輯的群組物件
+            // 【核心修正點】確保從 state 中正確找到完整的群組物件
+            const groupToEdit = groups.find(g => g.id === editBtn.dataset.groupId);
+            if (groupToEdit) {
+                renderGroupModal(groupToEdit); // 將找到的物件傳遞給渲染函式
                 openModal('group-modal');
             }
             return;
@@ -143,10 +143,8 @@ export function initializeGroupEventListeners() {
         }
     });
 
-    // 監聽群組表單提交與取消
     document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
     document.getElementById('cancel-group-btn').addEventListener('click', () => closeModal('group-modal'));
 }
 
-// 匯出 loadGroups 供主程式使用
-export { loadGroups };
+export { loadGroups, updateGroupSelector }; // 匯出 updateGroupSelector 供主程式使用
