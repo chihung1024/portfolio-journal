@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_robust - 快照邏輯整合)
+// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -187,7 +187,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
 
-        const { holdingsToUpdate } = portfolioResult;
+        // 【最終修正】從正確的巢狀結構中解構出 holdingsToUpdate
+        const { holdingsToUpdate } = portfolioResult.holdings;
+        
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             params: [
