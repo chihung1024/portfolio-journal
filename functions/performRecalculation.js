@@ -123,12 +123,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
     try {
         const ALL_GROUP_ID = 'all';
 
-        const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
+        const [txs, splits, controlsData, userDividends] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
-            d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, userDividends);
@@ -141,6 +140,25 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
                 { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
             ]);
             return;
+        }
+
+        // 【核心修正】恢復並整合快照清理邏輯
+        if (modifiedTxDate) {
+            console.log(`[${uid}] 交易紀錄被修改 (日期: ${modifiedTxDate})，正在清理無效的快照...`);
+            // 尋找在被修改的交易日期之前的最後一個有效快照
+            const LATEST_SNAPSHOT_SQL = `SELECT snapshot_date FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`;
+            const params = [uid, ALL_GROUP_ID, modifiedTxDate];
+            const latestValidSnapshotResult = await d1Client.query(LATEST_SNAPSHOT_SQL, params);
+            
+            if (latestValidSnapshotResult.length > 0) {
+                const baseSnapshotDate = latestValidSnapshotResult[0].snapshot_date;
+                console.log(`[${uid}] 找到最後一個有效的快照日期: ${baseSnapshotDate}，將刪除此日期之後的所有快照。`);
+                await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshotDate]);
+            } else {
+                // 如果找不到任何更早的快照，代表第一筆交易被修改，需要清空所有快照
+                console.log(`[${uid}] 找不到任何在 ${modifiedTxDate} 之前的有效快照，將清理所有快照。`);
+                await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+            }
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
@@ -162,19 +180,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             params: [
-                uid, 
-                ALL_GROUP_ID, 
-                h.symbol, 
-                sanitizeNumber(h.quantity),
-                h.currency, 
-                sanitizeNumber(h.avgCostOriginal),
-                sanitizeNumber(h.totalCostTWD),
-                sanitizeNumber(h.currentPriceOriginal),
-                sanitizeNumber(h.marketValueTWD),
-                sanitizeNumber(h.unrealizedPLTWD),
-                sanitizeNumber(h.realizedPLTWD),
-                sanitizeNumber(h.returnRate),
-                sanitizeNumber(h.daily_change_percent),
+                uid, ALL_GROUP_ID, h.symbol, sanitizeNumber(h.quantity), h.currency, 
+                sanitizeNumber(h.avgCostOriginal), sanitizeNumber(h.totalCostTWD),
+                sanitizeNumber(h.currentPriceOriginal), sanitizeNumber(h.marketValueTWD),
+                sanitizeNumber(h.unrealizedPLTWD), sanitizeNumber(h.realizedPLTWD),
+                sanitizeNumber(h.returnRate), sanitizeNumber(h.daily_change_percent),
                 sanitizeNumber(h.daily_pl_twd)
             ]
         }));
