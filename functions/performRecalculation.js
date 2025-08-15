@@ -12,8 +12,8 @@ const { getPortfolioStateOnDate } = require('./calculation/state.calculator');
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
     console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
-    if (Object.keys(newFullHistory).length === 0) {
-        console.log(`${logPrefix} 沒有歷史數據，跳過快照維護。`);
+    if (!market || Object.keys(newFullHistory).length === 0) {
+        console.log(`${logPrefix} 沒有歷史數據或市場數據，跳過快照維護。`);
         return;
     }
 
@@ -30,7 +30,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
         
         snapshotOps.push({
             sql: `INSERT OR REPLACE INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
-            params: [uid, groupId, latestDateStr, newFullHistory[latestDateStr], totalCost]
+            params: [uid, groupId, latestDateStr, newFullHistory[latestDateStr] || 0, totalCost || 0]
         });
         existingSnapshotDates.add(latestDateStr);
     }
@@ -44,7 +44,7 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
                 
                 snapshotOps.push({
                     sql: `INSERT INTO portfolio_snapshots (uid, group_id, snapshot_date, market_value_twd, total_cost_twd) VALUES (?, ?, ?, ?, ?)`,
-                    params: [uid, groupId, dateStr, newFullHistory[dateStr], totalCost]
+                    params: [uid, groupId, dateStr, newFullHistory[dateStr] || 0, totalCost || 0]
                 });
             }
         }
@@ -145,16 +145,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             txs, splits, userDividends, benchmarkSymbol
         );
 
-        // 【修正】解構出 market 物件
         const {
             summaryData, holdingsToUpdate, fullHistory, twrHistory,
             benchmarkHistory, netProfitHistory, evts, market
         } = calculationResult;
 
-        // 【修正】將 market 物件傳遞給 maintainSnapshots
         await maintainSnapshots(uid, fullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
-
-        // 【核心修正】將刪除和寫入操作分離，避免潛在的 D1 批次處理衝突
 
         // 步驟 3A: 執行刪除操作
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
@@ -163,7 +159,23 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         // 步驟 3B: 準備並執行批次插入操作
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-            params: [uid, ALL_GROUP_ID, h.symbol, h.quantity, h.currency, h.avgCostOriginal, h.totalCostTWD, h.currentPriceOriginal, h.marketValueTWD, h.unrealizedPLTWD, h.realizedPLTWD, h.returnRate, h.daily_change_percent, h.daily_pl_twd]
+            // 【最終修正】為所有可能為 null 或 NaN 的數值欄位提供預設值 0
+            params: [
+                uid, 
+                ALL_GROUP_ID, 
+                h.symbol, 
+                h.quantity || 0,
+                h.currency, 
+                h.avgCostOriginal || 0, 
+                h.totalCostTWD || 0,
+                h.currentPriceOriginal || 0,
+                h.marketValueTWD || 0,
+                h.unrealizedPLTWD || 0,
+                h.realizedPLTWD || 0,
+                h.returnRate || 0,
+                h.daily_change_percent || 0,
+                h.daily_pl_twd || 0
+            ]
         }));
 
         const summaryOps = [{
@@ -171,7 +183,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(fullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
         }];
         
-        // 只有在有數據可寫入時才執行 batch
         if (summaryOps.length > 0) await d1Client.batch(summaryOps);
         if (holdingsOps.length > 0) await d1Client.batch(holdingsOps);
 
