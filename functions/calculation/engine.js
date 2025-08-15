@@ -102,7 +102,8 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
         twrHistory,
         benchmarkHistory,
         netProfitHistory,
-        evts // 回傳 evts 給快照使用
+        evts, // 回傳 evts 給快照使用
+        market // 【修正】將準備好的 market 物件一併回傳
     };
 }
 
