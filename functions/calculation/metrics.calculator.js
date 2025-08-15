@@ -6,16 +6,25 @@ const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./
 const { getPortfolioStateOnDate } = require('./state.calculator');
 
 /**
- * 【TWR 核心修正】採用更穩健的計算模型，處理清倉與重建倉位的情況
+ * 【TWR 核心修正 & 性能優化】採用更穩健的計算模型，並支援從快照點進行增量計算
+ * @param {Object} dailyPortfolioValues - 每日投資組合市值
+ * @param {Object} dailyCashflows - 每日現金流
+ * @param {Object} market - 市場數據
+ * @param {string} benchmarkSymbol - 比較基準代碼
+ * @param {Date} startDate - 計算的起始日期 (通常是 firstBuyDate)
+ * @param {Object} [initialState={}] - (可選) 用於增量計算的初始狀態
+ * @param {number} [initialState.cumulativeHpr=1.0] - 起始的累積持有期回報率因子
+ * @param {number} [initialState.lastMarketValue=0.0] - 起始的市值
+ * @returns {Object} 包含 TWR 和 Benchmark 歷史的物件
  */
-function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol, startDate, dailyCashflows, log = console.log) {
+function calculateTwrHistory(dailyPortfolioValues, dailyCashflows, market, benchmarkSymbol, startDate, initialState = {}) {
     const dates = Object.keys(dailyPortfolioValues).sort();
     if (!startDate || dates.length === 0) return { twrHistory: {}, benchmarkHistory: {} };
 
     const upperBenchmarkSymbol = benchmarkSymbol.toUpperCase();
     const benchmarkPrices = market[upperBenchmarkSymbol]?.prices || {};
     if (Object.keys(benchmarkPrices).length === 0) {
-        log(`TWR_CALC_WARN: Benchmark ${upperBenchmarkSymbol} 缺乏歷史價格，將跳過計算。`);
+        console.log(`TWR_CALC_WARN: Benchmark ${upperBenchmarkSymbol} 缺乏歷史價格，將跳過計算。`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
     
@@ -24,7 +33,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     
     const benchmarkStartPriceInfo = findNearest(benchmarkPrices, startDate);
     if (!benchmarkStartPriceInfo) {
-        log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
+        console.log(`TWR_CALC_FAIL: Cannot find start price for benchmark ${upperBenchmarkSymbol}.`);
         return { twrHistory: {}, benchmarkHistory: {} };
     }
     const benchmarkStartPriceOriginal = benchmarkStartPriceInfo.value;
@@ -32,8 +41,9 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
     const twrHistory = {};
     const benchmarkHistory = {};
-    let cumulativeHpr = 1.0;
-    let lastMarketValue = 0.0;
+
+    // [核心優化] 從傳入的 initialState 或預設值開始
+    let { cumulativeHpr = 1.0, lastMarketValue = 0.0 } = initialState;
 
     for (const dateStr of dates) {
         const MVE = dailyPortfolioValues[dateStr]; // 當日結束市值 (Market Value End)
@@ -42,27 +52,24 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
         
         let periodHprFactor = 1.0; // 當期報酬率因子，預設為1 (代表0%報酬)
 
-        // 情況 1: 投資組合持續持有中 (MVB > 0)
         if (MVB > 1e-9) {
-            // 使用 Modified Dietz 方法的簡化形式 (假設現金流在期末發生)
             periodHprFactor = (MVE - CF) / MVB;
         } 
-        // 情況 2: 從空倉狀態重新投入資金 (MVB = 0, 但有現金流入)
         else if (CF > 1e-9) {
             periodHprFactor = MVE / CF;
         }
-        // 情況 3: 投資組合持續空倉 (MVB = 0, CF = 0)，periodHprFactor 保持 1.0，報酬率不變。
 
-        // 安全閥：防止除以零或無效數字污染整個計算鏈
         if (!isFinite(periodHprFactor)) {
             periodHprFactor = 1.0;
         }
 
         cumulativeHpr *= periodHprFactor;
-        twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
-        lastMarketValue = MVE; // 為下一天準備 MVB
+        twrHistory[dateStr] = {
+            value: (cumulativeHpr - 1) * 100,
+            cumulativeHpr: cumulativeHpr // [核心優化] 將因子本身也存下來
+        };
+        lastMarketValue = MVE; 
 
-        // Benchmark 計算部分維持不變
         const currentBenchPriceInfo = findNearest(benchmarkPrices, new Date(dateStr));
         if (currentBenchPriceInfo && benchmarkStartPriceTWD > 0) {
             const currentBenchPriceOriginal = currentBenchPriceInfo.value;
@@ -178,10 +185,6 @@ function calculateXIRR(flows) {
     return (npv && Math.abs(npv) < 1e-6) ? guess : null;
 }
 
-/**
- * 【現金流定義修正】TWR 計算中的現金流定義與 XIRR 不同。
- * TWR: 買入為正 (錢流入投資組合)，賣出為負 (錢流出投資組合)。
- */
 function calculateDailyCashflows(evts, market) {
     return evts.reduce((acc, e) => {
         const dateStr = toDate(e.date).toISOString().split('T')[0];
@@ -189,7 +192,6 @@ function calculateDailyCashflows(evts, market) {
         if (e.eventType === 'transaction') {
             const currency = e.currency || 'USD';
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
-            // 買入是正現金流 (inflow)，賣出是負現金流 (outflow)
             flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
@@ -206,7 +208,6 @@ function calculateDailyCashflows(evts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
-            // 股利被視為現金流出 (類似賣出)，因為它變成了現金而不是再投資的資產
             flow = -1 * dividendAmountTWD;
         }
 
