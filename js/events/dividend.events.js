@@ -4,11 +4,12 @@
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, loadPortfolioData } from '../api.js';
+// [核心修改] 導入 executeApiAction，不再需要 loadPortfolioData
+import { apiRequest, executeApiAction } from '../api.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
-// 【修正】: 從 main.js 引入 loadAndShowDividends，因為它是跨模組調用的
+// [核心修改] 從 main.js 引入 loadAndShowDividends，因為它是跨模組調用的
 import { loadAndShowDividends } from '../main.js';
 
 // --- Private Functions ---
@@ -19,25 +20,23 @@ async function handleBulkConfirm() {
         showNotification('info', '沒有需要確認的配息。');
         return;
     }
-    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('bulk_confirm_all_dividends', { pendingDividends });
-            showNotification('success', '所有待確認配息已處理完畢！');
-            await loadAndShowDividends(); 
-            await loadPortfolioData(); 
-        } catch (error) {
-            showNotification('error', `批次確認失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
+    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, () => {
+        // [核心修改] 使用 executeApiAction 處理
+        executeApiAction('bulk_confirm_all_dividends', { pendingDividends }, {
+            loadingText: '正在批次確認配息...',
+            successMessage: '所有待確認配息已處理完畢！'
+        }).then(() => {
+            // 成功後，額外刷新配息管理分頁的內容
+            return loadAndShowDividends();
+        }).catch(error => {
+            console.error("批次確認配息最終失敗:", error);
+        });
     });
 }
 
 async function handleDividendFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('save-dividend-btn');
-    saveBtn.disabled = true;
     const id = document.getElementById('dividend-id').value;
     const isEditing = !!id;
     const dividendData = {
@@ -52,34 +51,34 @@ async function handleDividendFormSubmit(e) {
         notes: document.getElementById('dividend-notes').value.trim()
     };
     if (isEditing) { dividendData.id = id; }
-    try {
-        await apiRequest('save_user_dividend', dividendData);
-        closeModal('dividend-modal');
-        showNotification('success', '配息紀錄已儲存！');
-        await loadAndShowDividends();
-        await loadPortfolioData();
-    } catch (error) {
-        showNotification('error', `儲存失敗: ${error.message}`);
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = '儲存紀錄';
-    }
+    
+    closeModal('dividend-modal');
+
+    // [核心修改] 使用 executeApiAction 處理
+    executeApiAction('save_user_dividend', dividendData, {
+        loadingText: '正在儲存配息紀錄...',
+        successMessage: '配息紀錄已成功儲存！'
+    }).then(() => {
+        // 成功後，額外刷新配息管理分頁的內容
+        return loadAndShowDividends();
+    }).catch(error => {
+        console.error("儲存配息紀錄最終失敗:", error);
+    });
 }
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
-    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
-        try {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            await apiRequest('delete_user_dividend', { dividendId });
-            showNotification('success', '配息紀錄已刪除！');
-            await loadAndShowDividends();
-            await loadPortfolioData();
-        } catch (error) {
-            showNotification('error', `刪除失敗: ${error.message}`);
-        } finally {
-            document.getElementById('loading-overlay').style.display = 'none';
-        }
+    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', () => {
+        // [核心修改] 使用 executeApiAction 處理
+        executeApiAction('delete_user_dividend', { dividendId }, {
+            loadingText: '正在刪除配息紀錄...',
+            successMessage: '配息紀錄已成功刪除！'
+        }).then(() => {
+            // 成功後，額外刷新配息管理分頁的內容
+            return loadAndShowDividends();
+        }).catch(error => {
+            console.error("刪除配息紀錄最終失敗:", error);
+        });
     });
 }
 
