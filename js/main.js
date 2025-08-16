@@ -6,6 +6,7 @@ import { getState, setState } from './state.js';
 // 【修改】只引入 apiRequest 和 applyGroupView
 import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
+import { initializeSettings, toggleColorScheme } from './settings.js'; // 【新增】引入設定模組
 
 // --- UI Module Imports ---
 import { initializeAssetChart, updateAssetChart } from './ui/charts/assetChart.js';
@@ -157,6 +158,16 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
+    // ================== 【新增/修改的程式碼開始】 ==================
+    document.getElementById('color-scheme-toggle-btn').addEventListener('click', () => {
+        toggleColorScheme();
+        // 切換後立即重新渲染所有相關元件
+        const { holdings, summary } = getState();
+        updateDashboard(holdings, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+        renderHoldingsTable(holdings);
+    });
+    // ================== 【新增/修改的程式碼結束】 ==================
+
     document.getElementById('tabs').addEventListener('click', async (e) => {
         const tabItem = e.target.closest('.tab-item');
         if (tabItem) {
@@ -214,6 +225,10 @@ export function initializeAppUI() {
     initializeTwrChart();
     initializeNetProfitChart();
     
+    // ================== 【新增/修改的程式碼開始】 ==================
+    initializeSettings(); // 初始化使用者設定
+    // ================== 【新增/修改的程式碼結束】 ==================
+
     loadGroups(); // 載入群組列表，請求輕量
     
     setupMainAppEventListeners();
