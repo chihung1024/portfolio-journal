@@ -25,20 +25,19 @@ export function renderHoldingsTable(currentHoldings) {
     });
     const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
     
-    // 【新增】定義一個用於「放空」標籤的簡單樣式
     const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
 
-    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均成本/放空價</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">現價</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="returnRate">報酬率 ${getSortArrow('returnRate')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
+    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成本 / 現價</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
         let priceClass = ''; 
-        if (isShort) { // 空頭倉位的目標價邏輯相反
+        if (isShort) {
              if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
              else if (note.stop_loss_price && h.currentPriceOriginal >= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
-        } else { // 多頭倉位
+        } else {
              if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
              else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
         }
@@ -49,15 +48,23 @@ export function renderHoldingsTable(currentHoldings) {
                     <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap font-semibold ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.avgCostOriginal, 2)} <span class="text-xs text-gray-500">${h.currency}</span></td>
-                <td class="px-6 py-4 whitespace-nowrap ${priceClass}">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-xs">${h.currency}</span></td>
-                <td class="px-6 py-4 whitespace-nowrap font-semibold ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</td>
+                <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="text-sm text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</div>
+                    <div class="text-xs text-gray-500 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)} ${h.currency}</div>
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
-                <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</td>
-                <td class="px-6 py-4 whitespace-nowrap font-semibold ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</td>
+                <td class="px-6 py-4 whitespace-nowrap ${dailyReturnClass}">
+                    <div class="text-sm font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div>
+                    <div class="text-xs">${(h.daily_change_percent || 0).toFixed(2)}%</div>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap ${returnClass}">
+                    <div class="text-sm font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div>
+                    <div class="text-xs">${(h.returnRate || 0).toFixed(2)}%</div>
+                </td>
                 <td class="px-6 py-4 whitespace-nowrap">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
     
+    // 手機版視圖維持不變，因為卡片式佈局已經很清晰
     const cardsHtml = `<div class="grid grid-cols-1 gap-4 sm:hidden">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
@@ -87,7 +94,7 @@ export function renderHoldingsTable(currentHoldings) {
                     <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)}</p></div>
                     <div><p class="text-gray-500">市值 (TWD)</p><p class="font-medium text-gray-800">${formatNumber(h.marketValueTWD, 0)}</p></div>
                     <div><p class="text-gray-500">現價 (${h.currency})</p><p class="font-medium text-gray-800"><span class="${priceClass}">${formatNumber(h.currentPriceOriginal, 2)}</span></p></div>
-                    <div><p class="text-gray-500">平均放空價</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
+                    <div><p class="text-gray-500">平均成本/放空價</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
                     <div><p class="text-gray-500">持股佔比</p><p class="font-medium text-gray-800">${h.portfolioPercentage.toFixed(2)}%</p></div>
                 </div>
             </div>`; }).join('')}</div>`;
