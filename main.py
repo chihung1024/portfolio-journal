@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.2 - 作用域修正版)
+# == Python 每日增量更新腳本 (v4.3 - 最終穩定版)
 # =========================================================================================
 
 import os
@@ -16,7 +16,6 @@ D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
 
-# --- 【核心修改】讓函式接收 API Key 作為參數 ---
 def d1_query(sql, params=None, api_key=None):
     if params is None:
         params = []
@@ -52,7 +51,6 @@ def get_update_targets():
     all_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
 
-    # --- 【核心修改】呼叫函式時傳入 D1_API_KEY ---
     holdings_sql = "SELECT DISTINCT symbol, currency FROM holdings"
     holdings_results = d1_query(holdings_sql, api_key=D1_API_KEY)
     if holdings_results:
@@ -178,10 +176,16 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 if d1_batch(db_ops_upsert, api_key=D1_API_KEY):
                     print(f"成功！ 批次 {batch} 的增量數據已安全地更新/寫入。")
                     
+                    # --- 【核心修改】改用最穩健的 INSERT OR REPLACE 語法 ---
                     coverage_updates = []
                     for symbol in symbols_successfully_processed:
-                        coverage_updates.append({"sql": "INSERT INTO market_data_coverage (symbol, last_updated) VALUES (?, ?) ON CONFLICT(symbol) DO UPDATE SET last_updated = excluded.last_updated;", "params": [symbol, today_str]})
-                    
+                        symbol_start_date = start_dates.get(symbol, first_tx_dates.get(symbol)) # 確保能拿到起始日
+                        if symbol_start_date:
+                            coverage_updates.append({
+                                "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
+                                "params": [symbol, symbol_start_date, today_str]
+                            })
+
                     if coverage_updates and not d1_batch(coverage_updates, api_key=D1_API_KEY):
                         print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
                 else:
@@ -217,12 +221,12 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.2 - 作用域修正版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.3 - 最終穩定版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
         if all_uids:
             trigger_recalculations(all_uids)
     else:
-        print("資料庫中沒有找到任何需要刷新的標的。")
+        print("資料庫中沒有找到任何需要更新的標的。")
     print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
