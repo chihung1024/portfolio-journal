@@ -9,8 +9,13 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     const holdingsArray = Object.values(currentHoldings);
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + (h.marketValueTWD || 0), 0);
     const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
+    const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
     
     document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
+    
+    const dailyPlEl = document.getElementById('daily-pl');
+    dailyPlEl.textContent = formatNumber(totalDailyPL, 0);
+    dailyPlEl.className = `text-3xl font-bold mt-2 ${totalDailyPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
     
     const unrealizedEl = document.getElementById('unrealized-pl');
     unrealizedEl.textContent = formatNumber(totalUnrealizedPL, 0);
