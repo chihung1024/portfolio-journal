@@ -74,19 +74,39 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
 
     const { holdingsToUpdate } = portfolioResult.holdings;
     
-    // 計算當日損益
-    const today = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
-
-    Object.values(holdingsToUpdate).forEach(h => {
-        const todayPrice = h.currentPriceOriginal;
-        const yesterdayPriceInfo = findNearest(market[h.symbol.toUpperCase()]?.prices, yesterday, 7);
-        const yesterdayPrice = yesterdayPriceInfo ? yesterdayPriceInfo.value : todayPrice;
-        h.daily_change_percent = yesterdayPrice > 0 ? ((todayPrice - yesterdayPrice) / yesterdayPrice) * 100 : 0;
-        const fx = findFxRate(market, h.currency, today);
-        h.daily_pl_twd = (todayPrice - yesterdayPrice) * h.quantity * fx;
+    // ================== 【邏輯修改開始】 ==================
+    // 找出所有市場數據中的最新日期，作為計算損益的基準日
+    let latestMarketDateStr = '1970-01-01';
+    Object.values(market).forEach(symbolData => {
+        if (symbolData.prices) {
+            Object.keys(symbolData.prices).forEach(dateStr => {
+                if (dateStr > latestMarketDateStr) {
+                    latestMarketDateStr = dateStr;
+                }
+            });
+        }
     });
+
+    const latestMarketDate = new Date(latestMarketDateStr);
+    const dayBeforeLatestMarketDate = new Date(latestMarketDate);
+    dayBeforeLatestMarketDate.setDate(latestMarketDate.getDate() - 1);
+
+    // 使用最新的市場日期來計算當日損益
+    Object.values(holdingsToUpdate).forEach(h => {
+        // h.currentPriceOriginal 已經是在 calculateCoreMetrics 中基於最新數據算好的價格
+        const latestPrice = h.currentPriceOriginal;
+
+        // 尋找「最新市場日」的前一天的價格
+        const priceBeforeInfo = findNearest(market[h.symbol.toUpperCase()]?.prices, dayBeforeLatestMarketDate, 7);
+        const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : latestPrice; // 如果找不到前一天價格，則預設為最新價，損益為0
+
+        h.daily_change_percent = priceBefore > 0 ? ((latestPrice - priceBefore) / priceBefore) * 100 : 0;
+        
+        // 匯率也使用最新市場日的匯率
+        const fx = findFxRate(market, h.currency, latestMarketDate);
+        h.daily_pl_twd = (latestPrice - priceBefore) * h.quantity * fx;
+    });
+    // ================== 【邏輯修改結束】 ==================
 
     const summaryData = {
         totalRealizedPL: portfolioResult.totalRealizedPL,
