@@ -240,4 +240,4 @@ if __name__ == "__main__":
             trigger_recalculations(all_uids)
     else:
         print("資料庫中沒有找到任何需要更新的標的 (無持股、無Benchmark)。")
-    print("--- 每日市場數據增量更新腳本執行完畢 ---")
+    print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
