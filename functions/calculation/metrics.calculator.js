@@ -76,7 +76,23 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
-    const today = new Date();
+    
+    // 找出所有市場數據中的最新日期，作為計算損益的基準日
+    let latestMarketDateStr = '1970-01-01';
+    Object.values(market).forEach(symbolData => {
+        if (symbolData.prices) {
+            Object.keys(symbolData.prices).forEach(dateStr => {
+                if (dateStr > latestMarketDateStr) {
+                    latestMarketDateStr = dateStr;
+                }
+            });
+        }
+    });
+    
+    const latestMarketDate = new Date(latestMarketDateStr);
+    const dayBeforeLatestMarketDate = new Date(latestMarketDate);
+    dayBeforeLatestMarketDate.setDate(latestMarketDate.getDate() - 1);
+
     for (const sym in pf) {
         const h = pf[sym];
         const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
@@ -85,15 +101,22 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
             
-            const priceInfo = findNearest(market[sym]?.prices || {}, today);
+            // 使用最新的市場日期來抓取價格
+            const priceInfo = findNearest(market[sym]?.prices || {}, latestMarketDate);
             const curPrice = priceInfo ? priceInfo.value : 0;
-            const priceDate = priceInfo ? new Date(priceInfo.date) : today;
+            const priceDate = priceInfo ? new Date(priceInfo.date) : latestMarketDate;
             const fx = findFxRate(market, h.currency, priceDate);
 
-            const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > today);
+            const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > latestMarketDate);
             const unadjustedPrice = (curPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
             const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx);
+            
+            // 在這裡直接計算當日損益
+            const priceBeforeInfo = findNearest(market[sym.toUpperCase()]?.prices, dayBeforeLatestMarketDate, 7);
+            const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : unadjustedPrice;
+            const daily_change_percent = priceBefore > 0 ? ((unadjustedPrice - priceBefore) / priceBefore) * 100 : 0;
+            const daily_pl_twd = (unadjustedPrice - priceBefore) * qty * fx;
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -105,7 +128,9 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 marketValueTWD: mktVal,
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
-                returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0
+                returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
+                daily_change_percent: daily_change_percent,
+                daily_pl_twd: daily_pl_twd
             };
         }
     }
