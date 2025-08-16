@@ -43,25 +43,28 @@ export function renderHoldingsTable(currentHoldings) {
         }
         return `
             <tr class="hover:bg-gray-50 ${isShort ? 'bg-sky-50' : ''}">
-                <td class="px-6 py-4 whitespace-nowrap font-medium text-gray-900 flex items-center">
-                    ${h.symbol} ${isShort ? shortBadge : ''}
-                    <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
+                <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900">
+                    <div class="flex items-center">
+                        <span>${h.symbol}</span>
+                        ${isShort ? shortBadge : ''}
+                        <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
+                    </div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-base font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-right">
-                    <div class="text-sm font-semibold text-gray-900 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)}</div>
-                    <div class="text-xs text-gray-500">${formatNumber(h.avgCostOriginal, 2)} ${h.currency}</div>
+                    <div class="text-base font-semibold text-gray-900 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)}</div>
+                    <div class="text-sm text-gray-500">${formatNumber(h.avgCostOriginal, 2)} ${h.currency}</div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right">${formatNumber(h.marketValueTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-base text-right">${formatNumber(h.marketValueTWD, 0)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-right ${dailyReturnClass}">
-                    <div class="text-sm font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div>
-                    <div class="text-xs">${(h.daily_change_percent || 0).toFixed(2)}%</div>
+                    <div class="text-base font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div>
+                    <div class="text-sm">${(h.daily_change_percent || 0).toFixed(2)}%</div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-right ${returnClass}">
-                    <div class="text-sm font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div>
-                    <div class="text-xs">${(h.returnRate || 0).toFixed(2)}%</div>
+                    <div class="text-base font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div>
+                    <div class="text-sm">${(h.returnRate || 0).toFixed(2)}%</div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right">${h.portfolioPercentage.toFixed(2)}%</td>
+                <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
     
     // 手機版視圖維持不變，因為卡片式佈局已經很清晰
