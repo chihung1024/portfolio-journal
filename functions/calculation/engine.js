@@ -11,7 +11,7 @@ const dataProvider = require('./data.provider');
 /**
  * 核心計算函式
  * @param {Array} txs - 用於計算的交易紀錄
- * @param {Array} splits - 用于計算的分割紀錄
+ * @param {Array} splits - 用於計算的分割紀錄
  * @param {Array} userDividends - 用於計算的已確認股利
  * @param {string} benchmarkSymbol - 比較基準
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
