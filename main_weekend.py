@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.6 - 動態迄日精準校驗版)
+# == Python 週末完整校驗腳本 (v2.8 - 最終審查優化版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -92,6 +92,19 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         print("沒有需要刷新的標的。")
         return
 
+    print("正在一次性查詢所有股票的交易狀態...")
+    all_symbols_info_sql = """
+        SELECT
+            symbol,
+            MIN(date) as earliest_date,
+            MAX(date) as last_tx_date,
+            SUM(CASE WHEN type = 'buy' THEN quantity ELSE -quantity END) as net_quantity
+        FROM transactions
+        GROUP BY symbol
+    """
+    all_symbols_info = {row['symbol']: row for row in d1_query(all_symbols_info_sql)}
+    print("查詢完成。")
+
     today_str = datetime.now().strftime('%Y-%m-%d')
     symbol_batches = [targets[i:i + batch_size] for i in range(0, len(targets), batch_size)]
 
@@ -103,40 +116,26 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         symbols_to_fetch_in_batch = []
         
         for symbol in batch:
-            # --- 為每支股票動態決定起訖日期 ---
             is_fx = "=" in symbol
             is_benchmark = symbol in benchmark_symbols
             start_date = None
-            end_date = today_str # 預設結束日期為今天
+            end_date = today_str
             
-            # 決定起始日期
             if is_benchmark or is_fx:
                 start_date = global_earliest_tx_date
             else:
-                symbol_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
-                if symbol_earliest_date_result and symbol_earliest_date_result[0].get('earliest_date'):
-                    start_date = symbol_earliest_date_result[0]['earliest_date'].split('T')[0]
-
+                info = all_symbols_info.get(symbol)
+                if info and info.get('earliest_date'):
+                    start_date = info['earliest_date'].split('T')[0]
+                    net_quantity = info.get('net_quantity')
+                    if net_quantity is not None and net_quantity <= 1e-9:
+                        end_date = info['last_tx_date'].split('T')[0]
+                        print(f"資訊: {symbol} 已完全出清，數據迄日設為 {end_date}")
+            
             if not start_date:
                 print(f"警告: 找不到 {symbol} 的有效起始日期。跳過此標的。")
                 continue
-            
-            # 決定結束日期 (僅對非 Benchmark 和非匯率的普通股票)
-            if not is_benchmark and not is_fx:
-                holding_status_sql = """
-                    SELECT
-                        SUM(CASE WHEN type = 'buy' THEN quantity ELSE -quantity END) as net_quantity,
-                        MAX(date) as last_tx_date
-                    FROM transactions
-                    WHERE symbol = ?
-                """
-                status_result = d1_query(holding_status_sql, [symbol])
-                if status_result:
-                    net_quantity = status_result[0].get('net_quantity', 0)
-                    if net_quantity is not None and net_quantity <= 1e-9: # 考慮浮點數精度
-                        end_date = status_result[0]['last_tx_date'].split('T')[0]
-                        print(f"資訊: {symbol} 已完全出清，數據迄日設為 {end_date}")
-
+                
             start_dates[symbol] = start_date
             end_dates[symbol] = end_date
             symbols_to_fetch_in_batch.append(symbol)
@@ -145,7 +144,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print("此批次所有標的都無需抓取。")
             continue
             
-        # 使用批次中最晚的那個結束日期來抓取數據
         latest_end_date_in_batch = max(end_dates.values())
         end_date_for_fetch = (datetime.strptime(latest_end_date_in_batch, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
@@ -168,6 +166,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print(f"成功抓取到數據，共 {len(data)} 筆時間紀錄。")
             
             db_ops_swap = []
+            symbols_successfully_processed = []
             for symbol in symbols_to_fetch_in_batch:
                 is_fx = "=" in symbol
                 price_table = "exchange_rates" if is_fx else "price_history"
@@ -177,9 +176,12 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 if len(symbols_to_fetch_in_batch) > 1:
                     symbol_data.columns = symbol_data.columns.droplevel(1)
                 
+                if symbol_data.empty or ('Close' in symbol_data.columns and symbol_data['Close'].isnull().all()):
+                    print(f"警告: {symbol} 在 yfinance 的回傳數據中無效或全為 NaN。跳過此標的。")
+                    continue
+                
                 symbol_data = symbol_data.dropna(subset=['Close'])
                 
-                # --- 【關鍵修改】根據每支股票自己的起訖日，進行雙向過濾 ---
                 symbol_start_date = start_dates[symbol]
                 symbol_end_date = end_dates[symbol]
                 symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(symbol_start_date)) & (symbol_data.index <= pd.to_datetime(symbol_end_date))]
@@ -194,25 +196,33 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
 
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
-                    db_ops_swap.append({
-                        "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)",
-                        "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]
-                    })
+                    db_ops_swap.append({ "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
                 
                 if not is_fx and 'Dividends' in symbol_data.columns:
                     dividend_rows = symbol_data[symbol_data['Dividends'] > 0][['Dividends']].reset_index()
                     for _, row in dividend_rows.iterrows():
-                        db_ops_swap.append({
-                            "sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?)",
-                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]
-                        })
-            
+                        db_ops_swap.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
+                
+                symbols_successfully_processed.append(symbol)
+
             if db_ops_swap:
                 print(f"正在為批次 {batch} 準備 {len(db_ops_swap)} 筆資料庫覆蓋操作...")
                 if d1_batch(db_ops_swap):
                     print(f"成功！ 批次 {batch} 的正式表數據已原子性更新。")
-                    for symbol in symbols_to_fetch_in_batch:
-                         d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
+                    
+                    # --- 【改善建議 3 的最終實現】 ---
+                    coverage_updates = []
+                    for symbol in symbols_successfully_processed:
+                        symbol_start_date = start_dates.get(symbol)
+                        if symbol_start_date:
+                            coverage_updates.append({
+                                "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
+                                "params": [symbol, symbol_start_date, today_str]
+                            })
+                    
+                    if coverage_updates and not d1_batch(coverage_updates):
+                        print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
+
                 else:
                     print(f"FATAL: 原子性替換批次 {batch} 的數據失敗！")
 
@@ -221,8 +231,9 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print("5 秒後繼續處理下一個批次...")
             time.sleep(5)
 
-
 def trigger_recalculations(uids):
+    """觸發所有使用者的後端重算"""
+    # (此函式維持不變)
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
@@ -234,16 +245,9 @@ def trigger_recalculations(uids):
     if not SERVICE_ACCOUNT_KEY:
         print("FATAL: 缺少 SERVICE_ACCOUNT_KEY 環境變數，無法觸發重算。")
         return
-    headers = {
-        'X-API-KEY': GCP_API_KEY, 
-        'Content-Type': 'application/json',
-        'X-Service-Account-Key': SERVICE_ACCOUNT_KEY
-    }
+    headers = {'X-API-KEY': GCP_API_KEY, 'Content-Type': 'application/json', 'X-Service-Account-Key': SERVICE_ACCOUNT_KEY}
     try:
-        payload = {
-            "action": "recalculate_all_users",
-            "createSnapshot": True 
-        }
+        payload = {"action": "recalculate_all_users", "createSnapshot": True}
         response = requests.post(GCP_API_URL, json=payload, headers=headers)
         if response.status_code == 200:
             print(f"成功觸發所有使用者的重算與快照建立。")
@@ -253,7 +257,7 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.6 - 動態迄日精準校驗版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.8 - Code Reviewed & Optimized) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
