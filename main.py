@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.0 - 持股導向優化版)
+# == Python 每日增量更新腳本 (v4.1 - Coverage 穩定性修正版)
 # =========================================================================================
 
 import os
@@ -10,12 +10,7 @@ from datetime import datetime, timedelta
 import time
 import pandas as pd
 
-# --- 從環境變數讀取設定 ---
-D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
-D1_API_KEY = os.environ.get("D1_API_KEY")
-GCP_API_URL = os.environ.get("GCP_API_URL")
-GCP_API_KEY = D1_API_KEY
-
+# (前面的函式 d1_query, d1_batch, get_update_targets 維持不變)
 def d1_query(sql, params=None):
     if params is None:
         params = []
@@ -39,19 +34,9 @@ def d1_batch(statements):
         return False
 
 def get_update_targets():
-    """
-    【v4.0 核心修改】
-    獲取更新目標的邏輯回歸原始目的：
-    1.  只查詢當前仍被持有的股票 (從 holdings 表)。
-    2.  根據持有股票的幣別推算所需匯率。
-    3.  獨立查詢所有使用者設定的 Benchmark。
-    """
     print("正在全面獲取所有需要更新的金融商品列表...")
-    
     all_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
-
-    # 1. 查詢所有當前持股及其幣別
     holdings_sql = "SELECT DISTINCT symbol, currency FROM holdings"
     holdings_results = d1_query(holdings_sql)
     if holdings_results:
@@ -60,21 +45,15 @@ def get_update_targets():
             currency = row.get('currency')
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
-                
-    # 2. 獨立查詢所有用戶的 Benchmark
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql)
     if benchmark_results:
         for row in benchmark_results:
             all_symbols.add(row['symbol'])
-    
     symbols_list = list(filter(None, all_symbols))
-    
-    # 3. 查詢需要被觸發重算的使用者 (維持不變)
     uid_sql = "SELECT DISTINCT uid FROM transactions"
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
-
     print(f"找到 {len(symbols_list)} 個需更新的標的 (含持股、匯率、Benchmark): {symbols_list}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
     return symbols_list, uids
@@ -85,7 +64,6 @@ def fetch_and_append_market_data(symbols, batch_size=10):
         print("沒有需要更新的標的。")
         return
 
-    # 一次性獲取所有標的的首次交易日 (用於處理全新標的)
     print("正在一次性查詢所有標的的首次交易日...")
     placeholders_all = ','.join('?' for _ in symbols)
     all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders_all}) GROUP BY symbol"
@@ -196,11 +174,13 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 if d1_batch(db_ops_upsert):
                     print(f"成功！ 批次 {batch} 的增量數據已安全地更新/寫入。")
                     
+                    # --- 【核心修改】改用更穩健的 INSERT OR REPLACE 語法 ---
                     coverage_updates = []
                     for symbol in symbols_successfully_processed:
+                        # 每日腳本只需要更新 last_updated，earliest_date 留給週末腳本校驗
                         coverage_updates.append({
-                            "sql": "INSERT INTO market_data_coverage (symbol, last_updated) VALUES (?, ?) ON CONFLICT(symbol) DO UPDATE SET last_updated = excluded.last_updated;",
-                            "params": [symbol, today_str]
+                            "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, (SELECT earliest_date FROM market_data_coverage WHERE symbol = ?), ?);",
+                            "params": [symbol, symbol, today_str]
                         })
                     if coverage_updates and not d1_batch(coverage_updates):
                         print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
@@ -237,7 +217,7 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.0 - 持股導向優化版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.1 - Coverage 穩定性修正版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
