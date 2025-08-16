@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.3 - 多工與穩定性優化版)
+# == Python 週末完整校驗腳本 (v2.4 - 精確多工優化版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -113,7 +113,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         start_dates = {}
         symbols_to_fetch_in_batch = []
         
-        # 為本批次所有股票決定各自的抓取起始日期
         for symbol in batch:
             is_fx = "=" in symbol
             is_benchmark = symbol in benchmark_symbols
@@ -141,7 +140,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         try:
             data = yf.download(
                 tickers=symbols_to_fetch_in_batch,
-                start=min(start_dates.values()), # 從批次中最早的日期開始抓
+                start=min(start_dates.values()),
                 interval="1d",
                 auto_adjust=False,
                 back_adjust=False,
@@ -154,7 +153,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
 
             print(f"成功抓取到數據，共 {len(data)} 筆時間紀錄。")
             
-            # 準備原子性替換操作
             db_ops_swap = []
             for symbol in symbols_to_fetch_in_batch:
                 is_fx = "=" in symbol
@@ -167,16 +165,17 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 
                 symbol_data = symbol_data.dropna(subset=['Close'])
                 
+                # --- 【關鍵修改】在這裡根據每支股票自己的起始日來過濾數據 ---
+                symbol_data = symbol_data[symbol_data.index >= pd.to_datetime(start_dates[symbol])]
+
                 if symbol_data.empty:
-                    print(f"警告: {symbol} 沒有有效的歷史數據。")
+                    print(f"警告: {symbol} 在其交易歷史 {start_dates[symbol]} 之後沒有有效的歷史數據。")
                     continue
                 
-                # 原子替換第一步：先刪除舊數據
                 db_ops_swap.append({"sql": f"DELETE FROM {price_table} WHERE symbol = ?", "params": [symbol]})
                 if not is_fx:
                     db_ops_swap.append({"sql": f"DELETE FROM {dividend_table} WHERE symbol = ?", "params": [symbol]})
 
-                # 原子替換第二步：準備插入新數據
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
                     db_ops_swap.append({
@@ -196,7 +195,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 print(f"正在為批次 {batch} 準備 {len(db_ops_swap)} 筆資料庫覆蓋操作...")
                 if d1_batch(db_ops_swap):
                     print(f"成功！ 批次 {batch} 的正式表數據已原子性更新。")
-                    # 更新覆蓋範圍紀錄
                     for symbol in symbols_to_fetch_in_batch:
                          d1_query("UPDATE market_data_coverage SET last_updated = ? WHERE symbol = ?", [today_str, symbol])
                 else:
@@ -240,7 +238,7 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.3 - 多工與穩定性優化版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.4 - 精確多工優化版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
