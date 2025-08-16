@@ -71,29 +71,6 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
     
-    // 找出所有市場數據中的最新日期，作為計算損益的基準日
-    let latestMarketDateStr = '1970-01-01';
-    Object.values(market).forEach(symbolData => {
-        if (symbolData.prices && Object.keys(symbolData.prices).length > 0) {
-            const maxDateInSymbol = Object.keys(symbolData.prices).reduce((a, b) => a > b ? a : b);
-            if (maxDateInSymbol > latestMarketDateStr) {
-                latestMarketDateStr = maxDateInSymbol;
-            }
-        }
-    });
-    
-    // 如果找不到任何價格，直接返回，避免錯誤
-    if (latestMarketDateStr === '1970-01-01') {
-        console.error("[CRITICAL] `calculateFinalHoldings` 無法在 market 物件中找到任何價格資料！");
-        return { holdingsToUpdate };
-    }
-
-    const latestMarketDate = new Date(latestMarketDateStr);
-    const dayBeforeLatestMarketDate = new Date(latestMarketDate);
-    dayBeforeLatestMarketDate.setDate(latestMarketDate.getDate() - 1);
-
-    console.log(`[P/L DEBUG] 偵測到最新市場日期為: ${latestMarketDateStr}, 將以此為基準計算損益。`);
-
     for (const sym in pf) {
         const h = pf[sym];
         const qty = h.lots.reduce((s, l) => s + l.quantity, 0);
@@ -101,30 +78,38 @@ function calculateFinalHoldings(pf, market, allEvts) {
         if (Math.abs(qty) > 1e-9) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
-            
-            const priceInfo = findNearest(market[sym]?.prices || {}, latestMarketDate);
-            const curPrice = priceInfo ? priceInfo.value : 0;
-            const priceDate = priceInfo ? new Date(priceInfo.date) : latestMarketDate;
-            const fx = findFxRate(market, h.currency, priceDate);
 
-            const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > latestMarketDate);
-            const unadjustedPrice = (curPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
+            // ================== 【最終修正邏輯開始】 ==================
+            const symbolPrices = market[sym]?.prices || {};
+            const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a)); // 日期從新到舊排序
+
+            let latestPrice = 0;
+            let priceBefore = 0;
+            let latestPriceDate = new Date();
+
+            if (availableDates.length > 0) {
+                const latestDateStr = availableDates[0];
+                latestPrice = symbolPrices[latestDateStr];
+                latestPriceDate = new Date(latestDateStr);
+
+                if (availableDates.length > 1) {
+                    const beforeDateStr = availableDates[1];
+                    priceBefore = symbolPrices[beforeDateStr];
+                } else {
+                    // 如果只有一天數據，則前一日價格等於最新價
+                    priceBefore = latestPrice;
+                }
+            }
+            // ================== 【最終修正邏輯結束】 ==================
+
+            const fx = findFxRate(market, h.currency, latestPriceDate);
+            const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > latestPriceDate);
+            const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
             const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx);
             
-            const priceBeforeInfo = findNearest(market[sym.toUpperCase()]?.prices, dayBeforeLatestMarketDate, 7);
-            const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : unadjustedPrice;
             const daily_change_percent = priceBefore > 0 ? ((unadjustedPrice - priceBefore) / priceBefore) * 100 : 0;
             const daily_pl_twd = (unadjustedPrice - priceBefore) * qty * fx;
-
-            // --- 新增的詳細日誌 ---
-            console.log(`[P/L DEBUG for ${sym}]`);
-            console.log(`  - 最新市場日: ${latestMarketDate.toISOString().slice(0,10)}`);
-            console.log(`  - 前一日目標: ${dayBeforeLatestMarketDate.toISOString().slice(0,10)}`);
-            console.log(`  - 最新價: ${unadjustedPrice}`);
-            console.log(`  - 前一日價格資訊: ${priceBeforeInfo ? `找到 ${priceBeforeInfo.date} 的價格 ${priceBeforeInfo.value}` : '未找到'}`);
-            console.log(`  - 用於計算的「前一日價」: ${priceBefore}`);
-            console.log(`  - 最終損益 (TWD): ${daily_pl_twd}`);
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
