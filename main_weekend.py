@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.4 - 精確多工優化版)
+# == Python 週末完整校驗腳本 (v2.6 - 動態迄日精準校驗版)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -16,11 +16,6 @@ GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
 
 def d1_query(sql, params=None):
-    """
-    執行 D1 查詢。
-    【v3.5.1 修正】: 當 API 請求失敗時，回傳一個空的 list 而不是 None，
-                     以防止後續的迭代操作出錯，讓腳本更具韌性。
-    """
     if params is None:
         params = []
     headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
@@ -43,10 +38,7 @@ def d1_batch(statements):
         return False
 
 def get_full_refresh_targets():
-    """
-    全面獲取需要更新的標的列表、Benchmark 列表、使用者列表，以及全局最早的交易日期。
-    v2.2: 標的來源改為所有歷史交易紀錄，確保已出清持股也能被更新。
-    """
+    """全面獲取更新目標，並包含全局最早的交易日期"""
     print("正在全面獲取所有需要完整刷新的金融商品列表...")
     
     all_symbols = set()
@@ -82,24 +74,20 @@ def get_full_refresh_targets():
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
 
-    global_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
+    date_range_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
     global_earliest_tx_date = None
-    if global_earliest_date_result and global_earliest_date_result[0].get('earliest_date'):
-        global_earliest_tx_date = global_earliest_date_result[0]['earliest_date'].split('T')[0]
-        print(f"找到全域最早的交易日期: {global_earliest_tx_date}")
+    if date_range_result and date_range_result[0].get('earliest_date'):
+        global_earliest_tx_date = date_range_result[0]['earliest_date'].split('T')[0]
+        print(f"找到全局最早的交易日期: {global_earliest_tx_date}")
     else:
-        print("警告: 找不到任何交易紀錄，Benchmark 和匯率的歷史將不會被抓取。")
+        print("警告: 找不到任何交易紀錄。")
 
     print(f"找到 {len(targets)} 個需全面刷新的標的: {targets}")
-    print(f"從資料庫找到 {len(benchmark_symbols)} 個 Benchmark: {benchmark_symbols}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
     
     return targets, benchmark_symbols, uids, global_earliest_tx_date
 
 def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date, batch_size=10):
-    """
-    (安全模式) 為每個標的抓取完整歷史數據，使用統一化的起始日期策略和多工批次處理。
-    """
     if not targets:
         print("沒有需要刷新的標的。")
         return
@@ -111,36 +99,62 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         print(f"\n--- 正在處理完整刷新批次 {i+1}/{len(symbol_batches)}: {batch} ---")
         
         start_dates = {}
+        end_dates = {}
         symbols_to_fetch_in_batch = []
         
         for symbol in batch:
+            # --- 為每支股票動態決定起訖日期 ---
             is_fx = "=" in symbol
             is_benchmark = symbol in benchmark_symbols
             start_date = None
+            end_date = today_str # 預設結束日期為今天
             
+            # 決定起始日期
             if is_benchmark or is_fx:
                 start_date = global_earliest_tx_date
             else:
                 symbol_earliest_date_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions WHERE symbol = ?", [symbol])
                 if symbol_earliest_date_result and symbol_earliest_date_result[0].get('earliest_date'):
                     start_date = symbol_earliest_date_result[0]['earliest_date'].split('T')[0]
-            
+
             if not start_date:
                 print(f"警告: 找不到 {symbol} 的有效起始日期。跳過此標的。")
                 continue
-                
+            
+            # 決定結束日期 (僅對非 Benchmark 和非匯率的普通股票)
+            if not is_benchmark and not is_fx:
+                holding_status_sql = """
+                    SELECT
+                        SUM(CASE WHEN type = 'buy' THEN quantity ELSE -quantity END) as net_quantity,
+                        MAX(date) as last_tx_date
+                    FROM transactions
+                    WHERE symbol = ?
+                """
+                status_result = d1_query(holding_status_sql, [symbol])
+                if status_result:
+                    net_quantity = status_result[0].get('net_quantity', 0)
+                    if net_quantity is not None and net_quantity <= 1e-9: # 考慮浮點數精度
+                        end_date = status_result[0]['last_tx_date'].split('T')[0]
+                        print(f"資訊: {symbol} 已完全出清，數據迄日設為 {end_date}")
+
             start_dates[symbol] = start_date
+            end_dates[symbol] = end_date
             symbols_to_fetch_in_batch.append(symbol)
 
         if not symbols_to_fetch_in_batch:
             print("此批次所有標的都無需抓取。")
             continue
+            
+        # 使用批次中最晚的那個結束日期來抓取數據
+        latest_end_date_in_batch = max(end_dates.values())
+        end_date_for_fetch = (datetime.strptime(latest_end_date_in_batch, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
-        print(f"準備從 yfinance 併發抓取 {len(symbols_to_fetch_in_batch)} 筆完整歷史數據...")
+        print(f"準備從 yfinance 併發抓取數據 (迄日: {latest_end_date_in_batch})...")
         try:
             data = yf.download(
                 tickers=symbols_to_fetch_in_batch,
                 start=min(start_dates.values()),
+                end=end_date_for_fetch,
                 interval="1d",
                 auto_adjust=False,
                 back_adjust=False,
@@ -165,11 +179,13 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 
                 symbol_data = symbol_data.dropna(subset=['Close'])
                 
-                # --- 【關鍵修改】在這裡根據每支股票自己的起始日來過濾數據 ---
-                symbol_data = symbol_data[symbol_data.index >= pd.to_datetime(start_dates[symbol])]
+                # --- 【關鍵修改】根據每支股票自己的起訖日，進行雙向過濾 ---
+                symbol_start_date = start_dates[symbol]
+                symbol_end_date = end_dates[symbol]
+                symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(symbol_start_date)) & (symbol_data.index <= pd.to_datetime(symbol_end_date))]
 
                 if symbol_data.empty:
-                    print(f"警告: {symbol} 在其交易歷史 {start_dates[symbol]} 之後沒有有效的歷史數據。")
+                    print(f"警告: {symbol} 在其指定的日期範圍 {symbol_start_date} ~ {symbol_end_date} 內沒有有效數據。")
                     continue
                 
                 db_ops_swap.append({"sql": f"DELETE FROM {price_table} WHERE symbol = ?", "params": [symbol]})
@@ -207,7 +223,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
 
 
 def trigger_recalculations(uids):
-    """觸發所有使用者的後端重算"""
     if not uids:
         print("沒有找到需要觸發重算的使用者。")
         return
@@ -238,7 +253,7 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.4 - 精確多工優化版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.6 - 動態迄日精準校驗版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
