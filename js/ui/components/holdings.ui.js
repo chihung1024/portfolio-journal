@@ -4,9 +4,11 @@
 
 import { getState } from '../../state.js';
 import { isTwStock, formatNumber } from '../utils.js';
+import { getColorSettings } from '../settings.js'; // 【新增】引入顏色設定
 
 export function renderHoldingsTable(currentHoldings) {
     const { stockNotes, holdingsSort } = getState();
+    const colorSettings = getColorSettings(); // 【新增】獲取當前顏色主題
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
     let holdingsArray = Object.values(currentHoldings);
@@ -31,8 +33,11 @@ export function renderHoldingsTable(currentHoldings) {
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
-        const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-        const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
+        
+        // 【修改】使用動態顏色 Class
+        const returnClass = h.unrealizedPLTWD >= 0 ? colorSettings.gain : colorSettings.loss;
+        const dailyReturnClass = h.daily_pl_twd >= 0 ? colorSettings.gain : colorSettings.loss;
+
         let priceClass = ''; 
         if (isShort) {
              if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
@@ -67,12 +72,16 @@ export function renderHoldingsTable(currentHoldings) {
                 <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
     
+    // 手機版視圖同步更新
     const cardsHtml = `<div class="grid grid-cols-1 gap-4 sm:hidden">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
-        const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-        const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
+
+        // 【修改】使用動態顏色 Class
+        const returnClass = h.unrealizedPLTWD >= 0 ? colorSettings.gain : colorSettings.loss;
+        const dailyReturnClass = h.daily_pl_twd >= 0 ? colorSettings.gain : colorSettings.loss;
+        
         let priceClass = '';
         if (isShort) {
              if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1';
