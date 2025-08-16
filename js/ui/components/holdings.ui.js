@@ -27,7 +27,7 @@ export function renderHoldingsTable(currentHoldings) {
     
     const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
 
-    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">成本 / 現價</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
+    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
@@ -47,21 +47,21 @@ export function renderHoldingsTable(currentHoldings) {
                     ${h.symbol} ${isShort ? shortBadge : ''}
                     <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap font-semibold ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
-                <td class="px-6 py-4 whitespace-nowrap">
-                    <div class="text-sm text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</div>
-                    <div class="text-xs text-gray-500 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)} ${h.currency}</div>
+                <td class="px-6 py-4 whitespace-nowrap font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-right">
+                    <div class="text-sm font-semibold text-gray-900 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)}</div>
+                    <div class="text-xs text-gray-500">${formatNumber(h.avgCostOriginal, 2)} ${h.currency}</div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap">${formatNumber(h.marketValueTWD, 0)}</td>
-                <td class="px-6 py-4 whitespace-nowrap ${dailyReturnClass}">
+                <td class="px-6 py-4 whitespace-nowrap text-right">${formatNumber(h.marketValueTWD, 0)}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-right ${dailyReturnClass}">
                     <div class="text-sm font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div>
                     <div class="text-xs">${(h.daily_change_percent || 0).toFixed(2)}%</div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap ${returnClass}">
+                <td class="px-6 py-4 whitespace-nowrap text-right ${returnClass}">
                     <div class="text-sm font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div>
                     <div class="text-xs">${(h.returnRate || 0).toFixed(2)}%</div>
                 </td>
-                <td class="px-6 py-4 whitespace-nowrap">${h.portfolioPercentage.toFixed(2)}%</td>
+                <td class="px-6 py-4 whitespace-nowrap text-right">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
     
     // 手機版視圖維持不變，因為卡片式佈局已經很清晰
