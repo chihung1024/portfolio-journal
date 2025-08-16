@@ -42,27 +42,21 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
         
         let periodHprFactor = 1.0; // 當期報酬率因子，預設為1 (代表0%報酬)
 
-        // 情況 1: 投資組合持續持有中 (MVB > 0)
         if (MVB > 1e-9) {
-            // 使用 Modified Dietz 方法的簡化形式 (假設現金流在期末發生)
             periodHprFactor = (MVE - CF) / MVB;
         } 
-        // 情況 2: 從空倉狀態重新投入資金 (MVB = 0, 但有現金流入)
         else if (CF > 1e-9) {
             periodHprFactor = MVE / CF;
         }
-        // 情況 3: 投資組合持續空倉 (MVB = 0, CF = 0)，periodHprFactor 保持 1.0，報酬率不變。
 
-        // 安全閥：防止除以零或無效數字污染整個計算鏈
         if (!isFinite(periodHprFactor)) {
             periodHprFactor = 1.0;
         }
 
         cumulativeHpr *= periodHprFactor;
         twrHistory[dateStr] = (cumulativeHpr - 1) * 100;
-        lastMarketValue = MVE; // 為下一天準備 MVB
+        lastMarketValue = MVE; 
 
-        // Benchmark 計算部分維持不變
         const currentBenchPriceInfo = findNearest(benchmarkPrices, new Date(dateStr));
         if (currentBenchPriceInfo && benchmarkStartPriceTWD > 0) {
             const currentBenchPriceOriginal = currentBenchPriceInfo.value;
@@ -80,18 +74,25 @@ function calculateFinalHoldings(pf, market, allEvts) {
     // 找出所有市場數據中的最新日期，作為計算損益的基準日
     let latestMarketDateStr = '1970-01-01';
     Object.values(market).forEach(symbolData => {
-        if (symbolData.prices) {
-            Object.keys(symbolData.prices).forEach(dateStr => {
-                if (dateStr > latestMarketDateStr) {
-                    latestMarketDateStr = dateStr;
-                }
-            });
+        if (symbolData.prices && Object.keys(symbolData.prices).length > 0) {
+            const maxDateInSymbol = Object.keys(symbolData.prices).reduce((a, b) => a > b ? a : b);
+            if (maxDateInSymbol > latestMarketDateStr) {
+                latestMarketDateStr = maxDateInSymbol;
+            }
         }
     });
     
+    // 如果找不到任何價格，直接返回，避免錯誤
+    if (latestMarketDateStr === '1970-01-01') {
+        console.error("[CRITICAL] `calculateFinalHoldings` 無法在 market 物件中找到任何價格資料！");
+        return { holdingsToUpdate };
+    }
+
     const latestMarketDate = new Date(latestMarketDateStr);
     const dayBeforeLatestMarketDate = new Date(latestMarketDate);
     dayBeforeLatestMarketDate.setDate(latestMarketDate.getDate() - 1);
+
+    console.log(`[P/L DEBUG] 偵測到最新市場日期為: ${latestMarketDateStr}, 將以此為基準計算損益。`);
 
     for (const sym in pf) {
         const h = pf[sym];
@@ -101,7 +102,6 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
             
-            // 使用最新的市場日期來抓取價格
             const priceInfo = findNearest(market[sym]?.prices || {}, latestMarketDate);
             const curPrice = priceInfo ? priceInfo.value : 0;
             const priceDate = priceInfo ? new Date(priceInfo.date) : latestMarketDate;
@@ -112,11 +112,19 @@ function calculateFinalHoldings(pf, market, allEvts) {
             
             const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx);
             
-            // 在這裡直接計算當日損益
             const priceBeforeInfo = findNearest(market[sym.toUpperCase()]?.prices, dayBeforeLatestMarketDate, 7);
             const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : unadjustedPrice;
             const daily_change_percent = priceBefore > 0 ? ((unadjustedPrice - priceBefore) / priceBefore) * 100 : 0;
             const daily_pl_twd = (unadjustedPrice - priceBefore) * qty * fx;
+
+            // --- 新增的詳細日誌 ---
+            console.log(`[P/L DEBUG for ${sym}]`);
+            console.log(`  - 最新市場日: ${latestMarketDate.toISOString().slice(0,10)}`);
+            console.log(`  - 前一日目標: ${dayBeforeLatestMarketDate.toISOString().slice(0,10)}`);
+            console.log(`  - 最新價: ${unadjustedPrice}`);
+            console.log(`  - 前一日價格資訊: ${priceBeforeInfo ? `找到 ${priceBeforeInfo.date} 的價格 ${priceBeforeInfo.value}` : '未找到'}`);
+            console.log(`  - 用於計算的「前一日價」: ${priceBefore}`);
+            console.log(`  - 最終損益 (TWD): ${daily_pl_twd}`);
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -166,7 +174,7 @@ function createCashflowsForXirr(evts, holdings, market) {
     });
 
     const totalMarketValue = Object.values(holdings).reduce((s, h) => s + h.marketValueTWD, 0);
-    if (Math.abs(totalMarketValue) > 0) { // Support negative total market value for short positions
+    if (Math.abs(totalMarketValue) > 0) {
         flows.push({ date: new Date(), amount: totalMarketValue });
     }
 
@@ -203,10 +211,6 @@ function calculateXIRR(flows) {
     return (npv && Math.abs(npv) < 1e-6) ? guess : null;
 }
 
-/**
- * 【現金流定義修正】TWR 計算中的現金流定義與 XIRR 不同。
- * TWR: 買入為正 (錢流入投資組合)，賣出為負 (錢流出投資組合)。
- */
 function calculateDailyCashflows(evts, market) {
     return evts.reduce((acc, e) => {
         const dateStr = toDate(e.date).toISOString().split('T')[0];
@@ -214,14 +218,13 @@ function calculateDailyCashflows(evts, market) {
         if (e.eventType === 'transaction') {
             const currency = e.currency || 'USD';
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
-            // 買入是正現金流 (inflow)，賣出是負現金流 (outflow)
             flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
                 const fx = findFxRate(market, e.currency, toDate(e.date));
                 dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-            } else { // implicit_dividend
+            } else { 
                 const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
                 const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
                 if (shares > 0) {
@@ -231,7 +234,6 @@ function calculateDailyCashflows(evts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
-            // 股利被視為現金流出 (類似賣出)，因為它變成了現金而不是再投資的資產
             flow = -1 * dividendAmountTWD;
         }
 
