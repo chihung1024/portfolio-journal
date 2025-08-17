@@ -1,10 +1,11 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js)
-// == 職責：處理所有互動式彈出視窗（Modal, Confirm）的開啟、關閉與內容管理。
+// == 彈出視窗模組 (modals.js) v2.0 - 支援持股詳情彈窗
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { isTwStock, formatNumber } from './utils.js';
+// 【新增】導入新的詳情彈窗渲染器
+import { renderDetailsModal } from './components/detailsModal.ui.js';
 
 export function openModal(modalId, isEdit = false, data = null) {
     const { stockNotes, pendingDividends, confirmedDividends } = getState();
@@ -70,6 +71,12 @@ export function openModal(modalId, isEdit = false, data = null) {
             const totalAmount = record.amount_per_share * record.quantity_at_ex_date * (1 - taxRate / 100);
             document.getElementById('dividend-total-amount').value = totalAmount.toFixed(2);
             document.getElementById('dividend-notes').value = '';
+        }
+    // 【新增】處理詳情彈窗的開啟邏輯
+    } else if (modalId === 'details-modal') {
+        const { symbol } = data;
+        if (symbol) {
+            renderDetailsModal(symbol);
         }
     }
     document.getElementById(modalId).classList.remove('hidden');
