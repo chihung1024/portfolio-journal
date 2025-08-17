@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v4.0.0 - 支援群組管理)
+// == GCP Cloud Function 主入口 (v4.1.0 - 支援個股詳情按需載入)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -16,7 +16,9 @@ const dividendHandlers = require('./api_handlers/dividend.handler');
 const splitHandlers = require('./api_handlers/split.handler');
 const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
-const groupHandlers = require('./api_handlers/group.handler'); // 【新增】引入新的群組處理器
+const groupHandlers = require('./api_handlers/group.handler');
+// 【新增】引入新的詳情處理器
+const detailsHandlers = require('./api_handlers/details.handler');
 
 try {
     admin.initializeApp();
@@ -71,7 +73,6 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
-            // 【核心修改】在路由分發中增加群組相關的 actions
             switch (action) {
                 // Portfolio
                 case 'get_data':
@@ -86,6 +87,9 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     return await portfolioHandlers.getTransactionsAndSplits(uid, res);
                 case 'get_chart_data':
                     return await portfolioHandlers.getChartData(uid, res);
+                // 【新增】個股詳情 API
+                case 'get_symbol_details':
+                    return await detailsHandlers.getSymbolDetails(uid, data, res);
 
                 // Transactions
                 case 'add_transaction':
@@ -115,7 +119,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 case 'save_stock_note':
                     return await noteHandlers.saveStockNote(uid, data, res);
 
-                // 【新增】Groups
+                // Groups
                 case 'get_groups':
                     return await groupHandlers.getGroups(uid, res);
                 case 'save_group':
