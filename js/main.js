@@ -1,9 +1,8 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.0.1 - Import Fix
+// == 主程式進入點 (main.js) v4.1.0 - UI Refinements
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-// 【修改】只引入 apiRequest 和 applyGroupView
 import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 
@@ -17,9 +16,11 @@ import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { hideConfirm, toggleOptionalFields } from './ui/modals.js';
+import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
-import { showNotification } from './ui/notifications.js';
+// 【新增】導入 getDateRangeForPreset 以計算圖表日期
+import { getDateRangeForPreset } from './ui/utils.js';
 
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
@@ -28,14 +29,12 @@ import { initializeDividendEventListeners } from './events/dividend.events.js';
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
-// --- 【新增】輕量級初始載入函式 ---
+// --- 輕量級初始載入函式 ---
 export async function loadInitialDashboardAndHoldings() {
     try {
-        // 1. 呼叫新的輕量級 API
         const result = await apiRequest('get_dashboard_and_holdings', {});
         if (!result.success) throw new Error(result.message);
 
-        // 2. 處理回傳的少量資料
         const { summary, holdings, stockNotes } = result.data;
         const holdingsObject = (holdings || []).reduce((obj, item) => {
             obj[item.symbol] = item; return obj;
@@ -44,14 +43,12 @@ export async function loadInitialDashboardAndHoldings() {
             map[note.symbol] = note; return map;
         }, {});
 
-        // 3. 更新 State
         setState({
             holdings: holdingsObject,
             stockNotes: stockNotesMap,
-            summary: summary // 將 summary 存入 state 供圖表使用
+            summary: summary
         });
 
-        // 4. 渲染儀表板和持股列表 (這是使用者最先看到的內容)
         updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable(holdingsObject);
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
@@ -59,15 +56,12 @@ export async function loadInitialDashboardAndHoldings() {
     } catch (error) {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
-        // 5. 隱藏讀取畫面，讓使用者可以開始互動
         document.getElementById('loading-overlay').style.display = 'none';
-        
-        // 6. 【關鍵】在背景延遲載入重量級的圖表數據
-        setTimeout(loadChartDataInBackground, 500); // 延遲 500ms 確保主介面渲染流暢
+        setTimeout(loadChartDataInBackground, 500);
     }
 }
 
-// --- 【新增】背景載入圖表數據 ---
+// --- 背景載入圖表數據 ---
 async function loadChartDataInBackground() {
     try {
         console.log("正在背景載入圖表數據...");
@@ -79,24 +73,37 @@ async function loadChartDataInBackground() {
                 benchmarkHistory: result.data.benchmarkHistory || {},
                 netProfitHistory: result.data.netProfitHistory || {}
             });
-            // 資料載入後，一次性更新所有圖表
-            const { summary } = getState();
+            
+            const { summary, portfolioHistory, twrHistory, netProfitHistory } = getState();
             updateAssetChart();
             updateTwrChart(summary?.benchmarkSymbol || 'SPY');
             updateNetProfitChart();
-            console.log("圖表數據載入完成。");
+
+            // --- 【核心修改】---
+            // 在圖表數據載入並更新後，計算並填入起迄日期
+            const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
+            document.getElementById('asset-start-date').value = assetDates.startDate;
+            document.getElementById('asset-end-date').value = assetDates.endDate;
+            
+            const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
+            document.getElementById('twr-start-date').value = twrDates.startDate;
+            document.getElementById('twr-end-date').value = twrDates.endDate;
+
+            const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
+            document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
+            document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
+            
+            console.log("圖表數據與日期範圍載入完成。");
         }
     } catch (error) {
-        // 背景載入失敗不應該阻斷使用者操作，只在控制台顯示錯誤
         console.error('背景載入圖表數據失敗:', error);
         showNotification('error', '背景圖表數據載入失敗，部分圖表可能無法顯示。');
     }
 }
 
-// --- 【新增】交易/拆股記錄按需載入 ---
+// --- 交易/拆股記錄按需載入 ---
 async function loadTransactionsData() {
     const { transactions } = getState();
-    // 如果 state 中已經有交易紀錄，就直接渲染，避免重複請求
     if (transactions && transactions.length > 0) {
         renderTransactionsTable();
         return;
@@ -163,11 +170,10 @@ function setupMainAppEventListeners() {
             e.preventDefault();
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
-            // 根據不同分頁按需載入內容
             if (tabName === 'dividends') {
                 await loadAndShowDividends();
             } else if (tabName === 'transactions') {
-                await loadTransactionsData(); // <-- 【修改】呼叫新的按需載入函式
+                await loadTransactionsData();
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
@@ -186,7 +192,6 @@ function setupMainAppEventListeners() {
         setState({ selectedGroupId });
         if (selectedGroupId === 'all') {
             recalcBtn.classList.add('hidden');
-            // 【重要修改】當切回"全部股票"時，應該重新觸發初始的輕量級載入流程
             document.getElementById('loading-overlay').style.display = 'flex';
             loadInitialDashboardAndHoldings();
         } else {
@@ -209,12 +214,11 @@ export function initializeAppUI() {
     }
     console.log("Initializing Main App UI...");
     
-    // UI 初始化只負責建立圖表物件和綁定事件，不載入任何數據
     initializeAssetChart();
     initializeTwrChart();
     initializeNetProfitChart();
     
-    loadGroups(); // 載入群組列表，請求輕量
+    loadGroups();
     
     setupMainAppEventListeners();
     initializeTransactionEventListeners();
