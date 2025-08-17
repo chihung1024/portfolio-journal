@@ -1,5 +1,6 @@
-// ='========================================================================================
-// == 儀表板 UI 模組 (dashboard.js) v2.0 - At-a-Glance Redesign
+// =========================================================================================
+// == 儀表板 UI 模組 (dashboard.js)
+// == 職責：處理頂部儀表板數據卡片的更新。
 // =========================================================================================
 
 import { formatNumber } from "./utils.js";
@@ -10,59 +11,40 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
     const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
     
-    // 計算昨日收盤時的總市值
+    // ================== 【新增/修改的程式碼開始】 ==================
+
+    // 1. 計算昨日收盤時的總市值
     const yesterdayTotalMarketValue = totalMarketValue - totalDailyPL;
     
-    // 計算總體的當日報酬率
+    // 2. 計算總體的當日報酬率
     const totalDailyReturnPercent = yesterdayTotalMarketValue !== 0 ? (totalDailyPL / yesterdayTotalMarketValue) * 100 : 0;
 
-    // --- 【核心修改】 ---
-
-    // 1. 總資產 (邏輯不變)
-    document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
-
-    // 2. 當日損益 (全新渲染邏輯)
-    const dailyPlPercentEl = document.getElementById('daily-pl-percent');
-    const dailyPlAmountEl = document.getElementById('daily-pl-amount');
-    const dailyPlContainerEl = document.getElementById('daily-pl-container');
+    // ================== 【新增/修改的程式碼結束】 ==================
     
-    const dailyPlIsPositive = totalDailyPL >= 0;
-    const dailyPlColor = dailyPlIsPositive ? 'text-red-600' : 'text-green-600';
-    const dailyPlArrow = dailyPlIsPositive ? '<i data-lucide="trending-up" class="w-6 h-6 mr-1"></i>' : '<i data-lucide="trending-down" class="w-6 h-6 mr-1"></i>';
-
-    dailyPlContainerEl.className = `mt-2 ${dailyPlColor}`;
-    dailyPlPercentEl.innerHTML = `${dailyPlArrow}<span>${(totalDailyReturnPercent || 0).toFixed(2)}%</span>`;
-    dailyPlAmountEl.textContent = formatNumber(totalDailyPL, 0);
-
-    // 3. 未實現損益 (更新顏色邏輯)
+    document.getElementById('total-assets').textContent = formatNumber(totalMarketValue, 0);
+    
+    const dailyPlEl = document.getElementById('daily-pl');
+    
+    // 3. 更新顯示內容，同時包含金額與百分比
+    dailyPlEl.innerHTML = `
+        ${formatNumber(totalDailyPL, 0)}
+        <span class="text-lg ml-2 font-medium">${(totalDailyReturnPercent || 0).toFixed(2)}%</span>
+    `;
+    dailyPlEl.className = `text-3xl font-bold mt-2 ${totalDailyPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
+    
     const unrealizedEl = document.getElementById('unrealized-pl');
     unrealizedEl.textContent = formatNumber(totalUnrealizedPL, 0);
     unrealizedEl.className = `text-3xl font-bold mt-2 ${totalUnrealizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
     
-    // 4. 已實現損益 (維持中性顏色)
     const realizedEl = document.getElementById('realized-pl');
     realizedEl.textContent = formatNumber(realizedPL, 0);
-    // 顏色從紅綠改為固定的灰色，以體現其歷史屬性
-    realizedEl.className = `text-3xl font-bold mt-2 text-gray-600`;
+    realizedEl.className = `text-3xl font-bold mt-2 ${realizedPL >= 0 ? 'text-red-600' : 'text-green-600'}`;
     
-    // 5. 總報酬率 (全新渲染邏輯)
     const totalReturnEl = document.getElementById('total-return');
-    const totalReturnIsPositive = (overallReturn || 0) >= 0;
-    const totalReturnColor = totalReturnIsPositive ? 'text-red-600' : 'text-green-600';
-    const totalReturnArrow = totalReturnIsPositive ? '<i data-lucide="trending-up" class="w-6 h-6 mr-1"></i>' : '<i data-lucide="trending-down" class="w-6 h-6 mr-1"></i>';
-
-    totalReturnEl.className = `text-3xl font-bold flex items-center mt-2 ${totalReturnColor}`;
-    totalReturnEl.innerHTML = `${totalReturnArrow}<span>${(overallReturn || 0).toFixed(2)}%</span>`;
+    totalReturnEl.textContent = `${(overallReturn || 0).toFixed(2)}%`;
+    totalReturnEl.className = `text-3xl font-bold mt-2 ${overallReturn >= 0 ? 'text-red-600' : 'text-green-600'}`;
     
-    // 6. XIRR (全新渲染邏輯)
     const xirrEl = document.getElementById('xirr-value');
-    const xirrIsPositive = (xirr || 0) >= 0;
-    const xirrColor = xirrIsPositive ? 'text-red-600' : 'text-green-600';
-    const xirrArrow = xirrIsPositive ? '<i data-lucide="trending-up" class="w-6 h-6 mr-1"></i>' : '<i data-lucide="trending-down" class="w-6 h-6 mr-1"></i>';
-    
-    xirrEl.className = `text-3xl font-bold flex items-center mt-2 ${xirrColor}`;
-    xirrEl.innerHTML = `${xirrArrow}<span>${((xirr || 0) * 100).toFixed(2)}%</span>`;
-
-    // 最後，確保所有新加入的 Lucide 圖示都被正確渲染
-    lucide.createIcons();
+    xirrEl.textContent = `${((xirr || 0) * 100).toFixed(2)}%`;
+    xirrEl.className = `text-3xl font-bold mt-2 ${xirr >= 0 ? 'text-red-600' : 'text-green-600'}`;
 }
