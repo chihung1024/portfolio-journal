@@ -1,5 +1,3 @@
 yfinance
 requests
 pandas
-lxml
-tqdm
