@@ -1,18 +1,18 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.0 - 支援持股詳情彈窗
+// == 通用事件處理模組 (general.events.js) v3.1 - 支援詳情彈窗內交易操作
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-import { openModal, closeModal } from '../ui/modals.js';
+// 【新增】導入 showConfirm
+import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
-// 【新增】導入詳情彈窗的分頁切換函式
-import { switchDetailsTab } from '../ui/components/detailsModal.ui.js';
+import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
 
 // --- Private Functions ---
 
@@ -30,7 +30,6 @@ async function handleUpdateBenchmark() {
     });
 }
 
-// 【修改】將儲存筆記的邏輯抽成可重用函式
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     closeModal(modalToClose);
 
@@ -42,7 +41,7 @@ async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
         const { holdings, stockNotes } = getState();
         stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
         setState({ stockNotes });
-        renderHoldingsTable(holdings); // 重新渲染持股列表以更新目標價提示
+        renderHoldingsTable(holdings);
     }).catch(error => {
         console.error("儲存筆記最終失敗:", error);
     });
@@ -59,6 +58,7 @@ async function handleNotesFormSubmit(e) {
     saveNoteAction(noteData, 'notes-modal');
 }
 
+// ... (handleChartRangeChange 函式維持不變) ...
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
     const stateKey = chartType === 'twr' ? 'twrDateRange'
         : chartType === 'asset' ? 'assetDateRange'
@@ -103,6 +103,7 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
 }
 
+
 // --- Public Function ---
 
 export function initializeGeneralEventListeners() {
@@ -110,18 +111,15 @@ export function initializeGeneralEventListeners() {
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
 
-    // 監聽持股內容區的點擊
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
-        // 優先處理最精確的點擊目標 (按鈕)，以避免觸發整列的點擊事件
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
             openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
             return;
         }
 
-        // 處理行動裝置視圖切換
         const viewSwitchBtn = e.target.closest('#holdings-view-switcher button');
         if (viewSwitchBtn) {
             const newView = viewSwitchBtn.dataset.view;
@@ -130,7 +128,6 @@ export function initializeGeneralEventListeners() {
             return;
         }
 
-        // 處理行動裝置列表模式的展開/收合
         const listItem = e.target.closest('.list-view-item');
         if (listItem) {
             const symbol = listItem.dataset.symbol;
@@ -140,14 +137,12 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
-        // 處理行動裝置卡片上的「更多詳情」按鈕
         const mobileDetailsBtn = e.target.closest('.open-details-btn');
         if (mobileDetailsBtn) {
              openModal('details-modal', false, { symbol: mobileDetailsBtn.dataset.symbol });
              return;
         }
 
-        // 處理桌面版排序
         const sortHeader = e.target.closest('[data-sort-key]');
         if (sortHeader) {
             const newSortKey = sortHeader.dataset.sortKey;
@@ -161,7 +156,6 @@ export function initializeGeneralEventListeners() {
             return;
         }
 
-        // 【新增】處理桌面版整列點擊以開啟詳情
         const holdingRow = e.target.closest('.holding-row');
         if (holdingRow) {
             openModal('details-modal', false, { symbol: holdingRow.dataset.symbol });
@@ -169,24 +163,53 @@ export function initializeGeneralEventListeners() {
         }
     });
     
-    // 【新增】監聽詳情彈窗內部的所有互動
+    // 【修改】擴充詳情彈窗的事件監聽器
     document.getElementById('details-modal').addEventListener('click', (e) => {
-        // 關閉按鈕
         if (e.target.closest('#close-details-modal-btn')) {
             closeModal('details-modal');
             return;
         }
-        // 分頁切換
         const tabItem = e.target.closest('.details-tab-item');
         if (tabItem) {
             e.preventDefault();
-            const symbol = document.getElementById('details-notes-symbol')?.value || document.querySelector('#details-modal-content h2').textContent;
+            const symbol = document.querySelector('#details-modal-content h2').textContent;
             switchDetailsTab(tabItem.dataset.tab, symbol);
+            return;
+        }
+        
+        // 【新增】監聽詳情彈窗內的編輯按鈕
+        const editBtn = e.target.closest('.details-edit-tx-btn');
+        if (editBtn) {
+            const txId = editBtn.dataset.id;
+            const { transactions } = getState();
+            const txToEdit = transactions.find(t => t.id === txId);
+            if (txToEdit) {
+                // 先關閉詳情彈窗，再打開交易編輯彈窗
+                closeModal('details-modal');
+                openModal('transaction-modal', true, txToEdit);
+            }
+            return;
+        }
+
+        // 【新增】監聽詳情彈窗內的刪除按鈕
+        const deleteBtn = e.target.closest('.details-delete-tx-btn');
+        if (deleteBtn) {
+            const txId = deleteBtn.dataset.id;
+            showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
+                executeApiAction('delete_transaction', { txId }, {
+                    loadingText: '正在刪除交易...',
+                    successMessage: '交易已成功刪除！'
+                }).then(() => {
+                    // 交易成功刪除後，需要更新詳情彈窗的內容
+                    const symbol = document.querySelector('#details-modal-content h2').textContent;
+                    // 短暫延遲以等待後端數據同步
+                    setTimeout(() => renderDetailsModal(symbol), 200);
+                }).catch(err => console.error("刪除交易失敗:", err));
+            });
             return;
         }
     });
 
-    // 【新增】單獨監聽詳情彈窗中筆記表單的提交事件
     document.addEventListener('submit', (e) => {
         if (e.target.id === 'details-notes-form') {
             e.preventDefault();
@@ -196,12 +219,28 @@ export function initializeGeneralEventListeners() {
                 stop_loss_price: parseFloat(document.getElementById('details-stop-loss-price').value) || null,
                 notes: document.getElementById('details-notes-content').value.trim()
             };
-            // 提交後，關閉的是詳情彈窗
-            saveNoteAction(noteData, 'details-modal');
+            // 筆記儲存後，我們希望停留在詳情頁，所以不關閉它
+            // 只需在成功後重新渲染即可
+             executeApiAction('save_stock_note', noteData, {
+                loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
+                successMessage: `${noteData.symbol} 的筆記已儲存！`,
+                shouldRefreshData: false
+            }).then(() => {
+                const { holdings, stockNotes } = getState();
+                stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
+                setState({ stockNotes });
+                renderHoldingsTable(holdings);
+                // 重新渲染詳情彈窗以顯示更新後的筆記
+                renderDetailsModal(noteData.symbol);
+                // 手動切換回筆記分頁
+                switchDetailsTab('notes', noteData.symbol);
+            }).catch(error => {
+                console.error("儲存筆記最終失敗:", error);
+            });
         }
     });
 
-    // 監聽所有圖表控制項 (以下不變)
+    // ... (所有圖表控制項的監聽器維持不變) ...
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
