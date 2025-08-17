@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - 【新增檔案】
+// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - v1.1 (支援交易編輯)
 // =========================================================================================
 
 import { getState } from '../../state.js';
@@ -25,23 +25,31 @@ function renderDetailsTransactions(symbol) {
                 <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">類型</th>
                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">股數</th>
                 <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">價格 (原幣)</th>
+                <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
             </tr>
         </thead>`;
     
     const tableBody = symbolTransactions.map(t => {
         const typeClass = t.type === 'buy' ? 'text-red-500' : 'text-green-500';
         const typeText = t.type === 'buy' ? '買入' : '賣出';
+        // 【新增】編輯與刪除按鈕
         return `
             <tr class="border-b border-gray-200">
                 <td class="px-4 py-2 whitespace-nowrap">${t.date.split('T')[0]}</td>
                 <td class="px-4 py-2 font-semibold ${typeClass}">${typeText}</td>
                 <td class="px-4 py-2 text-right">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
                 <td class="px-4 py-2 text-right">${formatNumber(t.price, 2)} <span class="text-xs text-gray-400">${t.currency}</span></td>
+                <td class="px-4 py-2 text-center whitespace-nowrap">
+                    <button data-id="${t.id}" class="details-edit-tx-btn text-indigo-600 hover:text-indigo-900 text-sm font-medium">編輯</button>
+                    <button data-id="${t.id}" class="details-delete-tx-btn text-red-600 hover:text-red-900 text-sm font-medium ml-3">刪除</button>
+                </td>
             </tr>`;
     }).join('');
 
     return `<div class="overflow-y-auto max-h-64"><table class="min-w-full">${tableHeader}<tbody class="bg-white">${tableBody}</tbody></table></div>`;
 }
+
+// ... (檔案中其他函式維持不變) ...
 
 /**
  * 渲染投資筆記分頁的內容
