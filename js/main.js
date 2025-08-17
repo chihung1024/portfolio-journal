@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.1.0 - UI Refinements
+// == 主程式進入點 (main.js) v4.2.0 - Pre-fetching Optimization
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -57,6 +57,8 @@ export async function loadInitialDashboardAndHoldings() {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
+        // 【修改】將背景載入的觸發點調整得更明確
+        // 延遲 500ms 是為了確保主 UI 渲染完成，避免卡頓
         setTimeout(loadChartDataInBackground, 500);
     }
 }
@@ -94,6 +96,10 @@ async function loadChartDataInBackground() {
             document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
             
             console.log("圖表數據與日期範圍載入完成。");
+            
+            // 【新增】在圖表載入成功後，接續載入其他次要數據
+            loadSecondaryDataInBackground();
+
         }
     } catch (error) {
         console.error('背景載入圖表數據失敗:', error);
@@ -101,14 +107,50 @@ async function loadChartDataInBackground() {
     }
 }
 
-// --- 交易/拆股記錄按需載入 ---
+// --- 【新增】第三階段背景載入：預載其他分頁的數據 ---
+async function loadSecondaryDataInBackground() {
+    console.log("正在背景預載次要數據 (交易紀錄、配息等)...");
+    
+    // 使用 Promise.allSettled 來確保兩個請求都會執行，即使其中一個失敗
+    const results = await Promise.allSettled([
+        apiRequest('get_transactions_and_splits', {}),
+        apiRequest('get_dividends_for_management', {})
+    ]);
+
+    // 處理交易與拆股數據
+    if (results[0].status === 'fulfilled' && results[0].value.success) {
+        setState({
+            transactions: results[0].value.data.transactions || [],
+            userSplits: results[0].value.data.splits || [],
+        });
+        console.log("交易與拆股數據預載完成。");
+    } else {
+        console.error("預載交易紀錄失敗:", results[0].reason || results[0].value.message);
+    }
+    
+    // 處理配息數據
+    if (results[1].status === 'fulfilled' && results[1].value.success) {
+        setState({
+            pendingDividends: results[1].value.data.pendingDividends,
+            confirmedDividends: results[1].value.data.confirmedDividends,
+        });
+        console.log("配息數據預載完成。");
+    } else {
+        console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
+    }
+}
+
+
+// --- 【修改】交易/拆股記錄按需載入函式，現在主要作為後備方案 ---
 async function loadTransactionsData() {
+    // 檢查 state 中是否已有預載的數據
     const { transactions } = getState();
     if (transactions && transactions.length > 0) {
-        renderTransactionsTable();
+        renderTransactionsTable(); // 如果有，直接渲染
         return;
     }
     
+    // 如果沒有預載數據（例如預載失敗），才顯示讀取畫面並重新請求
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
         const result = await apiRequest('get_transactions_and_splits', {});
@@ -127,9 +169,16 @@ async function loadTransactionsData() {
     }
 }
 
-// --- 主流程函式 ---
-
+// --- 【修改】配息記錄按需載入函式，現在主要作為後備方案 ---
 export async function loadAndShowDividends() {
+    // 檢查 state 中是否已有預載的數據
+    const { pendingDividends, confirmedDividends } = getState();
+    if (pendingDividends && confirmedDividends) {
+         renderDividendsManagementTab(pendingDividends, confirmedDividends); // 如果有，直接渲染
+         return;
+    }
+
+    // 如果沒有預載數據，才顯示讀取畫面並重新請求
     const overlay = document.getElementById('loading-overlay');
     overlay.style.display = 'flex';
     try {
@@ -170,14 +219,32 @@ function setupMainAppEventListeners() {
             e.preventDefault();
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
+            
+            // 【修改】優化分頁切換邏輯
+            const { transactions, pendingDividends, confirmedDividends, userSplits } = getState();
+
             if (tabName === 'dividends') {
-                await loadAndShowDividends();
+                // 優先使用已預載的數據
+                if (pendingDividends && confirmedDividends) {
+                    renderDividendsManagementTab(pendingDividends, confirmedDividends);
+                } else {
+                    await loadAndShowDividends(); // 後備方案
+                }
             } else if (tabName === 'transactions') {
-                await loadTransactionsData();
+                // 優先使用已預載的數據
+                if (transactions.length > 0) {
+                    renderTransactionsTable();
+                } else {
+                    await loadTransactionsData(); // 後備方案
+                }
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
-                renderSplitsTable();
+                // 拆股數據與交易數據一起預載，所以也可以直接渲染
+                if(userSplits) {
+                    renderSplitsTable();
+                }
+                // 如果沒有拆股紀錄，renderSplitsTable 內部會處理顯示 "無資料" 的訊息
             }
         }
     });
@@ -193,6 +260,8 @@ function setupMainAppEventListeners() {
         if (selectedGroupId === 'all') {
             recalcBtn.classList.add('hidden');
             document.getElementById('loading-overlay').style.display = 'flex';
+            // 【注意】切回 'all' 視圖時，我們只需要重新載入核心數據，
+            // 不需要重新觸發背景預載，因為那些母數據 (transactions, etc.) 不會變
             loadInitialDashboardAndHoldings();
         } else {
             recalcBtn.classList.remove('hidden');
