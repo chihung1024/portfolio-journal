@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_refined (精簡化 UI)
+// == 持股表格 UI 模組 (holdings.ui.js) - v_details_modal (支援詳情彈窗觸發)
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -25,7 +25,6 @@ function renderHoldingDetailCardContent(h) {
         else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1';
     }
 
-    // 【修改】移除了底部的 "投資筆記" 按鈕
     return `
         <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm p-4 bg-gray-50">
             <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)} (${(h.returnRate || 0).toFixed(2)}%)</p></div>
@@ -77,6 +76,7 @@ export function renderHoldingsTable(currentHoldings) {
     const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
     const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
 
+    // --- 【修改】桌面版表格 ---
     const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const note = stockNotes[h.symbol] || {}; 
@@ -91,8 +91,9 @@ export function renderHoldingsTable(currentHoldings) {
              if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
              else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
         }
+        // 為 <tr> 添加 data-symbol, holding-row class 和 cursor-pointer
         return `
-            <tr class="hover:bg-gray-50 ${isShort ? 'bg-sky-50' : ''}">
+            <tr class="hover:bg-gray-100 cursor-pointer holding-row" data-symbol="${h.symbol}" ${isShort ? 'style="background-color: #f0f9ff;"' : ''}>
                 <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900">
                     <div class="flex items-center">
                         <span>${h.symbol}</span>
@@ -117,23 +118,32 @@ export function renderHoldingsTable(currentHoldings) {
                 <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
 
-    // 【修改】行動版卡片，現在只渲染一次筆記按鈕
+    // --- 【修改】行動版卡片 ---
     const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+        // 為卡片底部新增「更多詳情」按鈕
         return `
-            <div class="bg-white rounded-lg shadow p-4 space-y-3 ${isShort ? 'ring-2 ring-sky-300' : ''}">
-                <div class="flex justify-between items-center">
-                    <div class="flex items-center">
-                        <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                        ${isShort ? shortBadge : ''}
-                        <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
+            <div class="bg-white rounded-lg shadow ${isShort ? 'ring-2 ring-sky-300' : ''}">
+                <div class="p-4 space-y-3">
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center">
+                            <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
+                            ${isShort ? shortBadge : ''}
+                            <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
+                        </div>
+                        <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                     </div>
-                    <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
+                    ${renderHoldingDetailCardContent(h)}
                 </div>
-                ${renderHoldingDetailCardContent(h)}
+                <div class="border-t border-gray-200 px-4 py-2">
+                    <button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">
+                        更多詳情
+                    </button>
+                </div>
             </div>`; }).join('')}</div>`;
 
+    // --- 行動版緊湊列表 ---
     const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
