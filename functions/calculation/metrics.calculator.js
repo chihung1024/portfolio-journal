@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v2.0 (整合回測指標)
+// == 核心指標計算模組 (metrics.calculator.js) - FINAL & COMPLETE VERSION
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -79,8 +79,9 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
 
+            // ================== 【最終修正邏輯開始】 ==================
             const symbolPrices = market[sym]?.prices || {};
-            const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a)); 
+            const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a)); // 日期從新到舊排序
 
             let latestPrice = 0;
             let priceBefore = 0;
@@ -95,10 +96,12 @@ function calculateFinalHoldings(pf, market, allEvts) {
                     const beforeDateStr = availableDates[1];
                     priceBefore = symbolPrices[beforeDateStr];
                 } else {
+                    // 如果只有一天數據，則前一日價格等於最新價
                     priceBefore = latestPrice;
                 }
             }
-            
+            // ================== 【最終修正邏輯結束】 ==================
+
             const fx = findFxRate(market, h.currency, latestPriceDate);
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > latestPriceDate);
             const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
@@ -366,146 +369,11 @@ function calculateCoreMetrics(evts, market) {
     return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
 }
 
-
-// =========================================================================================
-// == [新增] 移植自 back_test 專案的核心回測績效指標計算函式
-// =========================================================================================
-/**
- * 根據時間序列的淨值歷史，計算詳細的績效指標 (CAGR, MDD, Volatility, Sharpe, etc.)
- * @param {Object} portfolioHistory - { 'YYYY-MM-DD': value, ... } 格式的投資組合淨值歷史
- * @param {Object} benchmarkHistory - { 'YYYY-MM-DD': value, ... } 格式的比較基準淨值歷史
- * @param {number} riskFreeRate - 無風險利率 (年化)，預設為 0
- * @returns {Object} - 包含所有績效指標的物件
- */
-function calculatePerformanceMetrics(portfolioHistory, benchmarkHistory = null, riskFreeRate = 0.0) {
-    const historyEntries = Object.entries(portfolioHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-    if (historyEntries.length < 2) {
-        return { cagr: 0, mdd: 0, volatility: 0, sharpe_ratio: 0, sortino_ratio: 0, beta: null, alpha: null };
-    }
-
-    // --- 準備基礎數據 ---
-    const values = historyEntries.map(entry => entry[1]);
-    const dates = historyEntries.map(entry => new Date(entry[0]));
-    const startValue = values[0];
-    const endValue = values[values.length - 1];
-
-    if (startValue < 1e-9) {
-        return { cagr: 0, mdd: -1, volatility: 0, sharpe_ratio: 0, sortino_ratio: 0, beta: null, alpha: null };
-    }
-
-    // --- 計算日報酬率 (Daily Returns) ---
-    const dailyReturns = [];
-    for (let i = 1; i < values.length; i++) {
-        if (values[i-1] > 1e-9) {
-            dailyReturns.push((values[i] / values[i-1]) - 1);
-        } else {
-            dailyReturns.push(0);
-        }
-    }
-    
-    if (dailyReturns.length < 2) {
-         return { cagr: 0, mdd: 0, volatility: 0, sharpe_ratio: 0, sortino_ratio: 0, beta: null, alpha: null };
-    }
-
-    // --- 計算 CAGR (年化複合成長率) ---
-    const years = (dates[dates.length - 1] - dates[0]) / (365.25 * 24 * 60 * 60 * 1000);
-    const cagr = years > 0 ? (endValue / startValue) ** (1 / years) - 1 : 0;
-
-    // --- 計算 MDD (最大回撤) ---
-    let peak = -Infinity;
-    let maxDrawdown = 0;
-    for (const value of values) {
-        if (value > peak) peak = value;
-        const drawdown = (peak > 1e-9) ? (value - peak) / peak : 0;
-        if (drawdown < maxDrawdown) maxDrawdown = drawdown;
-    }
-
-    // --- 計算 Volatility (年化波動率) ---
-    const meanReturn = dailyReturns.reduce((sum, r) => sum + r, 0) / dailyReturns.length;
-    const squaredDiffs = dailyReturns.map(r => (r - meanReturn) ** 2);
-    const variance = squaredDiffs.reduce((sum, d) => sum + d, 0) / (dailyReturns.length - 1);
-    const stdDev = Math.sqrt(variance);
-    const volatility = stdDev * Math.sqrt(252); // 假設一年有 252 個交易日
-
-    // --- 計算 Sharpe Ratio (夏普比率) ---
-    const annualizedExcessReturn = cagr - riskFreeRate;
-    const sharpe_ratio = (volatility > 1e-9) ? annualizedExcessReturn / volatility : 0;
-
-    // --- 計算 Sortino Ratio (索提諾比率) ---
-    const dailyRiskFreeRate = (1 + riskFreeRate) ** (1 / 252) - 1;
-    const downsideReturns = dailyReturns.map(r => Math.min(0, r - dailyRiskFreeRate));
-    const downsideVariance = downsideReturns.reduce((sum, r) => sum + r**2, 0) / downsideReturns.length;
-    const downsideStdDev = Math.sqrt(downsideVariance) * Math.sqrt(252);
-    const sortino_ratio = (downsideStdDev > 1e-9) ? annualizedExcessReturn / downsideStdDev : 0;
-
-    // --- 計算 Alpha 和 Beta ---
-    let alpha = null, beta = null;
-    if (benchmarkHistory) {
-        const benchEntries = Object.entries(benchmarkHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-        const benchMap = new Map(benchEntries);
-        const alignedPortfolioReturns = [];
-        const alignedBenchmarkReturns = [];
-
-        let lastBenchValue = null;
-        for (let i = 1; i < historyEntries.length; i++) {
-            const currentDateStr = historyEntries[i][0];
-            const prevDateStr = historyEntries[i-1][0];
-            const currentBenchValue = benchMap.get(currentDateStr);
-            const prevBenchValue = benchMap.get(prevDateStr) || lastBenchValue;
-
-            if (currentBenchValue !== undefined && prevBenchValue !== undefined && prevBenchValue > 1e-9) {
-                alignedPortfolioReturns.push(dailyReturns[i-1]);
-                alignedBenchmarkReturns.push((currentBenchValue / prevBenchValue) - 1);
-            }
-            if (currentBenchValue !== undefined) {
-                 lastBenchValue = currentBenchValue;
-            }
-        }
-
-        if (alignedPortfolioReturns.length > 1) {
-            const n = alignedPortfolioReturns.length;
-            const meanP = alignedPortfolioReturns.reduce((s, v) => s + v, 0) / n;
-            const meanB = alignedBenchmarkReturns.reduce((s, v) => s + v, 0) / n;
-            
-            let cov = 0, varB = 0;
-            for (let i = 0; i < n; i++) {
-                cov += (alignedPortfolioReturns[i] - meanP) * (alignedBenchmarkReturns[i] - meanB);
-                varB += (alignedBenchmarkReturns[i] - meanB) ** 2;
-            }
-            cov /= (n - 1);
-            varB /= (n - 1);
-            
-            beta = (varB > 1e-9) ? cov / varB : 0;
-
-            const benchStartValue = benchEntries[0][1];
-            const benchEndValue = benchEntries[benchEntries.length - 1][1];
-            const benchCagr = years > 0 ? (benchEndValue / benchStartValue) ** (1 / years) - 1 : 0;
-            
-            const expectedReturn = riskFreeRate + beta * (benchCagr - riskFreeRate);
-            alpha = cagr - expectedReturn;
-        }
-    }
-
-    const sanitize = (val) => (val !== null && isFinite(val) ? val : null);
-
-    return {
-        cagr: sanitize(cagr),
-        mdd: sanitize(maxDrawdown),
-        volatility: sanitize(volatility),
-        sharpe_ratio: sanitize(sharpe_ratio),
-        sortino_ratio: sanitize(sortino_ratio),
-        beta: sanitize(beta),
-        alpha: sanitize(alpha)
-    };
-}
-
-
 module.exports = {
     calculateTwrHistory,
     calculateFinalHoldings,
     createCashflowsForXirr,
     calculateXIRR,
     calculateDailyCashflows,
-    calculateCoreMetrics,
-    calculatePerformanceMetrics // [新增導出]
+    calculateCoreMetrics
 };
