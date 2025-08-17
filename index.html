@@ -16,7 +16,6 @@
         .btn { transition: all 0.2s ease-in-out; }
         .modal-backdrop { background-color: rgba(0,0,0,0.5); }
         .chart-range-btn.active { background-color: #4f46e5; color: white; }
-        /* 【新增】隱藏滾動條但保留滾動功能 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
@@ -97,21 +96,21 @@
             </div>
 
             <div class="card p-6 mb-8">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
-                    <div class="sm:flex sm:items-center sm:space-x-4 w-full overflow-hidden">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-baseline mb-4 gap-4">
+                    <div class="sm:flex sm:items-baseline sm:space-x-4 w-full overflow-hidden">
                         <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
                         <div class="mt-2 sm:mt-0 border-b sm:border-b-0 sm:border-l border-gray-200 sm:pl-4 w-full">
                             <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
-                                <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
-                                <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
-                                <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
-                                <a href="#" data-tab="splits" class="tab-item whitespace-nowrap border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
-                                <a href="#" data-tab="groups" class="tab-item whitespace-nowrap border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
+                                <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
+                                <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
+                                <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
+                                <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
+                                <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
                             </nav>
                         </div>
                     </div>
                     <div class="flex space-x-2">
-                        <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-5 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
+                        <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
                     </div>
                 </div>
                 <div id="holdings-tab" class="tab-content"><div id="holdings-content"></div></div>
@@ -149,7 +148,7 @@
             </div>
             
             <div class="card p-6 mb-8">
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+                <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
                     <h3 class="text-lg font-semibold text-gray-800">時間加權報酬率 vs. Benchmark</h3>
                     <div class="flex items-center space-x-2">
                         <input type="text" id="benchmark-symbol-input" placeholder="e.g., SPY" class="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
