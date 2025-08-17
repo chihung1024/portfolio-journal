@@ -1,6 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js)
-// == 職責：處理筆記、Benchmark、圖表控制等通用或零散的用戶互動事件。
+// == 通用事件處理模組 (general.events.js) v2.0 - 支援行動裝置列表模式
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -112,12 +111,15 @@ export function initializeGeneralEventListeners() {
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
     document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
 
-    // 監聽持股內容區的點擊（用於排序和開啟筆記）
+    // 【核心修改】監聽持股內容區的點擊（排序、筆記、行動裝置UI互動）
     document.getElementById('holdings-content').addEventListener('click', (e) => {
+        const { holdings, activeMobileHolding } = getState();
+
+        // 處理桌面版排序
         const sortHeader = e.target.closest('[data-sort-key]');
         if (sortHeader) {
             const newSortKey = sortHeader.dataset.sortKey;
-            const { holdingsSort, holdings } = getState();
+            const { holdingsSort } = getState();
             let newOrder = 'desc';
             if (holdingsSort.key === newSortKey && holdingsSort.order === 'desc') {
                 newOrder = 'asc';
@@ -126,9 +128,31 @@ export function initializeGeneralEventListeners() {
             renderHoldingsTable(holdings);
             return;
         }
+
+        // 處理開啟筆記
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
             openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
+            return;
+        }
+
+        // 【新增】處理行動裝置視圖切換
+        const viewSwitchBtn = e.target.closest('#holdings-view-switcher button');
+        if (viewSwitchBtn) {
+            const newView = viewSwitchBtn.dataset.view;
+            setState({ mobileViewMode: newView, activeMobileHolding: null }); // 切換視圖時, 關閉所有展開的項目
+            renderHoldingsTable(holdings);
+            return;
+        }
+
+        // 【新增】處理行動裝置列表模式的展開/收合
+        const listItem = e.target.closest('.list-view-item');
+        if (listItem) {
+            const symbol = listItem.dataset.symbol;
+            // 如果點擊的是已經展開的項目, 則收合; 否則展開新的
+            const newActiveHolding = activeMobileHolding === symbol ? null : symbol;
+            setState({ activeMobileHolding: newActiveHolding });
+            renderHoldingsTable(holdings);
             return;
         }
     });
