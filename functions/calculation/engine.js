@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (新增檔案)
-// == 職責：純粹的、可重用的投資組合計算引擎
+// == 檔案：functions/calculation/engine.js (v2.0 - 升級為通用計算引擎)
+// == 職責：純粹的、可重用的投資組合計算引擎，現已整合進階績效指標。
 // =========================================================================================
 
 const { toDate, findNearest, findFxRate, isTwStock } = require('./helpers');
@@ -9,7 +9,7 @@ const metrics = require('./metrics.calculator');
 const dataProvider = require('./data.provider');
 
 /**
- * 核心計算函式
+ * 核心計算引擎函式
  * @param {Array} txs - 用於計算的交易紀錄
  * @param {Array} splits - 用於計算的分割紀錄
  * @param {Array} userDividends - 用於計算的已確認股利
@@ -26,16 +26,18 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
             fullHistory: {},
             twrHistory: {},
             benchmarkHistory: {},
-            netProfitHistory: {}
+            netProfitHistory: {},
+            performanceMetrics: {} // [新增] 回傳空物件
         };
     }
 
-    // 確保計算所需的市場數據都存在
+    // --- 1. 準備數據 (邏輯維持不變) ---
     await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
     const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
+    // --- 2. 準備事件流 (邏輯維持不變) ---
     const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
-    if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
+    if (!firstBuyDate) return {}; 
 
     let calculationStartDate = firstBuyDate;
     let oldHistory = {};
@@ -50,6 +52,7 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
         calculationStartDate = nextDay;
     }
 
+    // --- 3. 計算每日投資組合歷史淨值 (邏輯維持不變) ---
     const partialHistory = {};
     const todayForCalc = new Date();
     todayForCalc.setUTCHours(0, 0, 0, 0);
@@ -61,10 +64,10 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
     }
     const fullHistory = { ...oldHistory, ...partialHistory };
 
+    // --- 4. 計算核心指標與圖表數據 (邏輯維持不變) ---
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
     const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(fullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
     
-    // 呼叫核心指標計算，它現在會回傳包含完整當日損益的持股數據
     const portfolioResult = metrics.calculateCoreMetrics(evts, market);
 
     const netProfitHistory = {};
@@ -76,11 +79,21 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
 
     const { holdingsToUpdate } = portfolioResult.holdings;
     
+    // --- 5. [核心升級] 計算進階回測績效指標 ---
+    const benchmarkValues = {};
+    // 將 benchmarkHistory 的百分比走勢，轉換為基於 100 的淨值走勢，以供 metrics 計算
+    Object.entries(benchmarkHistory).forEach(([date, percentage]) => {
+        benchmarkValues[date] = 100 * (1 + percentage / 100);
+    });
+    const performanceMetrics = metrics.calculatePerformanceMetrics(fullHistory, benchmarkValues);
+
+    // --- 6. [核心升級] 組合最終結果 ---
     const summaryData = {
         totalRealizedPL: portfolioResult.totalRealizedPL,
         xirr: portfolioResult.xirr,
         overallReturnRate: portfolioResult.overallReturnRate,
-        benchmarkSymbol: benchmarkSymbol
+        benchmarkSymbol: benchmarkSymbol,
+        ...performanceMetrics // 將所有進階指標 (cagr, mdd, alpha, beta...) 合併到 summary 中
     };
 
     return {
@@ -90,8 +103,9 @@ async function runCalculationEngine(txs, splits, userDividends, benchmarkSymbol,
         twrHistory,
         benchmarkHistory,
         netProfitHistory,
-        evts, // 回傳 evts 給快照使用
-        market // 【修正】將準備好的 market 物件一併回傳
+        performanceMetrics, // 也獨立回傳一份，方便未來使用
+        evts, 
+        market
     };
 }
 
