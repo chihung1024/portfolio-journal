@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (最終修正版)
+// == 檔案：js/events/group.events.js (v2.0 - 樹狀選擇模型)
 // == 職責：處理所有與群組管理相關的用戶互動事件
 // =========================================================================================
 
@@ -8,7 +8,6 @@ import { apiRequest } from '../api.js';
 import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
-import { updateGroupSelector } from './group.events.js';
 
 /**
  * 載入所有群組並更新 UI
@@ -29,7 +28,7 @@ async function loadGroups() {
 /**
  * 更新頂部的全局群組篩選器下拉選單
  */
-function updateGroupSelectorInternal() {
+function updateGroupSelector() {
     const { groups } = getState();
     const selector = document.getElementById('group-selector');
     if (!selector) return;
@@ -46,7 +45,6 @@ function updateGroupSelectorInternal() {
 
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
     
-    // 根據選擇決定是否顯示計算按鈕
     const recalcBtn = document.getElementById('recalculate-group-btn');
     if (selector.value !== 'all') {
          recalcBtn.classList.remove('hidden');
@@ -56,7 +54,7 @@ function updateGroupSelectorInternal() {
 }
 
 /**
- * 處理群組表單提交（新增或編輯）
+ * 【核心重構】處理群組表單提交（新增或編輯）
  */
 async function handleGroupFormSubmit(e) {
     e.preventDefault();
@@ -64,13 +62,15 @@ async function handleGroupFormSubmit(e) {
     saveBtn.disabled = true;
     saveBtn.textContent = '儲存中...';
 
-    const selectedSymbols = Array.from(document.querySelectorAll('input[name="group_symbols"]:checked')).map(cb => cb.value);
+    // 從 DOM 中收集所有被勾選的交易 ID
+    const selectedTransactionIds = Array.from(document.querySelectorAll('input.transaction-checkbox:checked'))
+                                      .map(cb => cb.value);
 
     const groupData = {
         id: document.getElementById('group-id').value || null,
         name: document.getElementById('group-name').value.trim(),
         description: document.getElementById('group-description').value.trim(),
-        symbols: selectedSymbols
+        transactionIds: selectedTransactionIds // 發送交易 ID 列表
     };
 
     if (!groupData.name) {
@@ -114,13 +114,12 @@ function handleDeleteGroup(button) {
 }
 
 /**
- * 初始化所有與群組相關的事件監聽器
+ * 【核心重構】初始化所有與群組相關的事件監聽器
  */
 export function initializeGroupEventListeners() {
     document.getElementById('groups-tab').addEventListener('click', (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
-            // 對於新增，順序不影響
             renderGroupModal(null);
             openModal('group-modal');
             return;
@@ -129,13 +128,13 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const { groups } = getState();
+            // 在編輯前，需要先獲取該群組已包含的交易ID列表
+            // 這一步通常需要一個新的輕量級 API: get_group_details(groupId)
             const groupToEdit = groups.find(g => g.id === editBtn.dataset.groupId);
             if (groupToEdit) {
-                // 【核心修正】調整函式呼叫順序
-                // 1. 先呼叫 openModal，讓它清空舊表單並準備好視窗
-                openModal('group-modal');
-                // 2. 再呼叫 renderGroupModal，將新資料填入剛被清空的表單
+                // 假設 groupToEdit 物件中已包含 included_transactions 列表
                 renderGroupModal(groupToEdit);
+                openModal('group-modal');
             }
             return;
         }
@@ -149,6 +148,51 @@ export function initializeGroupEventListeners() {
 
     document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
     document.getElementById('cancel-group-btn').addEventListener('click', () => closeModal('group-modal'));
+    
+    // 【新增】為樹狀圖容器綁定動態事件
+    const groupModal = document.getElementById('group-modal');
+    if (groupModal) {
+        // 點擊事件委派
+        groupModal.addEventListener('click', (e) => {
+            const expandBtn = e.target.closest('.expand-symbol-btn');
+            if (expandBtn) {
+                const txList = expandBtn.closest('.symbol-node').querySelector('.transaction-list');
+                txList.classList.toggle('hidden');
+                expandBtn.classList.toggle('rotate-90'); // 視覺化展開/摺疊
+                return;
+            }
+        });
+        
+        // Checkbox 狀態變更事件委派
+        groupModal.addEventListener('change', (e) => {
+            // 子 checkbox 變更 -> 更新父 checkbox 狀態
+            if (e.target.matches('.transaction-checkbox')) {
+                const symbolNode = e.target.closest('.symbol-node');
+                const allTxs = symbolNode.querySelectorAll('.transaction-checkbox');
+                const checkedTxs = symbolNode.querySelectorAll('.transaction-checkbox:checked');
+                const symbolCheckbox = symbolNode.querySelector('.symbol-checkbox');
+                
+                if (checkedTxs.length === allTxs.length) {
+                    symbolCheckbox.checked = true;
+                    symbolCheckbox.indeterminate = false;
+                } else if (checkedTxs.length === 0) {
+                    symbolCheckbox.checked = false;
+                    symbolCheckbox.indeterminate = false;
+                } else {
+                    symbolCheckbox.checked = false;
+                    symbolCheckbox.indeterminate = true;
+                }
+            }
+            // 父 checkbox 變更 -> 更新所有子 checkbox 狀態
+            else if (e.target.matches('.symbol-checkbox')) {
+                const symbolNode = e.target.closest('.symbol-node');
+                const allTxs = symbolNode.querySelectorAll('.transaction-checkbox');
+                allTxs.forEach(txCheckbox => {
+                    txCheckbox.checked = e.target.checked;
+                });
+            }
+        });
+    }
 }
 
-export { loadGroups, updateGroupSelectorInternal as updateGroupSelector };
+export { loadGroups, updateGroupSelector };
