@@ -1,27 +1,19 @@
 // =========================================================================================
-// == 儀表板 UI 模組 (dashboard.js) v2.0 - UI & Responsiveness Refined
+// == 儀表板 UI 模組 (dashboard.js) v2.3 - Final Layout & Sizing
 // == 職責：處理頂部儀表板數據卡片的更新。
 // =========================================================================================
 
 import { formatNumber } from "./utils.js";
 
-/**
- * [新增] 輔助函式，用於更新單一數據卡片的內容與樣式
- * @param {string} mainElementId - 主要數值元素的 ID
- * @param {number|string} value - 要顯示的主要數值
- * @param {object} options - 其他選項
- * @param {string|null} secondaryElementId - (可選) 次要數值元素 (如百分比) 的 ID
- * @param {number|string|null} secondaryValue - (可選) 要顯示的次要數值
- * @param {string} formatType - 'number', 'percent', 'percent_xirr'
- * @param {boolean|null} hasColor - 數值是否需要根據正負顯示不同顏色
- */
+// 【核心修改】移除所有 JS 字體調整邏輯，因為版面擴大後不再需要
+// function adjustDailyPlFontSize() { ... }
+
 function updateCard(mainElementId, value, options = {}) {
     const { secondaryElementId = null, secondaryValue = null, formatType = 'number', hasColor = false } = options;
 
     const mainEl = document.getElementById(mainElementId);
     if (!mainEl) return;
 
-    // 格式化主要數值
     switch (formatType) {
         case 'number':
             mainEl.textContent = formatNumber(value, 0);
@@ -36,7 +28,6 @@ function updateCard(mainElementId, value, options = {}) {
             mainEl.textContent = value;
     }
 
-    // 更新次要數值 (如果有的話)
     if (secondaryElementId && secondaryValue !== null) {
         const secondaryEl = document.getElementById(secondaryElementId);
         if (secondaryEl) {
@@ -44,7 +35,6 @@ function updateCard(mainElementId, value, options = {}) {
         }
     }
     
-    // 根據正負更新顏色
     if (hasColor) {
         const isPositive = (value || 0) >= 0;
         const colorClass = isPositive ? 'text-red-600' : 'text-green-600';
@@ -69,29 +59,21 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
     const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
     
-    // ================== 【計算邏輯不變】 ==================
     const yesterdayTotalMarketValue = totalMarketValue - totalDailyPL;
     const totalDailyReturnPercent = yesterdayTotalMarketValue !== 0 ? (totalDailyPL / yesterdayTotalMarketValue) * 100 : 0;
     
-    // ================== 【修改的程式碼開始】 ==================
-    
-    // 使用新的輔助函式更新所有卡片
     updateCard('total-assets', totalMarketValue, { formatType: 'number' });
-    
     updateCard('daily-pl', totalDailyPL, { 
         secondaryElementId: 'daily-pl-percent', 
         secondaryValue: totalDailyReturnPercent,
         formatType: 'number', 
         hasColor: true 
     });
-
     updateCard('unrealized-pl', totalUnrealizedPL, { formatType: 'number', hasColor: true });
-    
     updateCard('realized-pl', realizedPL, { formatType: 'number', hasColor: true });
-    
     updateCard('total-return', overallReturn, { formatType: 'percent', hasColor: true });
-    
     updateCard('xirr-value', xirr, { formatType: 'percent_xirr', hasColor: true });
     
-    // ================== 【修改的程式碼結束】 ==================
+    // 【核心修改】移除 JS 字體調整的呼叫
+    // adjustDailyPlFontSize();
 }
