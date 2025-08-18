@@ -132,9 +132,9 @@ export function initializeGroupEventListeners() {
             // 這一步通常需要一個新的輕量級 API: get_group_details(groupId)
             const groupToEdit = groups.find(g => g.id === editBtn.dataset.groupId);
             if (groupToEdit) {
-                // 假設 groupToEdit 物件中已包含 included_transactions 列表
-                renderGroupModal(groupToEdit);
-                openModal('group-modal');
+                // 【核心修正】對調執行順序
+                openModal('group-modal');      // 1. 先打開視窗 (此步驟會清空表單)
+                renderGroupModal(groupToEdit); // 2. 再將數據填寫到乾淨的表單中
             }
             return;
         }
