@@ -1,12 +1,12 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v1.3 - 支援分頁事件
+// == 交易事件處理模組 (transaction.events.js) v2.0 - 引導式歸因流程
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// [核心修改] 導入 executeApiAction 和 apiRequest
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+// 【修改】導入新的彈窗控制器
+import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { updateDashboard } from '../ui/dashboard.js';
@@ -22,24 +22,27 @@ function handleEdit(button) {
     const txId = button.dataset.id;
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
+    
+    // 【修改】編輯時，標題也應為 1/2，但下一步的邏輯不同
+    const titleEl = document.getElementById('modal-title');
+    if(titleEl) titleEl.textContent = '編輯交易紀錄 (步驟 1/2)';
+    
     openModal('transaction-modal', true, transaction);
 }
 
-// [核心修改] 此函式現在作為 executeApiAction 成功後的回呼，專門處理後端返回的數據包
+// 維持不變，用於處理後端成功回傳後的 UI 全面刷新
 function handleSuccessfulUpdate(result) {
     if (!result || !result.data) {
         console.error("handleSuccessfulUpdate 收到的結果無效:", result);
         return;
     }
     
-    // 後端在交易操作後會返回完整的最新數據，我們用它來更新前端
     const { holdings, summary, history, twrHistory, netProfitHistory, benchmarkHistory } = result.data;
 
     const holdingsObject = (holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
 
-    // 全面更新 state，包含後端回傳的所有圖表歷史數據
     setState({
         holdings: holdingsObject,
         portfolioHistory: history || {},
@@ -48,17 +51,14 @@ function handleSuccessfulUpdate(result) {
         benchmarkHistory: benchmarkHistory || {}
     });
 
-    // 更新儀表板和持股列表
     renderHoldingsTable(holdingsObject);
     updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
 
-    // 主動呼叫圖表更新函式
     updateAssetChart();
     updateNetProfitChart();
     const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol);
     
-    // 最後，刷新交易列表本身
     renderTransactionsTable();
 }
 
@@ -66,35 +66,30 @@ function handleSuccessfulUpdate(result) {
 async function handleDelete(button) {
     const txId = button.dataset.id;
     
-    showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-        // [核心修改] 使用 executeApiAction 處理指令式流程
+    showConfirm('確定要刪除這筆交易紀錄嗎？此操作將同時移除此交易在所有群組中的紀錄。', () => {
         executeApiAction('delete_transaction', { txId }, {
             loadingText: '正在刪除交易紀錄...',
             successMessage: '交易紀錄已成功刪除！',
-            // 關鍵：我們依賴後端返回的數據包，所以不在 executeApiAction 內部自動刷新
             shouldRefreshData: false 
         }).then(result => {
-            // API 成功後，用權威數據更新前端
-            // 首先手動更新交易列表本身
             const { transactions } = getState();
             const updatedTransactions = transactions.filter(t => t.id !== txId);
             setState({ transactions: updatedTransactions });
             
-            // 然後用後端返回的數據包更新所有其他相關 UI
             handleSuccessfulUpdate(result);
         }).catch(error => {
             console.error("刪除交易最終失敗:", error);
-            // 失敗時，錯誤通知已由 executeApiAction 自動顯示，我們無需做任何 UI 回滾
         });
     });
 }
 
-async function handleFormSubmit(e) {
-    e.preventDefault();
-    
+/**
+ * 【核心重構】處理交易表單 "下一步" 按鈕的點擊事件
+ */
+async function handleNextStep() {
+    // 步驟 1: 從表單收集並驗證數據
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
-
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -111,40 +106,37 @@ async function handleFormSubmit(e) {
         return;
     }
     
+    // 步驟 2: 將驗證後的數據暫存到 state 中
+    setState({ tempTransactionData: {
+        isEditing,
+        txId,
+        data: transactionData
+    }});
+
+    // 步驟 3: 關閉目前的交易視窗
     closeModal('transaction-modal');
 
-    const action = isEditing ? 'edit_transaction' : 'add_transaction';
-    const payload = isEditing ? { txId, txData: transactionData } : transactionData;
-    const successMessage = isEditing ? '交易已成功更新！' : '交易已成功新增！';
-
-    // [核心修改] 使用 executeApiAction 處理指令式流程
-    executeApiAction(action, payload, {
-        loadingText: '正在同步交易紀錄...',
-        successMessage: successMessage,
-        shouldRefreshData: false
-    }).then(result => {
-        // API 成功後，用權威數據更新前端
-        // 為了確保交易列表（包含新增的ID或編輯的內容）完全正確，
-        // 我們需要一個包含最新交易列表的數據源。
-        // 最可靠的方式是重新請求一次 get_data。
-        apiRequest('get_data', {}).then(fullData => {
-            setState({ transactions: fullData.data.transactions || [] });
-            
-            // 然後使用先前操作返回的、計算好的數據包更新所有其他UI
-            handleSuccessfulUpdate(result);
-        });
-    }).catch(error => {
-        console.error("儲存交易最終失敗:", error);
-        // 同樣，失敗時無需做任何 UI 回滾
-    });
+    // 步驟 4: (延遲是為了讓UI動畫更流暢) 立即打開群組歸因視窗
+    setTimeout(() => {
+        openGroupAttributionModal();
+    }, 150);
 }
-
 
 // --- Public Function (公開函式，由 main.js 呼叫) ---
 
 export function initializeTransactionEventListeners() {
-    document.getElementById('add-transaction-btn').addEventListener('click', () => openModal('transaction-modal'));
-    document.getElementById('transaction-form').addEventListener('submit', handleFormSubmit);
+    // 【修改】新增交易按鈕現在只負責打開第一步的視窗
+    document.getElementById('add-transaction-btn').addEventListener('click', () => {
+        setState({ tempTransactionData: null }); // 清空暫存
+        const titleEl = document.getElementById('modal-title');
+        if(titleEl) titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
+        openModal('transaction-modal');
+    });
+
+    // 【修改】不再監聽 form 的 submit 事件，而是監聽 "下一步" 按鈕的 click 事件
+    document.getElementById('next-step-btn').addEventListener('click', handleNextStep);
+    
+    // 維持不變
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
 
     document.getElementById('transactions-tab').addEventListener('click', (e) => {
@@ -159,6 +151,16 @@ export function initializeTransactionEventListeners() {
         if (deleteButton) {
             e.preventDefault();
             handleDelete(deleteButton);
+            return;
+        }
+        
+        // 【新增】為微觀編輯按鈕新增事件監聽器
+        const membershipButton = e.target.closest('.edit-membership-btn');
+        if (membershipButton) {
+            e.preventDefault();
+            const txId = membershipButton.dataset.id;
+            // 這裡我們會調用一個在 modals.js 中定義的新函式來打開微觀編輯視窗
+            openModal('membership-editor-modal', false, { txId });
             return;
         }
 
