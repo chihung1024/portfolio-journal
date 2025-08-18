@@ -87,7 +87,7 @@
                         <i data-lucide="wallet" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="total-assets-container">
-                        <p id="total-assets" class="dashboard-metric text-2xl xl:text-3xl font-bold text-gray-800">0</p>
+                        <p id="total-assets" class="text-2xl lg:text-3xl font-bold text-gray-800">0</p>
                     </div>
                 </div>
             
@@ -96,9 +96,9 @@
                         <h3 class="text-sm font-medium text-gray-500">當日損益 (TWD)</h3>
                         <i data-lucide="zap" class="h-6 w-6 text-gray-400"></i>
                     </div>
-                    <div id="daily-pl-container">
-                        <p id="daily-pl" class="dashboard-metric text-2xl xl:text-3xl font-bold">0</p>
-                        <span id="daily-pl-percent" class="font-semibold text-lg">0.00%</span>
+                    <div id="daily-pl-container" class="flex items-baseline gap-2">
+                        <p id="daily-pl" class="text-2xl lg:text-3xl font-bold">0</p>
+                        <span id="daily-pl-percent" class="font-semibold">0.00%</span>
                     </div>
                 </div>
                 
@@ -108,7 +108,7 @@
                         <i data-lucide="trending-up" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="unrealized-pl-container">
-                         <p id="unrealized-pl" class="dashboard-metric text-2xl xl:text-3xl font-bold">0</p>
+                         <p id="unrealized-pl" class="text-2xl lg:text-3xl font-bold">0</p>
                     </div>
                 </div>
             
@@ -118,7 +118,7 @@
                         <i data-lucide="dollar-sign" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="realized-pl-container">
-                        <p id="realized-pl" class="dashboard-metric text-2xl xl:text-3xl font-bold">0</p>
+                        <p id="realized-pl" class="text-2xl lg:text-3xl font-bold">0</p>
                     </div>
                 </div>
             
@@ -128,7 +128,7 @@
                         <i data-lucide="percent" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="total-return-container">
-                         <p id="total-return" class="dashboard-metric text-2xl xl:text-3xl font-bold">0.00%</p>
+                         <p id="total-return" class="text-2xl lg:text-3xl font-bold">0.00%</p>
                     </div>
                 </div>
             
@@ -138,31 +138,36 @@
                         <i data-lucide="calendar-check" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="xirr-value-container">
-                         <p id="xirr-value" class="dashboard-metric text-2xl xl:text-3xl font-bold">0.00%</p>
+                         <p id="xirr-value" class="text-2xl lg:text-3xl font-bold">0.00%</p>
                     </div>
                 </div>
             </div>
 
             <div class="card p-6 mb-8">
-                <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
-                    <div class="w-full sm:w-auto flex-grow flex flex-col sm:flex-row sm:items-center sm:space-x-4 min-w-0">
-                        <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
-                        <div class="w-full sm:w-auto mt-2 sm:mt-0 min-w-0">
-                             <div class="border-b sm:border-b-0 sm:border-l sm:pl-4 border-gray-200">
-                                <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
-                                    <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
-                                    <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
-                                    <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
-                                    <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
-                                    <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
-                                </nav>
-                             </div>
+                <div class="card p-6 mb-8">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                        
+                        <div class="w-full sm:w-auto flex-grow flex flex-col sm:flex-row sm:items-center sm:space-x-4 min-w-0">
+                            
+                            <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
+                
+                            <div class="w-full sm:w-auto mt-2 sm:mt-0 min-w-0">
+                                 <div class="border-b sm:border-b-0 sm:border-l sm:pl-4 border-gray-200">
+                                    <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
+                                        <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
+                                        <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
+                                        <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
+                                        <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
+                                        <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
+                                    </nav>
+                                 </div>
+                            </div>
+                        </div>
+                
+                        <div class="flex-shrink-0">
+                            <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
                         </div>
                     </div>
-                    <div class="flex-shrink-0">
-                        <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
-                    </div>
-                </div>
                 <div id="holdings-tab" class="tab-content"><div id="holdings-content"></div></div>
                 <div id="transactions-tab" class="tab-content hidden"></div>
                 <div id="dividends-tab" class="tab-content hidden"></div>
