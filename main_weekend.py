@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v2.9 - Parallel Fetch Optimized)
+# == Python 週末完整校驗腳本 (v3.0 - Parallel Fetch Optimized)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta
 import time
 import pandas as pd
+import pytz
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
@@ -168,13 +169,11 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             db_ops_swap = []
             symbols_successfully_processed = []
             
-            # ========================= 【核心偵錯邏輯開始】 =========================
+            # ========================= 【核心優化邏輯開始】 =========================
             for symbol in symbols_to_fetch_in_batch:
-                symbol_data = pd.DataFrame() # 初始化一個空的 DataFrame
+                symbol_data = pd.DataFrame() 
 
-                # 判斷回傳資料的結構
                 if isinstance(data.columns, pd.MultiIndex):
-                    # --- 情況 1: 成功抓取多筆資料，為多層級欄位 ---
                     try:
                         symbol_data = data.loc[:, (slice(None), symbol)]
                         symbol_data.columns = symbol_data.columns.droplevel(1)
@@ -182,12 +181,11 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                         print(f"警告: 在 yfinance 回傳的多層級數據中找不到 {symbol} 的資料。")
                         continue
                 elif len(symbols_to_fetch_in_batch) == 1:
-                    # --- 情況 2: 只請求一筆資料，為單層級欄位 ---
                     symbol_data = data
                 else:
-                    # --- 情況 3: 請求多筆但只回傳一筆 ---
                     print(f"警告: 為 {len(symbols_to_fetch_in_batch)} 個標的請求數據，但 yfinance 返回了無法識別的單一格式。跳過此批次以防止數據錯亂。")
                     break
+            # ========================== 【核心優化邏輯結束】 ==========================
 
                 if symbol_data.empty or 'Close' not in symbol_data.columns or symbol_data['Close'].isnull().all():
                     print(f"警告: {symbol} 在 yfinance 的回傳數據中無效或全為 NaN。跳過此標的。")
@@ -221,7 +219,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                         db_ops_swap.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
                 
                 symbols_successfully_processed.append(symbol)
-            # ========================== 【核心偵錯邏輯結束】 ==========================
 
             if db_ops_swap:
                 print(f"正在為批次 {batch} 準備 {len(db_ops_swap)} 筆資料庫覆蓋操作...")
@@ -273,7 +270,7 @@ def trigger_recalculations(uids):
         print(f"觸發重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v2.9 - Parallel Fetch Optimized) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.0 - Parallel Fetch Optimized) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
