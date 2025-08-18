@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.8 - Debugged & Optimized)
+# == Python 每日增量更新腳本 (v5.0 - Robust Currency Update)
 # =========================================================================================
 
 import os
@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timedelta
 import time
 import pandas as pd
+import pytz
 
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
@@ -50,16 +51,27 @@ def get_update_targets():
     
     all_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
-
-    holdings_sql = "SELECT DISTINCT symbol, currency FROM holdings"
+    
+    # 來源 1: 目前持股 (Holdings)
+    holdings_sql = "SELECT DISTINCT symbol FROM holdings"
     holdings_results = d1_query(holdings_sql, api_key=D1_API_KEY)
     if holdings_results:
         for row in holdings_results:
             all_symbols.add(row['symbol'])
+            
+    # ========================= 【核心優化邏輯】 =========================
+    # 來源 2: 交易紀錄中的所有貨幣 (Transactions) - 確保匯率持續更新
+    # 這樣即使外幣資產已出清，匯率依然會被更新，以確保歷史計算的準確性
+    currencies_sql = "SELECT DISTINCT currency FROM transactions"
+    currencies_results = d1_query(currencies_sql, api_key=D1_API_KEY)
+    if currencies_results:
+        for row in currencies_results:
             currency = row.get('currency')
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
-                
+    # ========================= 【優化邏輯結束】 =========================
+
+    # 來源 3: 比較基準 (Benchmark)
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql, api_key=D1_API_KEY)
     if benchmark_results:
@@ -78,7 +90,7 @@ def get_update_targets():
 
 def fetch_intraday_prices(symbols):
     """
-    使用 1 分鐘間隔抓取當日數據，以獲取最新的盤中價格。
+    使用 1 分鐘間隔抓取當日數據，並驗證時間戳記以獲取真實的盤中價。
     """
     print("\n--- 【即時更新階段】開始抓取盤中最新價格 ---")
     if not symbols:
@@ -102,31 +114,44 @@ def fetch_intraday_prices(symbols):
             print("yfinance 沒有回傳任何盤中數據。")
             return {}
 
+        tz_ny = pytz.timezone('America/New_York')
+        tz_taipei = pytz.timezone('Asia/Taipei')
+        
         latest_prices = {}
-        # 處理多股票回傳時的多層級欄位
-        if len(stock_symbols) > 1:
+        if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.swaplevel(0, 1)
 
         for symbol in stock_symbols:
             try:
-                # 確保我們總是在處理一個 DataFrame
-                symbol_data = data[symbol] if len(stock_symbols) > 1 else data
-                if not isinstance(symbol_data, pd.DataFrame):
+                symbol_data = data[symbol] if isinstance(data.columns, pd.MultiIndex) else data
+                
+                if not isinstance(symbol_data, pd.DataFrame) or symbol_data.empty or 'Close' not in symbol_data.columns or symbol_data['Close'].isnull().all():
                     continue
 
-                if not symbol_data.empty and 'Close' in symbol_data.columns:
-                    last_price = symbol_data['Close'].dropna().iloc[-1]
+                last_valid_row = symbol_data.dropna(subset=['Close']).iloc[-1]
+                last_price = last_valid_row['Close']
+                last_timestamp = last_valid_row.name 
+
+                is_tw_stock = '.TW' in symbol.upper() or '.TWO' in symbol.upper()
+                market_tz = tz_taipei if is_tw_stock else tz_ny
+                today_in_market_tz = datetime.now(market_tz).date()
+
+                last_price_date = last_timestamp.tz_convert(market_tz).date()
+
+                if last_price_date == today_in_market_tz:
                     latest_prices[symbol] = last_price
+                else:
+                    print(f"資訊: {symbol} 市場尚未開盤，抓取到的是舊價格，本次不更新。")
+
             except KeyError:
                  print(f"資訊: 在回傳的盤中數據中找不到 {symbol} 的資料 (可能今日未交易)。")
-
-        print(f"成功獲取 {len(latest_prices)} 筆盤中最新價格。")
+        
+        print(f"成功獲取 {len(latest_prices)} 筆有效的盤中最新價格。")
         return latest_prices
 
     except Exception as e:
         print(f"抓取盤中價格時發生錯誤: {e}")
         return {}
-
 
 def fetch_and_append_market_data(symbols, batch_size=10):
     if not symbols:
@@ -182,29 +207,21 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             db_ops_upsert = []
             symbols_successfully_processed = []
 
-            # ========================= 【核心偵錯邏輯開始】 =========================
             for symbol in symbols_to_fetch:
-                symbol_data = pd.DataFrame() # 初始化一個空的 DataFrame
+                symbol_data = pd.DataFrame() 
 
-                # 判斷回傳資料的結構
                 if isinstance(data.columns, pd.MultiIndex):
-                    # --- 情況 1: 成功抓取多筆資料，為多層級欄位 ---
                     try:
-                        # 安全地選取該 symbol 的所有欄位
                         symbol_data = data.loc[:, (slice(None), symbol)]
-                        # 移除多餘的 symbol 層級，變回單層級欄位
                         symbol_data.columns = symbol_data.columns.droplevel(1)
                     except KeyError:
                         print(f"警告: 在 yfinance 回傳的多層級數據中找不到 {symbol} 的資料。")
                         continue
                 elif len(symbols_to_fetch) == 1:
-                    # --- 情況 2: 只請求一筆資料，為單層級欄位 ---
                     symbol_data = data
                 else:
-                    # --- 情況 3: 請求多筆但只回傳一筆，yfinance 回傳單層級欄位 ---
-                    # 這種情況我們無法確定這個資料屬於哪個 symbol，為避免資料錯亂，直接跳過。
                     print(f"警告: 為 {len(symbols_to_fetch)} 個標的請求數據，但 yfinance 返回了無法識別的單一格式。跳過此批次以防止數據錯亂。")
-                    break # 跳出 for 迴圈，處理下一個批次
+                    break 
 
                 is_fx = "=" in symbol
                 price_table = "exchange_rates" if is_fx else "price_history"
@@ -218,12 +235,10 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 if symbol_data.empty:
                     continue
                 
-                # 處理股價 (邏輯不變)
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
                     db_ops_upsert.append({"sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
                 
-                # 處理股利 (邏輯不變)
                 if not is_fx and 'Dividends' in symbol_data.columns:
                     dividend_data = symbol_data[symbol_data['Dividends'] > 0]
                     if not dividend_data.empty:
@@ -232,8 +247,7 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                             db_ops_upsert.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET dividend = excluded.dividend;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
                 
                 symbols_successfully_processed.append(symbol)
-            # ========================== 【核心偵錯邏輯結束】 ==========================
-
+            
             if db_ops_upsert:
                 print(f"正在為批次 {batch} 準備 {len(db_ops_upsert)} 筆歷史數據庫操作...")
                 if d1_batch(db_ops_upsert, api_key=D1_API_KEY):
@@ -296,7 +310,7 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.8 - Debugged & Optimized) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.0 - Robust Currency Update) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
