@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v4.1.0 - 支援個股詳情按需載入)
+// == GCP Cloud Function 主入口 (v5.0.0 - 引導式群組歸因)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -17,8 +17,9 @@ const splitHandlers = require('./api_handlers/split.handler');
 const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
-// 【新增】引入新的詳情處理器
 const detailsHandlers = require('./api_handlers/details.handler');
+// 【新增】引入遷移處理器
+const migrationHandlers = require('./api_handlers/migration.handler');
 
 try {
     admin.initializeApp();
@@ -45,12 +46,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // Service Account request handling (維持不變)
+    // Service Account request handling
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
             return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
         }
+        // 【修改】增加遷移 action 的路由
         if (req.body.action === 'recalculate_all_users') {
             try {
                 const createSnapshot = req.body.createSnapshot || false;
@@ -62,6 +64,13 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 }
                 return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
             } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
+        } else if (req.body.action === '_internal_run_migration_v3') { // 【新增】遷移腳本入口
+            try {
+                await migrationHandlers.runMigration(req, res);
+                return;
+            } catch (error) {
+                return res.status(500).send({ success: false, message: `遷移過程中發生錯誤: ${error.message}` });
+            }
         }
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
@@ -79,19 +88,16 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     return await portfolioHandlers.getData(uid, res);
                 case 'update_benchmark':
                     return await portfolioHandlers.updateBenchmark(uid, data, res);
-                
-                // --- 【新增】拆分後的 API ---
                 case 'get_dashboard_and_holdings':
                     return await portfolioHandlers.getDashboardAndHoldings(uid, res);
                 case 'get_transactions_and_splits':
                     return await portfolioHandlers.getTransactionsAndSplits(uid, res);
                 case 'get_chart_data':
                     return await portfolioHandlers.getChartData(uid, res);
-                // 【新增】個股詳情 API
                 case 'get_symbol_details':
                     return await detailsHandlers.getSymbolDetails(uid, data, res);
 
-                // Transactions
+                // Transactions (將在 handler 中加入數據完整性邏輯)
                 case 'add_transaction':
                     return await transactionHandlers.addTransaction(uid, data, res);
                 case 'edit_transaction':
@@ -119,7 +125,7 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 case 'save_stock_note':
                     return await noteHandlers.saveStockNote(uid, data, res);
 
-                // Groups
+                // Groups (指向新的、基於顯性歸因的邏輯)
                 case 'get_groups':
                     return await groupHandlers.getGroups(uid, res);
                 case 'save_group':
@@ -128,6 +134,9 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     return await groupHandlers.deleteGroup(uid, data, res);
                 case 'calculate_group_on_demand':
                     return await groupHandlers.calculateGroupOnDemand(uid, data, res);
+                // 【新增】用於微觀編輯的路徑
+                case 'update_transaction_group_membership':
+                    return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
 
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
