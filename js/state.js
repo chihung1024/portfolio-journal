@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v3.7.1 - 調整行動裝置預設視圖
+// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -20,14 +20,17 @@ let state = {
 
     isSyncing: false,
 
+    // 【新增】用於引導式流程的暫存數據
+    tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
+    tempMembershipEdit: null, // 儲存 { txId }
+
     // 群組相關狀態
     groups: [],
     selectedGroupId: 'all',
 
     // 行動裝置 UI 狀態
-    // 【修改】將預設值從 'card' 改為 'list'
-    mobileViewMode: localStorage.getItem('mobileViewMode') || 'list', // 'card' or 'list'
-    activeMobileHolding: null, // 儲存當前在 list 模式下展開的股票代碼
+    mobileViewMode: localStorage.getItem('mobileViewMode') || 'list',
+    activeMobileHolding: null,
 
     // 篩選與排序狀態
     transactionFilter: 'all',
@@ -56,7 +59,6 @@ export function getState() {
 
 // 提供外部更新狀態的方法
 export function setState(newState) {
-    // 如果 mobileViewMode 改變，則將其儲存到 localStorage
     if (newState.mobileViewMode && newState.mobileViewMode !== state.mobileViewMode) {
         localStorage.setItem('mobileViewMode', newState.mobileViewMode);
     }
