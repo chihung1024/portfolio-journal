@@ -1,36 +1,19 @@
 // =========================================================================================
-// == 儀表板 UI 模組 (dashboard.js) v2.1 - Dynamic Font Sizing
+// == 儀表板 UI 模組 (dashboard.js) v2.0 - UI & Responsiveness Refined
 // == 職責：處理頂部儀表板數據卡片的更新。
 // =========================================================================================
 
 import { formatNumber } from "./utils.js";
 
 /**
- * 【新增】輔助函式：動態調整儀表板卡片的字體大小以防止溢出
- */
-function adjustFontSize() {
-    const metrics = document.querySelectorAll('.dashboard-metric');
-    
-    metrics.forEach(metric => {
-        const container = metric.parentElement;
-        // 先重置為最大字體，以便重新計算
-        metric.classList.remove('text-2xl', 'text-xl');
-        metric.classList.add('xl:text-3xl', 'text-2xl');
-
-        // 檢查是否溢出，如果溢出則逐步降低字體大小
-        if (metric.scrollWidth > container.clientWidth && container.clientWidth > 0) {
-            metric.classList.remove('xl:text-3xl', 'text-2xl');
-            metric.classList.add('text-xl');
-        }
-    });
-}
-
-
-/**
- * 輔助函式，用於更新單一數據卡片的內容與樣式
+ * [新增] 輔助函式，用於更新單一數據卡片的內容與樣式
  * @param {string} mainElementId - 主要數值元素的 ID
  * @param {number|string} value - 要顯示的主要數值
  * @param {object} options - 其他選項
+ * @param {string|null} secondaryElementId - (可選) 次要數值元素 (如百分比) 的 ID
+ * @param {number|string|null} secondaryValue - (可選) 要顯示的次要數值
+ * @param {string} formatType - 'number', 'percent', 'percent_xirr'
+ * @param {boolean|null} hasColor - 數值是否需要根據正負顯示不同顏色
  */
 function updateCard(mainElementId, value, options = {}) {
     const { secondaryElementId = null, secondaryValue = null, formatType = 'number', hasColor = false } = options;
@@ -86,9 +69,13 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
     const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
     
+    // ================== 【計算邏輯不變】 ==================
     const yesterdayTotalMarketValue = totalMarketValue - totalDailyPL;
     const totalDailyReturnPercent = yesterdayTotalMarketValue !== 0 ? (totalDailyPL / yesterdayTotalMarketValue) * 100 : 0;
     
+    // ================== 【修改的程式碼開始】 ==================
+    
+    // 使用新的輔助函式更新所有卡片
     updateCard('total-assets', totalMarketValue, { formatType: 'number' });
     
     updateCard('daily-pl', totalDailyPL, { 
@@ -106,6 +93,5 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     
     updateCard('xirr-value', xirr, { formatType: 'percent_xirr', hasColor: true });
     
-    // 【核心修改】在所有卡片更新完畢後，呼叫字體大小調整函式
-    adjustFontSize();
+    // ================== 【修改的程式碼結束】 ==================
 }
