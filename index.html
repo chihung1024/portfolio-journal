@@ -26,7 +26,7 @@
         <div id="notification-area" class="fixed top-5 right-5 z-50"></div>
 
         <header class="bg-white shadow-md sticky top-0 z-20">
-            <div class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
                 <div class="flex items-center space-x-3">
                     <i data-lucide="line-chart" class="text-indigo-600 h-8 w-8"></i>
                     <h1 class="text-2xl font-bold text-gray-800">交易紀錄與資產分析</h1>
@@ -59,7 +59,7 @@
             </form>
         </div>
 
-        <main class="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-8 hidden">
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 hidden">
             <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-40">
                 <div class="flex flex-col items-center text-center p-4">
                     <svg class="animate-spin h-10 w-10 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -87,7 +87,7 @@
                         <i data-lucide="wallet" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="total-assets-container">
-                        <p id="total-assets" class="text-2xl xl:text-3xl font-bold text-gray-800">0</p>
+                        <p id="total-assets" class="text-2xl lg:text-3xl font-bold text-gray-800">0</p>
                     </div>
                 </div>
             
@@ -97,7 +97,7 @@
                         <i data-lucide="zap" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="daily-pl-container" class="flex items-baseline gap-2">
-                        <p id="daily-pl" class="text-2xl xl:text-3xl font-bold">0</p>
+                        <p id="daily-pl" class="text-2xl lg:text-3xl font-bold">0</p>
                         <span id="daily-pl-percent" class="font-semibold">0.00%</span>
                     </div>
                 </div>
@@ -108,7 +108,7 @@
                         <i data-lucide="trending-up" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="unrealized-pl-container">
-                         <p id="unrealized-pl" class="text-2xl xl:text-3xl font-bold">0</p>
+                         <p id="unrealized-pl" class="text-2xl lg:text-3xl font-bold">0</p>
                     </div>
                 </div>
             
@@ -118,7 +118,7 @@
                         <i data-lucide="dollar-sign" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="realized-pl-container">
-                        <p id="realized-pl" class="text-2xl xl:text-3xl font-bold">0</p>
+                        <p id="realized-pl" class="text-2xl lg:text-3xl font-bold">0</p>
                     </div>
                 </div>
             
@@ -128,7 +128,7 @@
                         <i data-lucide="percent" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="total-return-container">
-                         <p id="total-return" class="text-2xl xl:text-3xl font-bold">0.00%</p>
+                         <p id="total-return" class="text-2xl lg:text-3xl font-bold">0.00%</p>
                     </div>
                 </div>
             
@@ -138,31 +138,36 @@
                         <i data-lucide="calendar-check" class="h-6 w-6 text-gray-400"></i>
                     </div>
                     <div id="xirr-value-container">
-                         <p id="xirr-value" class="text-2xl xl:text-3xl font-bold">0.00%</p>
+                         <p id="xirr-value" class="text-2xl lg:text-3xl font-bold">0.00%</p>
                     </div>
                 </div>
             </div>
 
             <div class="card p-6 mb-8">
-                <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
-                    <div class="w-full sm:w-auto flex-grow flex flex-col sm:flex-row sm:items-center sm:space-x-4 min-w-0">
-                        <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
-                        <div class="w-full sm:w-auto mt-2 sm:mt-0 min-w-0">
-                             <div class="border-b sm:border-b-0 sm:border-l sm:pl-4 border-gray-200">
-                                <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
-                                    <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
-                                    <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
-                                    <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
-                                    <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
-                                    <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
-                                </nav>
-                             </div>
+                <div class="card p-6 mb-8">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                        
+                        <div class="w-full sm:w-auto flex-grow flex flex-col sm:flex-row sm:items-center sm:space-x-4 min-w-0">
+                            
+                            <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
+                
+                            <div class="w-full sm:w-auto mt-2 sm:mt-0 min-w-0">
+                                 <div class="border-b sm:border-b-0 sm:border-l sm:pl-4 border-gray-200">
+                                    <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
+                                        <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
+                                        <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
+                                        <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
+                                        <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
+                                        <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
+                                    </nav>
+                                 </div>
+                            </div>
+                        </div>
+                
+                        <div class="flex-shrink-0">
+                            <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
                         </div>
                     </div>
-                    <div class="flex-shrink-0">
-                        <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
-                    </div>
-                </div>
                 <div id="holdings-tab" class="tab-content"><div id="holdings-content"></div></div>
                 <div id="transactions-tab" class="tab-content hidden"></div>
                 <div id="dividends-tab" class="tab-content hidden"></div>
