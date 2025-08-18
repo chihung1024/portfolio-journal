@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.5 - 穩健版)
+# == Python 每日增量更新腳本 (v4.6 - 最終穩健版)
 # =========================================================================================
 
 import os
@@ -99,27 +99,27 @@ def fetch_intraday_prices(symbols):
             back_adjust=False
         )
         if data.empty:
+            print("yfinance 沒有回傳任何盤中數據。")
             return {}
 
         latest_prices = {}
-        for symbol in stock_symbols:
-            # 處理多股票和單股票的回傳格式差異
-            symbol_data = pd.DataFrame()
-            if len(stock_symbols) > 1:
-                try:
-                    symbol_data_slice = data.loc[:, data.columns.get_level_values(1)==symbol]
-                    if not symbol_data_slice.empty:
-                        symbol_data = symbol_data_slice.copy()
-                        symbol_data.columns = symbol_data.columns.droplevel(1)
-                except KeyError:
-                    pass
-            else:
-                symbol_data = data
+        # 處理多股票回傳時的多層級欄位
+        if len(stock_symbols) > 1:
+            data.columns = data.columns.swaplevel(0, 1)
 
-            if not symbol_data.empty and 'Close' in symbol_data.columns:
-                last_price = symbol_data['Close'].dropna().iloc[-1]
-                latest_prices[symbol] = last_price
-        
+        for symbol in stock_symbols:
+            try:
+                # 確保我們總是在處理一個 DataFrame
+                symbol_data = data[symbol] if len(stock_symbols) > 1 else data
+                if not isinstance(symbol_data, pd.DataFrame):
+                    continue
+
+                if not symbol_data.empty and 'Close' in symbol_data.columns:
+                    last_price = symbol_data['Close'].dropna().iloc[-1]
+                    latest_prices[symbol] = last_price
+            except KeyError:
+                 print(f"資訊: 在回傳的盤中數據中找不到 {symbol} 的資料 (可能今日未交易)。")
+
         print(f"成功獲取 {len(latest_prices)} 筆盤中最新價格。")
         return latest_prices
 
@@ -183,43 +183,43 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             db_ops_upsert = []
             symbols_successfully_processed = []
             
+            # 【核心修正】處理多層級欄位的標準做法
+            if len(symbols_to_fetch) > 1:
+                 data.columns = data.columns.swaplevel(0, 1)
+
             for symbol in symbols_to_fetch:
                 is_fx = "=" in symbol
                 price_table = "exchange_rates" if is_fx else "price_history"
                 dividend_table = "dividend_history"
                 
-                # 【核心修正】更穩健地處理單一和多重股票的數據結構
-                symbol_data = pd.DataFrame()
-                if len(symbols_to_fetch) > 1:
-                    try:
-                        symbol_data_slice = data.loc[:, data.columns.get_level_values(1)==symbol]
-                        if not symbol_data_slice.empty:
-                            symbol_data = symbol_data_slice.copy()
-                            symbol_data.columns = symbol_data.columns.droplevel(1)
-                    except KeyError:
-                        print(f"警告: 在 yfinance 回傳的批次數據中找不到 {symbol} 的資料。")
-                        continue
-                else:
-                    symbol_data = data
+                try:
+                    # 確保 symbol_data 永遠是一個標準的 DataFrame
+                    symbol_data = data[symbol] if len(symbols_to_fetch) > 1 else data
+                    if not isinstance(symbol_data, pd.DataFrame):
+                        continue # 如果因為某些原因 (例如API回傳錯誤) 導致不是 DataFrame，就跳過
+                except KeyError:
+                    print(f"警告: 在 yfinance 回傳的批次數據中找不到 {symbol} 的資料。")
+                    continue
 
                 if symbol_data.empty or ('Close' in symbol_data.columns and symbol_data['Close'].isnull().all()):
-                    print(f"警告: {symbol} 在 yfinance 的回傳數據中無效或全為 NaN。跳過此標的。")
                     continue
                 
                 symbol_data = symbol_data.dropna(subset=['Close'])
                 symbol_data = symbol_data[symbol_data.index >= pd.to_datetime(start_dates[symbol])]
                 if symbol_data.empty:
-                    print(f"在 {start_dates[symbol]} 之後沒有找到 {symbol} 的新歷史數據。")
                     continue
                 
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
                     db_ops_upsert.append({"sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
                 
-                if not is_fx and 'Dividends' in symbol_data.columns and not symbol_data[symbol_data['Dividends'] > 0].empty:
-                    dividend_rows = symbol_data[symbol_data['Dividends'] > 0][['Dividends']].reset_index()
-                    for _, row in dividend_rows.iterrows():
-                        db_ops_upsert.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET dividend = excluded.dividend;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
+                # 【核心修正】使用最安全的方式檢查是否有股利數據
+                if not is_fx and 'Dividends' in symbol_data.columns:
+                    dividend_data = symbol_data[symbol_data['Dividends'] > 0]
+                    if not dividend_data.empty:
+                        dividend_rows = dividend_data[['Dividends']].reset_index()
+                        for _, row in dividend_rows.iterrows():
+                            db_ops_upsert.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET dividend = excluded.dividend;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
                 
                 symbols_successfully_processed.append(symbol)
 
@@ -285,7 +285,7 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.5 - 穩健版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.6 - 最終穩健版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
