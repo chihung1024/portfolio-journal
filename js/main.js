@@ -29,6 +29,88 @@ import { initializeDividendEventListeners } from './events/dividend.events.js';
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
+// 【新增】一個全域變數來存放我們的計時器
+let liveRefreshInterval = null;
+
+// 【新增】一個輕量級的刷新函式，只更新儀表板和持股
+async function refreshDashboardAndHoldings() {
+    try {
+        // 呼叫現有的輕量級 API
+        const result = await apiRequest('get_dashboard_and_holdings', {});
+        if (!result.success) return;
+
+        const { summary, holdings } = result.data;
+        const holdingsObject = (holdings || []).reduce((obj, item) => {
+            obj[item.symbol] = item; return obj;
+        }, {});
+
+        // 只更新必要的 state
+        setState({
+            holdings: holdingsObject,
+            summary: summary
+        });
+
+        // 只重新渲染儀表板和持股列表
+        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+        renderHoldingsTable(holdingsObject);
+        console.log("Live refresh complete.");
+
+    } catch (error) {
+        console.error("Live refresh failed:", error);
+        // 在背景刷新失敗時，不需要打擾使用者
+    }
+}
+
+// 【新增】啟動自動刷新的函式
+export function startLiveRefresh() {
+    stopLiveRefresh(); // 先停止舊的，以防萬一
+
+    const poll = () => {
+        // 【新增】檢查是否有任何彈出視窗是開啟的
+        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
+                            document.querySelector('#split-modal:not(.hidden)') ||
+                            document.querySelector('#dividend-modal:not(.hidden)') ||
+                            document.querySelector('#notes-modal:not(.hidden)') ||
+                            document.querySelector('#details-modal:not(.hidden)') ||
+                            document.querySelector('#group-modal:not(.hidden)');
+
+        if (isModalOpen) {
+            console.log("A modal is open, skipping live refresh to avoid interruption.");
+            return; // 如果有視窗開啟，則直接跳過這次更新
+        }
+
+        // 簡單判斷是否為台股或美股開盤時間 (台灣時間)
+        const now = new Date();
+        const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
+        const dayOfWeek = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getDay();
+
+        // 週一到週五
+        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+            const isTwMarketOpen = taipeiHour >= 9 && taipeiHour < 14;
+            const isUsMarketOpen = taipeiHour >= 21 || taipeiHour < 4;
+
+            if (isTwMarketOpen || isUsMarketOpen) {
+                 console.log("Market is open. Refreshing data...");
+                 refreshDashboardAndHoldings();
+            }
+        }
+    };
+    
+    // 每 60 秒執行一次
+    liveRefreshInterval = setInterval(poll, 60000); 
+    poll(); // 立即執行一次
+}
+
+// 【新增】停止自動刷新的函式
+export function stopLiveRefresh() {
+    if (liveRefreshInterval) {
+        clearInterval(liveRefreshInterval);
+        liveRefreshInterval = null;
+        console.log("Live refresh stopped.");
+    }
+}
+
+
 // --- 輕量級初始載入函式 ---
 export async function loadInitialDashboardAndHoldings() {
     try {
