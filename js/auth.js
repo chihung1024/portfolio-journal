@@ -14,8 +14,8 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-// 【核心修改】引入新的輕量級載入函式，取代舊的 loadPortfolioData
-import { initializeAppUI, loadInitialDashboardAndHoldings } from './main.js';
+// 【修改】從 main.js 引入新的函式
+import { initializeAppUI, loadInitialDashboardAndHoldings, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -52,6 +52,9 @@ export function initializeAuth() {
             
             loadInitialDashboardAndHoldings(); // <--- 呼叫新的輕量級載入函式
 
+            // 【新增】在初始資料載入後，啟動自動刷新
+            startLiveRefresh();
+
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
@@ -71,6 +74,9 @@ export function initializeAuth() {
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
             }
+            
+            // 【新增】使用者登出時，停止自動刷新
+            stopLiveRefresh();
         }
     });
 }
@@ -111,6 +117,8 @@ export async function handleLogin() {
 export async function handleLogout() {
     try {
         await signOut(auth);
+        // 【新增】在登出前手動停止，確保計時器被清除
+        stopLiveRefresh();
         showNotification('info', '您已成功登出。');
     } catch (error) {
         console.error("登出失敗:", error);
