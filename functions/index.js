@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v5.2.0 - 支援微觀編輯)
+// == GCP Cloud Function 主入口 (v5.1.0 - 支援獲取群組詳情)
 // =========================================================================================
 
 const functions = require("firebase-functions");
@@ -127,11 +127,9 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                 // Groups
                 case 'get_groups':
                     return await groupHandlers.getGroups(uid, res);
+                // 【新增】獲取單一群組詳情的路由
                 case 'get_group_details':
                     return await groupHandlers.getGroupDetails(uid, data, res);
-                // 【新增】獲取單一交易歸屬的路由
-                case 'get_transaction_memberships':
-                    return await groupHandlers.getTransactionMemberships(uid, data, res);
                 case 'save_group':
                     return await groupHandlers.saveGroup(uid, data, res);
                 case 'delete_group':
