@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.6 - 最終穩健版)
+# == Python 每日增量更新腳本 (v4.7 - 最終穩健版)
 # =========================================================================================
 
 import os
@@ -162,7 +162,7 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol, "2000-01-01")
             
             if start_date > today_str:
-                print(f"{symbol} 的歷史數據已是最新 ({latest_date_str})，無需更新。")
+                # print(f"{symbol} 的歷史數據已是最新 ({latest_date_str})，無需更新。")
                 continue
 
             start_dates[symbol] = start_date
@@ -183,8 +183,8 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             db_ops_upsert = []
             symbols_successfully_processed = []
             
-            # 【核心修正】處理多層級欄位的標準做法
-            if len(symbols_to_fetch) > 1:
+            # 【核心修正】將多層級欄位轉換放在迴圈外部，確保只執行一次
+            if isinstance(data.columns, pd.MultiIndex):
                  data.columns = data.columns.swaplevel(0, 1)
 
             for symbol in symbols_to_fetch:
@@ -193,15 +193,16 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 dividend_table = "dividend_history"
                 
                 try:
-                    # 確保 symbol_data 永遠是一個標準的 DataFrame
-                    symbol_data = data[symbol] if len(symbols_to_fetch) > 1 else data
-                    if not isinstance(symbol_data, pd.DataFrame):
-                        continue # 如果因為某些原因 (例如API回傳錯誤) 導致不是 DataFrame，就跳過
+                    # 【核心修正】採用更安全的方式獲取單一股票的 DataFrame
+                    if len(symbols_to_fetch) > 1:
+                        symbol_data = data[symbol]
+                    else:
+                        symbol_data = data
                 except KeyError:
                     print(f"警告: 在 yfinance 回傳的批次數據中找不到 {symbol} 的資料。")
                     continue
 
-                if symbol_data.empty or ('Close' in symbol_data.columns and symbol_data['Close'].isnull().all()):
+                if not isinstance(symbol_data, pd.DataFrame) or symbol_data.empty or symbol_data['Close'].isnull().all():
                     continue
                 
                 symbol_data = symbol_data.dropna(subset=['Close'])
@@ -209,12 +210,14 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 if symbol_data.empty:
                     continue
                 
+                # 處理股價
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
                     db_ops_upsert.append({"sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
                 
                 # 【核心修正】使用最安全的方式檢查是否有股利數據
                 if not is_fx and 'Dividends' in symbol_data.columns:
+                    # 篩選出股利大於0的行
                     dividend_data = symbol_data[symbol_data['Dividends'] > 0]
                     if not dividend_data.empty:
                         dividend_rows = dividend_data[['Dividends']].reset_index()
@@ -285,7 +288,7 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.6 - 最終穩健版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.7 - 最終穩健版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
