@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v2.1 - 移除篩選功能)
+// == 檔案：js/ui/components/groups.ui.js (v2.2 - 修正編輯渲染邏輯)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
@@ -48,7 +48,7 @@ export function renderGroupsTab() {
  * @param {Object|null} groupToEdit - (可選) 要編輯的群組物件
  */
 export function renderGroupModal(groupToEdit = null) {
-    const { transactions, groups } = getState();
+    const { transactions } = getState();
     const form = document.getElementById('group-form');
     form.reset();
 
@@ -69,20 +69,16 @@ export function renderGroupModal(groupToEdit = null) {
 
     const allSymbols = Object.keys(txsBySymbol).sort();
     
-    // 【核心修改】從後端獲取準確的已包含交易ID列表
-    // 這一步需要在 editBtn 點擊時，透過一個輕量級 API (例如 get_group_details) 來獲取
-    // 這裡我們暫時從 groupToEdit 物件中讀取，假設它已被填充
-    const includedTxIds = new Set(groupToEdit ? (groupToEdit.included_transactions || []).map(t => t.id) : []);
+    // 【核心修改】使用從 API 獲取的、準確的 ID 列表
+    const includedTxIds = new Set(groupToEdit ? groupToEdit.included_transaction_ids : []);
 
     if (allSymbols.length > 0) {
-        // 【修改】刪除了包含篩選器和批量按鈕的整個 div 區塊
         symbolsContainer.innerHTML = `
             <div id="group-tree-view" class="p-2">
                 ${allSymbols.map(symbol => {
                     const symbolTxs = txsBySymbol[symbol];
                     const includedCount = symbolTxs.filter(t => includedTxIds.has(t.id)).length;
                     const isAllChecked = includedCount === symbolTxs.length && symbolTxs.length > 0;
-                    const isPartiallyChecked = includedCount > 0 && !isAllChecked;
 
                     return `
                         <div class="symbol-node" data-symbol="${symbol}">
@@ -95,8 +91,8 @@ export function renderGroupModal(groupToEdit = null) {
                                 </label>
                             </div>
                             <div class="transaction-list hidden pl-6 border-l border-gray-200 ml-2">
-                                ${symbolTxs.sort((a,b) => new Date(b.date) - new Date(a.date)).map(tx => { // 排序交易
-                                    const isChecked = includedTxIds.has(tx.id);
+                                ${symbolTxs.sort((a,b) => new Date(b.date) - new Date(a.date)).map(tx => {
+                                    const isChecked = includedTxIds.has(tx.id); // 根據 ID 列表判斷
                                     const typeClass = tx.type === 'buy' ? 'text-red-500' : 'text-green-500';
                                     return `
                                         <div class="transaction-node p-1" data-tx-id="${tx.id}">
@@ -113,7 +109,7 @@ export function renderGroupModal(groupToEdit = null) {
                 }).join('')}
             </div>
         `;
-        // 手動設定部分選取狀態
+        // 手動設定「部分選取」狀態
         symbolsContainer.querySelectorAll('.symbol-checkbox').forEach(cb => {
             const symbolNode = cb.closest('.symbol-node');
             const includedCount = symbolNode.querySelectorAll('.transaction-checkbox:checked').length;
