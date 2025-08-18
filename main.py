@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v4.7 - 最終穩健版)
+# == Python 每日增量更新腳本 (v4.8 - Debugged & Optimized)
 # =========================================================================================
 
 import os
@@ -162,7 +162,6 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol, "2000-01-01")
             
             if start_date > today_str:
-                # print(f"{symbol} 的歷史數據已是最新 ({latest_date_str})，無需更新。")
                 continue
 
             start_dates[symbol] = start_date
@@ -182,27 +181,36 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             print(f"成功抓取到歷史數據，共 {len(data)} 筆時間紀錄。")
             db_ops_upsert = []
             symbols_successfully_processed = []
-            
-            # 【核心修正】將多層級欄位轉換放在迴圈外部，確保只執行一次
-            if isinstance(data.columns, pd.MultiIndex):
-                 data.columns = data.columns.swaplevel(0, 1)
 
+            # ========================= 【核心偵錯邏輯開始】 =========================
             for symbol in symbols_to_fetch:
+                symbol_data = pd.DataFrame() # 初始化一個空的 DataFrame
+
+                # 判斷回傳資料的結構
+                if isinstance(data.columns, pd.MultiIndex):
+                    # --- 情況 1: 成功抓取多筆資料，為多層級欄位 ---
+                    try:
+                        # 安全地選取該 symbol 的所有欄位
+                        symbol_data = data.loc[:, (slice(None), symbol)]
+                        # 移除多餘的 symbol 層級，變回單層級欄位
+                        symbol_data.columns = symbol_data.columns.droplevel(1)
+                    except KeyError:
+                        print(f"警告: 在 yfinance 回傳的多層級數據中找不到 {symbol} 的資料。")
+                        continue
+                elif len(symbols_to_fetch) == 1:
+                    # --- 情況 2: 只請求一筆資料，為單層級欄位 ---
+                    symbol_data = data
+                else:
+                    # --- 情況 3: 請求多筆但只回傳一筆，yfinance 回傳單層級欄位 ---
+                    # 這種情況我們無法確定這個資料屬於哪個 symbol，為避免資料錯亂，直接跳過。
+                    print(f"警告: 為 {len(symbols_to_fetch)} 個標的請求數據，但 yfinance 返回了無法識別的單一格式。跳過此批次以防止數據錯亂。")
+                    break # 跳出 for 迴圈，處理下一個批次
+
                 is_fx = "=" in symbol
                 price_table = "exchange_rates" if is_fx else "price_history"
                 dividend_table = "dividend_history"
                 
-                try:
-                    # 【核心修正】採用更安全的方式獲取單一股票的 DataFrame
-                    if len(symbols_to_fetch) > 1:
-                        symbol_data = data[symbol]
-                    else:
-                        symbol_data = data
-                except KeyError:
-                    print(f"警告: 在 yfinance 回傳的批次數據中找不到 {symbol} 的資料。")
-                    continue
-
-                if not isinstance(symbol_data, pd.DataFrame) or symbol_data.empty or symbol_data['Close'].isnull().all():
+                if symbol_data.empty or 'Close' not in symbol_data.columns or symbol_data['Close'].isnull().all():
                     continue
                 
                 symbol_data = symbol_data.dropna(subset=['Close'])
@@ -210,14 +218,13 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                 if symbol_data.empty:
                     continue
                 
-                # 處理股價
+                # 處理股價 (邏輯不變)
                 price_rows = symbol_data[['Close']].reset_index()
                 for _, row in price_rows.iterrows():
                     db_ops_upsert.append({"sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
                 
-                # 【核心修正】使用最安全的方式檢查是否有股利數據
+                # 處理股利 (邏輯不變)
                 if not is_fx and 'Dividends' in symbol_data.columns:
-                    # 篩選出股利大於0的行
                     dividend_data = symbol_data[symbol_data['Dividends'] > 0]
                     if not dividend_data.empty:
                         dividend_rows = dividend_data[['Dividends']].reset_index()
@@ -225,6 +232,7 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                             db_ops_upsert.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET dividend = excluded.dividend;", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
                 
                 symbols_successfully_processed.append(symbol)
+            # ========================== 【核心偵錯邏輯結束】 ==========================
 
             if db_ops_upsert:
                 print(f"正在為批次 {batch} 準備 {len(db_ops_upsert)} 筆歷史數據庫操作...")
@@ -245,7 +253,7 @@ def fetch_and_append_market_data(symbols, batch_size=10):
                     print(f"FATAL: 更新/插入批次 {batch} 的歷史數據失敗！")
         
         except Exception as e:
-            print(f"處理歷史數據批次 {batch} 時發生錯誤: {e}")
+            print(f"處理歷史數據批次 {batch} 時發生嚴重錯誤: {e}")
             print("5 秒後繼續處理下一個批次...")
             time.sleep(5)
             
@@ -288,7 +296,7 @@ def trigger_recalculations(uids):
         print(f"觸發全部重算時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.7 - 最終穩健版) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v4.8 - Debugged & Optimized) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     update_symbols, all_uids = get_update_targets()
     if update_symbols:
         fetch_and_append_market_data(update_symbols)
