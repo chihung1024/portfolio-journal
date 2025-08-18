@@ -203,6 +203,19 @@ export function startLiveRefresh() {
     stopLiveRefresh(); // 先停止舊的，以防萬一
 
     const poll = () => {
+        // 【新增】檢查是否有任何彈出視窗是開啟的
+        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
+                            document.querySelector('#split-modal:not(.hidden)') ||
+                            document.querySelector('#dividend-modal:not(.hidden)') ||
+                            document.querySelector('#notes-modal:not(.hidden)') ||
+                            document.querySelector('#details-modal:not(.hidden)') ||
+                            document.querySelector('#group-modal:not(.hidden)');
+
+        if (isModalOpen) {
+            console.log("A modal is open, skipping live refresh to avoid interruption.");
+            return; // 如果有視窗開啟，則直接跳過這次更新
+        }
+        
         // 簡單判斷是否為台股或美股開盤時間 (台灣時間)
         const now = new Date();
         const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
