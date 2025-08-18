@@ -1,12 +1,12 @@
 // =========================================================================================
-// == 交易紀錄 UI 模組 (transactions.ui.js) v2.0 - 支援分頁
+// == 交易紀錄 UI 模組 (transactions.ui.js) v2.1 - 支援微觀編輯入口
 // =========================================================================================
 
 import { getState } from '../../state.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
 
 /**
- * 【核心修正】產生智慧型自適應分頁控制項的 HTML
+ * 產生智慧型自適應分頁控制項的 HTML
  * @param {number} totalItems - 總項目數
  * @param {number} itemsPerPage - 每頁項目數
  * @param {number} currentPage - 當前頁碼
@@ -56,7 +56,6 @@ export function renderTransactionsTable() {
 
     const filteredTransactions = transactionFilter === 'all' ? transactions : transactions.filter(t => t.symbol === transactionFilter);
     
-    // 【核心修改】根據當前頁碼切割出要顯示的數據
     const startIndex = (transactionsCurrentPage - 1) * transactionsPerPage;
     const endIndex = startIndex + transactionsPerPage;
     const paginatedTransactions = filteredTransactions.slice(startIndex, endIndex);
@@ -65,6 +64,7 @@ export function renderTransactionsTable() {
         const transactionDate = t.date.split('T')[0];
         const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
         const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+        // 【核心修改】在操作欄位中新增 "編輯群組" 按鈕
         return `<tr class="hover:bg-gray-50">
             <td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td>
             <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
@@ -74,12 +74,12 @@ export function renderTransactionsTable() {
             <td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td>
             <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
                 <button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
+                <button data-id="${t.id}" class="edit-membership-btn text-teal-600 hover:text-teal-900 mr-3">編輯群組</button>
                 <button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button>
             </td>
         </tr>`;
     }).join('') : `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有符合條件的交易紀錄。</td></tr>`}</tbody></table></div>`;
     
-    // 【新增】產生並附加分頁控制器
     const paginationControls = renderPaginationControls(filteredTransactions.length, transactionsPerPage, transactionsCurrentPage);
 
     container.innerHTML = filterHtml + tableHtml + paginationControls;
