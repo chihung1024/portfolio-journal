@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v2.0 - 樹狀選擇模型)
+// == 檔案：js/events/group.events.js (v2.1 - 移除篩選功能)
 // == 職責：處理所有與群組管理相關的用戶互動事件
 // =========================================================================================
 
@@ -117,7 +117,7 @@ function handleDeleteGroup(button) {
  * 【核心重構】初始化所有與群組相關的事件監聽器
  */
 export function initializeGroupEventListeners() {
-    document.getElementById('groups-tab').addEventListener('click', (e) => {
+    document.getElementById('groups-tab').addEventListener('click', async (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
             renderGroupModal(null);
@@ -128,13 +128,24 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const { groups } = getState();
-            // 在編輯前，需要先獲取該群組已包含的交易ID列表
-            // 這一步通常需要一個新的輕量級 API: get_group_details(groupId)
-            const groupToEdit = groups.find(g => g.id === editBtn.dataset.groupId);
-            if (groupToEdit) {
-                // 【核心修正】對調執行順序
-                openModal('group-modal');      // 1. 先打開視窗 (此步驟會清空表單)
-                renderGroupModal(groupToEdit); // 2. 再將數據填寫到乾淨的表單中
+            const groupId = editBtn.dataset.groupId;
+            
+            // 【核心修改】為獲取準確的交易列表，需要向後端請求詳細資訊
+            try {
+                // 假設我們新增一個輕量級 API action: 'get_group_details'
+                // 為了簡化，我們先模擬從 `groups` 狀態中查找，並假設它有 `included_transactions`
+                const groupToEdit = groups.find(g => g.id === groupId);
+                
+                // 實際部署時，這裡應該是:
+                // const result = await apiRequest('get_group_details', { groupId });
+                // const groupToEdit = result.data;
+                
+                if (groupToEdit) {
+                    openModal('group-modal');
+                    renderGroupModal(groupToEdit);
+                }
+            } catch (error) {
+                showNotification('error', `讀取群組詳情失敗: ${error.message}`);
             }
             return;
         }
@@ -149,23 +160,20 @@ export function initializeGroupEventListeners() {
     document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
     document.getElementById('cancel-group-btn').addEventListener('click', () => closeModal('group-modal'));
     
-    // 【新增】為樹狀圖容器綁定動態事件
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {
-        // 點擊事件委派
         groupModal.addEventListener('click', (e) => {
             const expandBtn = e.target.closest('.expand-symbol-btn');
             if (expandBtn) {
                 const txList = expandBtn.closest('.symbol-node').querySelector('.transaction-list');
+                const icon = expandBtn.querySelector('i');
                 txList.classList.toggle('hidden');
-                expandBtn.classList.toggle('rotate-90'); // 視覺化展開/摺疊
+                icon.classList.toggle('rotate-90');
                 return;
             }
         });
         
-        // Checkbox 狀態變更事件委派
         groupModal.addEventListener('change', (e) => {
-            // 子 checkbox 變更 -> 更新父 checkbox 狀態
             if (e.target.matches('.transaction-checkbox')) {
                 const symbolNode = e.target.closest('.symbol-node');
                 const allTxs = symbolNode.querySelectorAll('.transaction-checkbox');
@@ -183,15 +191,17 @@ export function initializeGroupEventListeners() {
                     symbolCheckbox.indeterminate = true;
                 }
             }
-            // 父 checkbox 變更 -> 更新所有子 checkbox 狀態
             else if (e.target.matches('.symbol-checkbox')) {
                 const symbolNode = e.target.closest('.symbol-node');
                 const allTxs = symbolNode.querySelectorAll('.transaction-checkbox');
+                e.target.indeterminate = false; // 用戶手動點擊時，取消“部分選取”狀態
                 allTxs.forEach(txCheckbox => {
                     txCheckbox.checked = e.target.checked;
                 });
             }
         });
+
+        // 【修改】移除篩選器和批量按鈕的事件監聽器
     }
 }
 
