@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/group.handler.js (v2.2 - 支援微觀編輯)
+// == 檔案：functions/api_handlers/group.handler.js (v2.1 - 新增 getGroupDetails)
 // == 職責：處理所有與群組管理和按需計算相關的 API Action
 // =========================================================================================
 
@@ -39,7 +39,7 @@ exports.getGroups = async (uid, res) => {
 };
 
 /**
- * 獲取單一特定群組的詳細資訊 (包含成員ID)
+ * 【新增函式】獲取單一特定群組的詳細資訊 (包含成員ID)
  */
 exports.getGroupDetails = async (uid, data, res) => {
     const { groupId } = data;
@@ -62,22 +62,6 @@ exports.getGroupDetails = async (uid, data, res) => {
     };
 
     return res.status(200).send({ success: true, data: groupDetails });
-};
-
-/**
- * 【新增函式】獲取單一交易紀錄的群組歸屬情況
- */
-exports.getTransactionMemberships = async (uid, data, res) => {
-    const { transactionId } = data;
-    if (!transactionId) {
-        return res.status(400).send({ success: false, message: '缺少 transactionId。' });
-    }
-    const results = await d1Client.query(
-        'SELECT group_id FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?',
-        [transactionId, uid]
-    );
-    const groupIds = results.map(row => row.group_id);
-    return res.status(200).send({ success: true, data: { groupIds } });
 };
 
 
