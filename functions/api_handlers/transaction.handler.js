@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易 Action 處理模組 (transaction.handler.js) v1.1 - Final Chart Sync Fix
+// == 交易 Action 處理模組 (transaction.handler.js) v2.0 - 數據完整性強化
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -8,26 +8,58 @@ const { performRecalculation } = require('../performRecalculation');
 const { transactionSchema } = require('../schemas');
 
 /**
- * 新增一筆交易紀錄
+ * 新增一筆交易紀錄 (支援引導式群組歸因)
  */
 exports.addTransaction = async (uid, data, res) => {
-    const txData = transactionSchema.parse(data);
+    // 【修改】從 data 中解構出更複雜的意圖包
+    const { transactionData, groupInclusions, newGroups } = data;
+    const txData = transactionSchema.parse(transactionData);
     const txId = uuidv4();
 
-    await d1Client.query(
-        `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
-    );
+    const dbOps = [];
 
+    // 步驟 1: (可選) 如果有新群組建立請求，先建立新群組
+    const newGroupIdMap = {}; // 用於將臨時 ID 映射到真實的 UUID
+    if (newGroups && newGroups.length > 0) {
+        newGroups.forEach(group => {
+            const newGroupId = uuidv4();
+            newGroupIdMap[group.tempId] = newGroupId;
+            dbOps.push({
+                sql: `INSERT INTO groups (id, uid, name, description) VALUES (?, ?, ?, ?)`,
+                params: [newGroupId, uid, group.name, '']
+            });
+        });
+    }
+
+    // 步驟 2: 插入新的交易紀錄
+    dbOps.push({
+        sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+    });
+
+    // 步驟 3: (可選) 處理交易的群組歸屬
+    if (groupInclusions && groupInclusions.length > 0) {
+        groupInclusions.forEach(groupId => {
+            // 如果是新建立的群組，使用其真實的 UUID
+            const finalGroupId = newGroupIdMap[groupId] || groupId;
+            dbOps.push({
+                sql: `INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)`,
+                params: [uid, finalGroupId, txId]
+            });
+        });
+    }
+
+    await d1Client.batch(dbOps);
+    
+    // 執行同步的全局重算
     await performRecalculation(uid, txData.date, false);
 
-    // 重算後，立刻查詢最新結果
+    // 【維持不變】重算後，查詢並回傳最新的完整 portfolio 狀態
     const [holdings, summaryResult] = await Promise.all([
-        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all'])
     ]);
     
-    // 解析所有需要的數據
     const summaryRow = summaryResult[0] || {};
     const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
     const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
@@ -35,7 +67,6 @@ exports.addTransaction = async (uid, data, res) => {
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
-    // 在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '操作成功。',
@@ -43,7 +74,7 @@ exports.addTransaction = async (uid, data, res) => {
         data: {
             holdings: holdings,
             summary: summary_data,
-            history: portfolioHistory, // 使用 'history' 作為鍵名
+            history: portfolioHistory,
             twrHistory,
             netProfitHistory,
             benchmarkHistory
@@ -58,20 +89,44 @@ exports.editTransaction = async (uid, data, res) => {
     const txData = transactionSchema.parse(data.txData);
     const txId = data.txId;
 
-    await d1Client.query(
-        `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
-        [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
-    );
+    // 【核心修改】數據完整性檢查
+    // 步驟 1: 獲取編輯前的舊交易紀錄
+    const oldTxResult = await d1Client.query('SELECT symbol FROM transactions WHERE id = ? AND uid = ?', [txId, uid]);
+    if (oldTxResult.length === 0) {
+        return res.status(404).send({ success: false, message: '找不到指定的交易紀錄。' });
+    }
+    const oldSymbol = oldTxResult[0].symbol.toUpperCase();
+    const newSymbol = txData.symbol.toUpperCase();
 
+    const dbOps = [];
+
+    // 步驟 2: 如果股票代碼被修改，則自動清除其所有舊的群組歸屬
+    if (oldSymbol !== newSymbol) {
+        console.log(`[Data Integrity] Transaction ${txId} symbol changed from ${oldSymbol} to ${newSymbol}. Resetting group memberships.`);
+        dbOps.push({
+            sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?',
+            params: [uid, txId]
+        });
+    }
+
+    // 步驟 3: 更新交易紀錄本身
+    dbOps.push({
+        sql: `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`,
+        params: [txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate, txId, uid]
+    });
+    
+    if (dbOps.length > 0) {
+        await d1Client.batch(dbOps);
+    }
+    
     await performRecalculation(uid, txData.date, false);
 
-    // 【核心修正】重算後，立刻查詢最新且完整的結果
+    // 【維持不變】回傳最新的 portfolio 狀態
     const [holdings, summaryResult] = await Promise.all([
-        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all'])
     ]);
     
-    // 【核心修正】解析所有需要的數據
     const summaryRow = summaryResult[0] || {};
     const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
     const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
@@ -79,7 +134,6 @@ exports.editTransaction = async (uid, data, res) => {
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
     
-    // 【核心修正】在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '操作成功。',
@@ -87,7 +141,7 @@ exports.editTransaction = async (uid, data, res) => {
         data: {
             holdings: holdings,
             summary: summary_data,
-            history: portfolioHistory, // 使用 'history' 作為鍵名
+            history: portfolioHistory,
             twrHistory,
             netProfitHistory,
             benchmarkHistory
@@ -99,26 +153,38 @@ exports.editTransaction = async (uid, data, res) => {
  * 刪除一筆交易紀錄
  */
 exports.deleteTransaction = async (uid, data, res) => {
+    // 【核心修改】數據完整性保障
+    // 步驟 1: 獲取待刪除交易的日期，以用於後續的重算
     const txResult = await d1Client.query(
         'SELECT date FROM transactions WHERE id = ? AND uid = ?',
         [data.txId, uid]
     );
     const txDate = txResult.length > 0 ? txResult[0].date.split('T')[0] : null;
 
-    await d1Client.query(
-        'DELETE FROM transactions WHERE id = ? AND uid = ?',
-        [data.txId, uid]
-    );
+    // 步驟 2: 使用批次操作，確保交易本身和其群組關聯被原子性地刪除
+    const deleteOps = [
+        // a. 從群組歸屬表中刪除
+        {
+            sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?',
+            params: [uid, data.txId]
+        },
+        // b. 從交易主表中刪除
+        {
+            sql: 'DELETE FROM transactions WHERE id = ? AND uid = ?',
+            params: [data.txId, uid]
+        }
+    ];
 
+    await d1Client.batch(deleteOps);
+    
     await performRecalculation(uid, txDate, false);
 
-    // 【核心修正】重算後，立刻查詢最新且完整的結果
+    // 【維持不變】回傳最新的 portfolio 狀態
     const [holdings, summaryResult] = await Promise.all([
-        d1Client.query('SELECT * FROM holdings WHERE uid = ?', [uid]),
-        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ?', [uid]) // 取得完整的 summary 紀錄
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all'])
     ]);
     
-    // 【核心修正】解析所有需要的數據
     const summaryRow = summaryResult[0] || {};
     const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
     const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
@@ -126,14 +192,13 @@ exports.deleteTransaction = async (uid, data, res) => {
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
-    // 【核心修正】在回應中包含所有圖表數據，並統一鍵名
     return res.status(200).send({
         success: true,
         message: '交易已刪除。',
         data: {
             holdings: holdings,
             summary: summary_data,
-            history: portfolioHistory, // 使用 'history' 作為鍵名
+            history: portfolioHistory,
             twrHistory,
             netProfitHistory,
             benchmarkHistory
