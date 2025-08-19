@@ -1,6 +1,5 @@
 // =========================================================================================
 // == 資產成長圖表模組 (assetChart.js)
-// == 職責：處理資產成長圖表的初始化與更新。
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -9,12 +8,11 @@ import { baseChartOptions } from './chart.common.js';
 
 /**
  * 初始化資產成長圖表
- * (原名 initializeChart)
  */
 export function initializeAssetChart() {
     const options = {
         ...baseChartOptions,
-        series: [{ name: '總資產', data: [] }],
+        series: [{ name: '總資產', data: [] }], // 預設名稱改為 '總資產' 以符合圖表標題
         yaxis: {
             labels: {
                 formatter: (value) => formatNumber(value, 0)
@@ -38,8 +36,9 @@ export function initializeAssetChart() {
 
 /**
  * 更新資產成長圖表的數據
+ * @param {string} seriesName - 要顯示在圖例上的系列名稱
  */
-export function updateAssetChart() {
+export function updateAssetChart(seriesName = '總資產') { // 提供預設值
     const { chart, portfolioHistory, assetDateRange } = getState();
     if (!chart) return;
 
@@ -50,5 +49,7 @@ export function updateAssetChart() {
     }
 
     const chartData = Object.entries(filteredHistory).map(([date, value]) => [new Date(date).getTime(), value]);
-    chart.updateSeries([{ data: chartData }]);
+    
+    // 【核心修改】更新 series 時同時更新 name 和 data
+    chart.updateSeries([{ name: seriesName, data: chartData }]);
 }
