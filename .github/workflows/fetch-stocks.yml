@@ -52,7 +52,10 @@ jobs:
               else:
                   # --- 修改開始 ---
                   # 1. 提取所有公司的股票代碼到一個 Python 列表中
-                  tickers = [company.get("symbol", "N/A") for company in companies]
+                  tickers = [
+                      company.get("symbol", "N/A").replace(".", "-")
+                      for company in companies
+                  ]
                   
                   # 2. 使用逗號 (",") 將列表中的所有代碼串接成一個單一的字串
                   output_string = ",".join(tickers)
