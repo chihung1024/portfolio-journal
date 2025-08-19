@@ -153,7 +153,7 @@ export function startLiveRefresh() {
         }
     };
     
-    liveQuoteInterval = setInterval(poll, 30000); // 30 秒更新一次
+    liveQuoteInterval = setInterval(poll, 15000); // 30 秒更新一次
     poll(); // 啟動後立即執行一次
 }
 
