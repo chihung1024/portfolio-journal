@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.0 - 引導式歸因流程
+// == 交易事件處理模組 (transaction.events.js) v2.1 - 支援非同步微觀編輯
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-// 【修改】導入新的彈窗控制器
 import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
@@ -23,14 +22,12 @@ function handleEdit(button) {
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
     
-    // 【修改】編輯時，標題也應為 1/2，但下一步的邏輯不同
     const titleEl = document.getElementById('modal-title');
     if(titleEl) titleEl.textContent = '編輯交易紀錄 (步驟 1/2)';
     
     openModal('transaction-modal', true, transaction);
 }
 
-// 維持不變，用於處理後端成功回傳後的 UI 全面刷新
 function handleSuccessfulUpdate(result) {
     if (!result || !result.data) {
         console.error("handleSuccessfulUpdate 收到的結果無效:", result);
@@ -83,11 +80,7 @@ async function handleDelete(button) {
     });
 }
 
-/**
- * 【核心重構】處理交易表單 "下一步" 按鈕的點擊事件
- */
 async function handleNextStep() {
-    // 步驟 1: 從表單收集並驗證數據
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
     const transactionData = {
@@ -106,17 +99,14 @@ async function handleNextStep() {
         return;
     }
     
-    // 步驟 2: 將驗證後的數據暫存到 state 中
     setState({ tempTransactionData: {
         isEditing,
         txId,
         data: transactionData
     }});
 
-    // 步驟 3: 關閉目前的交易視窗
     closeModal('transaction-modal');
 
-    // 步驟 4: (延遲是為了讓UI動畫更流暢) 立即打開群組歸因視窗
     setTimeout(() => {
         openGroupAttributionModal();
     }, 150);
@@ -125,21 +115,18 @@ async function handleNextStep() {
 // --- Public Function (公開函式，由 main.js 呼叫) ---
 
 export function initializeTransactionEventListeners() {
-    // 【修改】新增交易按鈕現在只負責打開第一步的視窗
     document.getElementById('add-transaction-btn').addEventListener('click', () => {
-        setState({ tempTransactionData: null }); // 清空暫存
+        setState({ tempTransactionData: null });
         const titleEl = document.getElementById('modal-title');
         if(titleEl) titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
         openModal('transaction-modal');
     });
 
-    // 【修改】不再監聽 form 的 submit 事件，而是監聽 "下一步" 按鈕的 click 事件
     document.getElementById('next-step-btn').addEventListener('click', handleNextStep);
     
-    // 維持不變
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
 
-    document.getElementById('transactions-tab').addEventListener('click', (e) => {
+    document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
             e.preventDefault();
@@ -154,13 +141,12 @@ export function initializeTransactionEventListeners() {
             return;
         }
         
-        // 【新增】為微觀編輯按鈕新增事件監聽器
         const membershipButton = e.target.closest('.edit-membership-btn');
         if (membershipButton) {
             e.preventDefault();
             const txId = membershipButton.dataset.id;
-            // 這裡我們會調用一個在 modals.js 中定義的新函式來打開微觀編輯視窗
-            openModal('membership-editor-modal', false, { txId });
+            // 由於 openModal 現在對於此視窗是非同步的，我們在這裡使用 await
+            await openModal('membership-editor-modal', false, { txId });
             return;
         }
 
