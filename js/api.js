@@ -111,35 +111,35 @@ function updateAppWithData(portfolioData) {
         obj[item.symbol] = item; return obj;
     }, {});
 
-    // 更新 state
-
+    // ========================= 【核心修正 - 開始】 =========================
+    // 步驟 1: 更新 State 中的歷史數據，並「同時重置」日期範圍的狀態
     setState({
-        // 僅更新會被改變的數據，保留 transactions, userSplits 等母數據
+
         stockNotes: stockNotesMap,
         holdings: holdingsObject,
         portfolioHistory: portfolioData.history || {},
         twrHistory: portfolioData.twrHistory || {},
         benchmarkHistory: portfolioData.benchmarkHistory || {},
-        netProfitHistory: portfolioData.netProfitHistory || {}
-
-
-
-
+        netProfitHistory: portfolioData.netProfitHistory || {},
+        // **重置日期範圍狀態**
+        assetDateRange: { type: 'all', start: null, end: null },
+        twrDateRange: { type: 'all', start: null, end: null },
+        netProfitDateRange: { type: 'all', start: null, end: null }
     });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    // 步驟 2: 手動更新所有圖表控制按鈕的 UI，確保 "全部" 按鈕被選中
+    ['asset', 'twr', 'net-profit'].forEach(chartType => {
+        const controls = document.getElementById(`${chartType}-chart-controls`);
+        if (controls) {
+            controls.querySelectorAll('.chart-range-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.range === 'all') {
+                    btn.classList.add('active');
+                }
+            });
+        }
+    });
+    // ========================= 【核心修正 - 結束】 =========================
 
     // 渲染 UI
     renderHoldingsTable(holdingsObject);
