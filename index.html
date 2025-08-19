@@ -280,7 +280,23 @@
         <div id="dividend-history-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div id="dividend-history-content" class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-2xl mx-4"></div></div></div>
         <div id="group-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="group-modal-title" class="text-2xl font-bold mb-6">新增/編輯群組</h3><form id="group-form"><input type="hidden" id="group-id"><div class="mb-4"><label for="group-name" class="block text-sm font-medium">群組名稱</label><input type="text" id="group-name" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="group-description" class="block text-sm font-medium">描述 (選填)</label><textarea id="group-description" rows="2" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="mb-4"><label class="block text-sm font-medium">包含股票與交易紀錄</label><div id="group-symbols-container" class="mt-2 p-2 border rounded-md max-h-60 overflow-y-auto space-y-2"></div></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-group-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-group-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存群組</button></div></form></div></div></div>
         
-        <div id="group-attribution-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-lg mx-4"><h3 class="text-2xl font-bold mb-2">新增交易紀錄 (步驟 2/2)</h3><p class="text-gray-600 mb-6">請為這筆 <strong id="attribution-symbol-placeholder"></strong> 交易選擇歸屬群組。</p><div id="attribution-groups-container" class="space-y-3 max-h-60 overflow-y-auto mb-4 p-2 border rounded-md"></div><div id="attribution-new-group-container" class="mb-6"></div><div class="flex justify-between items-center mt-6"><button type="button" id="cancel-attribution-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">稍後再說</button><button type="button" id="confirm-attribution-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">確認並儲存</button></div></div></div></div>
+        <div id="group-attribution-modal" class="fixed inset-0 z-40 overflow-y-auto hidden">
+            <div class="flex items-center justify-center min-h-screen">
+                <div class="fixed inset-0 modal-backdrop"></div>
+                <div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-lg mx-4">
+                    
+                    <h3 id="attribution-modal-title" class="text-2xl font-bold mb-2">新增交易紀錄 (步驟 2/2)</h3>
+                    
+                    <p class="text-gray-600 mb-6">請為這筆 <strong id="attribution-symbol-placeholder"></strong> 交易選擇歸屬群組。</p>
+                    <div id="attribution-groups-container" class="space-y-3 max-h-60 overflow-y-auto mb-4 p-2 border rounded-md"></div>
+                    <div id="attribution-new-group-container" class="mb-6"></div>
+                    <div class="flex justify-between items-center mt-6">
+                        <button type="button" id="cancel-attribution-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">稍後再說</button>
+                        <button type="button" id="confirm-attribution-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">確認並儲存</button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div id="membership-editor-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-md mx-4"><h3 class="text-xl font-bold mb-2">編輯群組歸屬</h3><p class="text-gray-600 mb-6">管理 <strong id="membership-symbol-placeholder"></strong> 於 <strong id="membership-date-placeholder"></strong> 的交易。</p><div id="membership-groups-container" class="space-y-3 max-h-60 overflow-y-auto mb-6 p-2 border rounded-md"></div><div class="flex justify-end space-x-4"><button type="button" id="cancel-membership-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="button" id="save-membership-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存變更</button></div></div></div></div>
 
