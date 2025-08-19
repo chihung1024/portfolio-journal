@@ -1,6 +1,5 @@
 // =========================================================================================
 // == TWR 圖表模組 (twrChart.js)
-// == 職責：處理 TWR vs. Benchmark 圖表的初始化與更新。
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -15,7 +14,7 @@ export function initializeTwrChart() {
         ...baseChartOptions,
         chart: {
             ...baseChartOptions.chart,
-            type: 'line' // 覆蓋基礎設定中的圖表類型
+            type: 'line'
         },
         series: [
             { name: '投資組合', data: [] },
@@ -41,8 +40,10 @@ export function initializeTwrChart() {
 
 /**
  * 更新 TWR 圖表的數據
+ * @param {string} benchmarkSymbol - Benchmark 的代碼
+ * @param {string} seriesName - 要顯示在圖例上的系列名稱
  */
-export function updateTwrChart(benchmarkSymbol) {
+export function updateTwrChart(benchmarkSymbol, seriesName = '投資組合') { // 提供預設值
     const { twrChart, twrHistory, benchmarkHistory, twrDateRange } = getState();
     if (!twrChart) return;
 
@@ -56,7 +57,6 @@ export function updateTwrChart(benchmarkSymbol) {
         return sortedEntries.map(([date, value]) => [new Date(date).getTime(), value - baseValue]);
     };
 
-    // 如果顯示的是完整的歷史紀錄，直接使用原始數據，不需要歸零
     const isShowingFullHistory = Object.keys(twrHistory).length > 0 && Object.keys(twrHistory).length === Object.keys(filteredTwrHistory).length;
 
     let portfolioData;
@@ -69,8 +69,9 @@ export function updateTwrChart(benchmarkSymbol) {
 
     const rebasedBenchmarkData = rebaseSeries(filteredBenchmarkHistory);
 
+    // 【核心修改】更新 series 時傳入動態的 seriesName
     twrChart.updateSeries([
-        { name: '投資組合', data: portfolioData },
+        { name: seriesName, data: portfolioData },
         { name: `Benchmark (${benchmarkSymbol || '...'})`, data: rebasedBenchmarkData }
     ]);
 }
