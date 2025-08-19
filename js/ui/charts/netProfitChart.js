@@ -1,6 +1,5 @@
 // =========================================================================================
 // == 淨利圖表模組 (netProfitChart.js)
-// == 職責：處理累積淨利走勢圖表的初始化與更新。
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -42,9 +41,10 @@ export function initializeNetProfitChart() {
 }
 
 /**
- * 更新淨利圖表的數據 (最終修正版)
+ * 更新淨利圖表的數據
+ * @param {string} seriesName - 要顯示在圖例上的系列名稱
  */
-export function updateNetProfitChart() {
+export function updateNetProfitChart(seriesName = '累積淨利') { // 提供預設值
     const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
     if (!netProfitChart) return;
 
@@ -56,12 +56,12 @@ export function updateNetProfitChart() {
 
     const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
     
-    // 【修正】恢復歸零化(Rebasing)邏輯，以顯示區間內的利潤變化
     const baseValue = sortedEntries[0][1];
     const chartData = sortedEntries.map(([date, value]) => [
         new Date(date).getTime(),
         value - baseValue
     ]);
 
-    netProfitChart.updateSeries([{ data: chartData }]);
+    // 【核心修改】更新 series 時同時更新 name 和 data
+    netProfitChart.updateSeries([{ name: seriesName, data: chartData }]);
 }
