@@ -124,24 +124,10 @@ export async function openModal(modalId, isEdit = false, data = null) {
     const form = document.getElementById(formId);
     if (form) form.reset();
 
-    // ========================= 【核心修改 - 開始】 =========================
     if (modalId === 'transaction-modal') {
-        const titleEl = document.getElementById('modal-title');
-        const submitBtn = document.getElementById('transaction-submit-btn');
-        const groupEditorEl = document.getElementById('transaction-group-editor');
-        const groupsContainerEl = document.getElementById('transaction-groups-container');
-        
         document.getElementById('transaction-id').value = '';
-        groupsContainerEl.innerHTML = ''; // 清空
-        
         if (isEdit && data) {
-            // --- 設定編輯模式 ---
-            titleEl.textContent = '編輯交易紀錄';
-            submitBtn.textContent = '儲存變更';
-            submitBtn.dataset.mode = 'edit'; // 設定模式供事件監聽器判斷
-            groupEditorEl.classList.remove('hidden'); // 顯示群組編輯器
-
-            // 填入交易資料
+            document.getElementById('modal-title').textContent = '編輯交易紀錄 (步驟 1/2)';
             document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
             document.getElementById('stock-symbol').value = data.symbol;
@@ -151,31 +137,8 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('currency').value = data.currency;
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
-
-            // 異步載入並渲染群組歸屬
-            groupsContainerEl.innerHTML = '<p class="text-center text-sm text-gray-500 py-2">正在讀取群組狀態...</p>';
-            try {
-                const result = await apiRequest('get_transaction_memberships', { transactionId: data.id });
-                const includedGroupIds = new Set(result.data.groupIds);
-                groupsContainerEl.innerHTML = groups.length > 0
-                    ? groups.map(g => `
-                        <label class="flex items-center space-x-3 p-1 cursor-pointer">
-                            <input type="checkbox" name="transaction_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
-                            <span class="text-sm text-gray-700">${g.name}</span>
-                        </label>
-                    `).join('')
-                    : '<p class="text-center text-sm text-gray-500 py-2">尚未建立任何群組。</p>';
-            } catch (error) {
-                groupsContainerEl.innerHTML = '<p class="text-center text-sm text-red-500 py-2">讀取群組狀態失敗。</p>';
-            }
-
         } else {
-            // --- 設定新增模式 ---
-            titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
-            submitBtn.textContent = '下一步';
-            submitBtn.dataset.mode = 'add'; // 設定模式
-            groupEditorEl.classList.add('hidden'); // 隱藏群組編輯器
-
+            document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
