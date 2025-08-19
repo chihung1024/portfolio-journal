@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v_details_modal (支援詳情彈窗觸發)
+// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_simplified (手機列表視圖簡化)
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -139,12 +139,12 @@ export function renderHoldingsTable(currentHoldings) {
                 </div>
             </div>`; }).join('')}</div>`;
 
+    // ========================= 【核心修改 - 開始】 =========================
     const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
         const isExpanded = activeMobileHolding === h.symbol;
         
-        // 【核心修改】將「更多詳情」按鈕的 HTML 定義成一個變數
         const detailsButtonHtml = `
             <div class="border-t border-gray-200 px-4 py-2">
                 <button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">
@@ -155,25 +155,25 @@ export function renderHoldingsTable(currentHoldings) {
 
         return `
             <div class="bg-white rounded-lg shadow overflow-hidden ${isShort ? 'ring-2 ring-sky-300' : ''}">
-                <div class="px-4 py-3 flex justify-between items-center cursor-pointer list-view-item" data-symbol="${h.symbol}">
+                <div class="px-2 py-3 flex justify-between items-center cursor-pointer list-view-item" data-symbol="${h.symbol}">
                     <div class="flex items-center">
                         <h3 class="font-bold text-base text-indigo-600">${h.symbol}</h3>
                         ${isShort ? shortBadge : ''}
                         <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
                     </div>
                     <div class="text-right">
-                        <p class="font-semibold text-base ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p>
-                        <p class="text-sm text-gray-500">市值 ${formatNumber(h.marketValueTWD, 0)}</p>
+                        <p class="font-medium text-base text-gray-900">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-sm text-gray-500">${h.currency}</span></p>
+                        <p class="text-sm ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p>
                     </div>
                 </div>
                 <div class="holding-details-container ${isExpanded ? '' : 'hidden'}">
                     ${isExpanded ? renderHoldingDetailCardContent(h) : ''}
-                    ${/* 【核心修改】如果處於展開狀態，則附加按鈕 */ ''}
                     ${isExpanded ? detailsButtonHtml : ''}
                 </div>
             </div>
         `;
     }).join('')}</div>`;
+    // ========================= 【核心修改 - 結束】 =========================
 
     const mobileContent = `
         <div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div>
