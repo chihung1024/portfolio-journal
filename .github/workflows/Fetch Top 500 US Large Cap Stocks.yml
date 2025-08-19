@@ -43,7 +43,7 @@ jobs:
           params = {
               "sortBy": "marketCap",
               "order": "desc",
-              "limit": 500,
+              "limit": 1000,
               "country": "US",
               "exchange": "NASDAQ,NYSE",
               "isActivelyTrading": "true",
