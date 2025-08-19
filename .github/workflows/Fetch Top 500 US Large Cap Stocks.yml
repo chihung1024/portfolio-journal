@@ -45,6 +45,7 @@ jobs:
               "order": "desc",
               "limit": 500,
               "country": "US",
+              "exchange": "NASDAQ,NYSE",
               "isActivelyTrading": "true",
               "apikey": api_key
           }
