@@ -1,0 +1,86 @@
+# .github/workflows/fetch-stocks.yml
+
+name: Fetch Large Cap Stocks List
+
+# 允許手動觸發此工作流程
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-and-print-stocks:
+    runs-on: ubuntu-latest  # 使用最新的 Ubuntu 虛擬環境
+
+    steps:
+      # 步驟一：設定 Python 環境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # 指定使用的 Python 版本
+
+      # 步驟二：安裝 Python 的 requests 函式庫
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      # 步驟三：執行 Python 腳本來抓取並印出資料
+      - name: Run Python script to fetch stocks
+        env:
+          # 將我們設定的 GitHub Secret 傳遞為環境變數
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: |
+          python -c '
+import requests
+import os
+import sys
+
+def get_large_cap_stocks():
+    """
+    從環境變數讀取 API 金鑰，並獲取市值超過 100 億美元的美股公司列表。
+    """
+    # 從環境變數讀取 API 金鑰
+    api_key = "pB9XUp93E3wki49v0c6IOd1Wh2TX9DQr"
+    if not api_key:
+        print("錯誤：找不到 FMP_API_KEY 環境變數。請檢查 GitHub Secrets 設定。", file=sys.stderr)
+        sys.exit(1)
+
+    url = "https://financialmodelingprep.com/api/v3/stock-screener"
+    params = {
+        "marketCapMoreThan": 10000000000,
+        "isActivelyTrading": "true",
+        "limit": 5000,
+        "apikey": api_key
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"API 請求失敗: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def print_csv_output(companies):
+    """
+    將公司列表以逗號分隔 (CSV) 的格式印出。
+    """
+    if not companies:
+        print("未找到任何符合條件的公司。", file=sys.stderr)
+        return
+
+    # 印出 CSV 標頭
+    print("Symbol,CompanyName,MarketCap,Price")
+    
+    # 遍歷每一家公司並印出資料
+    for company in companies:
+        symbol = company.get("symbol", "N/A")
+        name = company.get("companyName", "N/A").replace(",", ";") # 將公司名中的逗號替換為分號，避免 CSV 格式錯亂
+        market_cap = company.get("marketCap", 0)
+        price = company.get("price", 0)
+        
+        print(f"{symbol},{name},{market_cap},{price}")
+
+# --- 主程式 ---
+company_list = get_large_cap_stocks()
+print_csv_output(company_list)
+'
