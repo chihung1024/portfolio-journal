@@ -44,7 +44,7 @@ jobs:
               "sortBy": "marketCap",
               "order": "desc",
               "limit": 1000,
-              "country": "US",
+              #  "country": "US",
               "exchange": "NASDAQ,NYSE",
               "isActivelyTrading": "true",
               "apikey": api_key
