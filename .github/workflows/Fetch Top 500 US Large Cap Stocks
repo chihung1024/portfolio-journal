@@ -1,0 +1,76 @@
+name: Fetch Top 500 US Large Cap Stocks
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-and-print-stocks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run Python script to fetch stocks
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        # 告訴 GitHub Actions 使用 Python 來執行下面的程式碼
+        shell: python 
+        run: |
+          import requests
+          import os
+          import sys
+
+          # 從環境變數讀取 API 金鑰
+          api_key = os.getenv("FMP_API_KEY")
+          if not api_key:
+              print("錯誤：找不到 FMP_API_KEY。請檢查 GitHub Secrets 是否已正確設定。", file=sys.stderr)
+              sys.exit(1)
+
+          url = "https://financialmodelingprep.com/api/v3/stock-screener"
+          
+          # --- 修改後的參數 ---
+          # 1. 按照市值 (marketCap) 降序 (desc) 排序
+          # 2. 限制結果為 500 筆
+          # 3. 限定國家為美國 (US)
+          params = {
+              "sortBy": "marketCap",
+              "order": "desc",
+              "limit": 500,
+              "country": "US",
+              "isActivelyTrading": "true",
+              "apikey": api_key
+          }
+          # --- 參數修改結束 ---
+
+          try:
+              response = requests.get(url, params=params)
+              response.raise_for_status()
+              companies = response.json()
+              
+              if not companies:
+                  print("未找到任何符合條件的公司。", file=sys.stderr)
+              else:
+                  # 1. 提取所有公司的股票代碼到一個 Python 列表中
+                  #    (將代碼中的 '.' 替換成 '-'，例如 "BRK.B" -> "BRK-B")
+                  tickers = [
+                      company.get("symbol", "N/A").replace(".", "-")
+                      for company in companies
+                  ]
+                  
+                  # 2. 使用逗號 (",") 將列表中的所有代碼串接成一個單一的字串
+                  output_string = ",".join(tickers)
+                  
+                  # 3. 印出這個最終的字串
+                  print(output_string)
+
+          except requests.exceptions.RequestException as e:
+              print(f"API 請求失敗: {e}", file=sys.stderr)
+              sys.exit(1)
