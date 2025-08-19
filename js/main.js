@@ -19,7 +19,7 @@ import { hideConfirm, toggleOptionalFields } from './ui/modals.js';
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
-import { getDateRangeForPreset } from './ui/utils.js';
+import { getDateRangeForPreset, findFxRateForFrontend } from './ui/utils.js'; // 確保 findFxRateForFrontend 已導入
 
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
@@ -28,82 +28,150 @@ import { initializeDividendEventListeners } from './events/dividend.events.js';
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
-let liveRefreshInterval = null;
+// =========================================================================================
+// == 即時報價輪詢模組 (Live Quote Polling Module)
+// =========================================================================================
 
-async function refreshDashboardAndHoldings() {
-    try {
-        const result = await apiRequest('get_dashboard_and_holdings', {});
-        if (!result.success) return;
+let liveQuoteInterval = null;
+// 【請修改此處】換成您 NAS/本地伺服器的公開網址或區域網路 IP 位址
+const QUOTE_SERVER_URL = 'http://finnhub-api.911330.xyz:5008'; 
 
-        const { summary, holdings } = result.data;
-        const holdingsObject = (holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
+/**
+ * 檢查當前時間是否為台股或美股的開盤交易時段
+ * @returns {{isOpen: boolean, market: string}} - 回傳一個物件，包含是否開盤及哪個市場
+ */
+function isMarketOpen() {
+    const now = new Date();
 
-        setState({
-            holdings: holdingsObject,
-            summary: summary
-        });
+    // --- 檢查台灣市場 (Asia/Taipei) ---
+    const taipeiTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+    const taipeiDay = taipeiTime.getDay(); // 0=週日, 1=週一, ..., 6=週六
+    const taipeiHour = taipeiTime.getHours();
+    const taipeiMinutes = taipeiTime.getMinutes();
+    
+    // 台股交易日: 週一 (1) 到 週五 (5)
+    const isTwWeekday = taipeiDay >= 1 && taipeiDay <= 5;
+    // 台股交易時間: 09:00 - 13:30
+    const isTwTradingHours = (taipeiHour >= 9 && taipeiHour < 13) || (taipeiHour === 13 && taipeiMinutes <= 30);
 
-        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable(holdingsObject);
-        console.log("Live refresh complete.");
-
-    } catch (error) {
-        console.error("Live refresh failed:", error);
+    if (isTwWeekday && isTwTradingHours) {
+        return { isOpen: true, market: 'TSE' };
     }
+
+    // --- 檢查美國市場 (America/New_York) ---
+    // 使用 toLocaleString 可以自動處理夏令時 (DST)
+    const newYorkTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const newYorkDay = newYorkTime.getDay();
+    const newYorkHour = newYorkTime.getHours();
+    const newYorkMinutes = newYorkTime.getMinutes();
+
+    // 美股交易日: 週一 (1) 到 週五 (5)
+    const isUsWeekday = newYorkDay >= 1 && newYorkDay <= 5;
+    // 美股交易時間: 09:30 - 16:00
+    const isUsTradingHours = (newYorkHour > 9 || (newYorkHour === 9 && newYorkMinutes >= 30)) && (newYorkHour < 16);
+
+    if (isUsWeekday && isUsTradingHours) {
+        return { isOpen: true, market: 'NYSE/NASDAQ' };
+    }
+
+    // --- 若都未開盤 ---
+    return { isOpen: false, market: 'Closed' };
 }
 
+/**
+ * 使用從本地報價伺服器獲取的即時數據來更新 UI
+ * @param {object} liveQuotes - 格式為 { "SYMBOL": 123.45, ... } 的物件
+ */
+function updateUIWithLiveData(liveQuotes) {
+    if (!liveQuotes || Object.keys(liveQuotes).length === 0) return;
+
+    const { holdings, summary } = getState();
+    const holdingsArray = Object.values(holdings);
+    
+    // 遍歷當前持股，用 liveQuotes 的新價格來更新計算
+    holdingsArray.forEach(h => {
+        const livePrice = liveQuotes[h.symbol];
+        
+        // 如果 API 成功回傳價格，則使用它；否則，沿用舊價格
+        const currentPrice = livePrice ?? h.currentPriceOriginal;
+        
+        // 重新計算關鍵指標
+        const fxRate = findFxRateForFrontend(h.currency, new Date().toISOString().split('T')[0]);
+        // 根據前一次的當日損益，反推出昨日收盤價，作為計算今日變化的基礎
+        const yesterdayPrice = h.currentPriceOriginal - (h.daily_pl_twd / (h.quantity * fxRate));
+
+        h.currentPriceOriginal = currentPrice;
+        h.marketValueTWD = h.quantity * currentPrice * fxRate;
+        h.unrealizedPLTWD = h.marketValueTWD - h.totalCostTWD;
+        h.returnRate = h.totalCostTWD > 0 ? (h.unrealizedPLTWD / h.totalCostTWD) * 100 : 0;
+        h.daily_pl_twd = (currentPrice - yesterdayPrice) * h.quantity * fxRate;
+        h.daily_change_percent = yesterdayPrice > 0 ? ((currentPrice - yesterdayPrice) / yesterdayPrice) * 100 : 0;
+    });
+
+    const newHoldingsObject = holdingsArray.reduce((obj, item) => {
+        obj[item.symbol] = item; return obj;
+    }, {});
+    
+    // 使用更新後的數據重新渲染儀表板和持股表格
+    updateDashboard(newHoldingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+    renderHoldingsTable(newHoldingsObject);
+}
+
+/**
+ * 啟動即時報價輪詢
+ */
 export function startLiveRefresh() {
-    stopLiveRefresh(); 
+    stopLiveRefresh(); // 先確保停止舊的計時器
 
-    const poll = () => {
-        // 【核心修改】增加條件判斷，若正在檢視自訂群組，則不刷新
-        const { selectedGroupId } = getState();
-        if (selectedGroupId !== 'all') {
-            console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
+    const poll = async () => {
+        const { holdings, selectedGroupId } = getState();
+        const symbols = Object.keys(holdings);
+
+        // 使用新的智慧判斷函式
+        const marketStatus = isMarketOpen();
+
+        // 檢查是否開盤、是否有持股、以及是否在 '全部股票' 視圖
+        if (!marketStatus.isOpen || symbols.length === 0 || selectedGroupId !== 'all') {
+            console.log("市場休市中或不符合條件，跳過即時報價。");
             return;
         }
 
-        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
-                            document.querySelector('#split-modal:not(.hidden)') ||
-                            document.querySelector('#dividend-modal:not(.hidden)') ||
-                            document.querySelector('#notes-modal:not(.hidden)') ||
-                            document.querySelector('#details-modal:not(.hidden)') ||
-                            document.querySelector('#group-modal:not(.hidden)');
-
-        if (isModalOpen) {
-            console.log("A modal is open, skipping live refresh to avoid interruption.");
-            return;
-        }
-
-        const now = new Date();
-        const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
-        const dayOfWeek = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getDay();
-
-        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-            const isTwMarketOpen = taipeiHour >= 9 && taipeiHour < 14;
-            const isUsMarketOpen = taipeiHour >= 21 || taipeiHour < 4;
-
-            if (isTwMarketOpen || isUsMarketOpen) {
-                 console.log("Market is open. Refreshing data...");
-                 refreshDashboardAndHoldings();
+        // 只有在市場開盤時，才執行後續的報價請求
+        try {
+            console.log(`偵測到 ${marketStatus.market} 開盤，向本地伺服器請求 ${symbols.length} 筆即時報價...`);
+            const response = await fetch(`${QUOTE_SERVER_URL}/api/live-quotes?symbols=${symbols.join(',')}`);
+            if (!response.ok) {
+                throw new Error(`報價伺服器錯誤: ${response.statusText}`);
             }
+            const liveQuotes = await response.json();
+            
+            // 呼叫專門的函式來更新畫面
+            updateUIWithLiveData(liveQuotes);
+
+        } catch (e) {
+            console.error("輪詢即時報價失敗:", e);
         }
     };
     
-    liveRefreshInterval = setInterval(poll, 60000); 
-    poll();
+    liveQuoteInterval = setInterval(poll, 30000); // 30 秒更新一次
+    poll(); // 啟動後立即執行一次
 }
 
+
+/**
+ * 停止即時報價輪詢
+ */
 export function stopLiveRefresh() {
-    if (liveRefreshInterval) {
-        clearInterval(liveRefreshInterval);
-        liveRefreshInterval = null;
-        console.log("Live refresh stopped.");
+    if (liveQuoteInterval) {
+        clearInterval(liveQuoteInterval);
+        liveQuoteInterval = null;
+        console.log("已停止即時報價輪詢。");
     }
 }
 
+// =========================================================================================
+// == 應用程式核心載入邏輯 (App Core Loading Logic)
+// =========================================================================================
 
 export async function loadInitialDashboardAndHoldings() {
     try {
@@ -115,7 +183,8 @@ export async function loadInitialDashboardAndHoldings() {
             obj[item.symbol] = item; return obj;
         }, {});
         const stockNotesMap = (stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note; return map;
+            map[note.symbol] = note;
+            return map;
         }, {});
 
         setState({
