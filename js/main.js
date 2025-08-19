@@ -34,7 +34,7 @@ import { initializeGroupEventListeners, loadGroups } from './events/group.events
 
 let liveQuoteInterval = null;
 // 【請修改此處】換成您 NAS/本地伺服器的公開網址或區域網路 IP 位址
-const QUOTE_SERVER_URL = 'http://finnhub-api.911330.xyz:5008'; 
+const QUOTE_SERVER_URL = 'https://finnhub-api.911330.xyz'; 
 
 /**
  * 檢查當前時間是否為台股或美股的開盤交易時段
