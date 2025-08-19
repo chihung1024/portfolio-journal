@@ -37,7 +37,7 @@ jobs:
               "marketCapMoreThan": 10000000000,
               "isActivelyTrading": "true",
               "country": "US",
-              "limit": 2000
+              "limit": 20000
           }
 
           try:
