@@ -1,8 +1,5 @@
-# .github/workflows/fetch-stocks.yml
-
 name: Fetch Large Cap Stocks List
 
-# 允許手動觸發此工作流程
 on:
   workflow_dispatch:
 
@@ -21,50 +18,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      # 這個步驟會安全地使用您設定的 Secret
       - name: Run Python script to fetch stocks
         env:
-          # 這行程式碼會去讀取您在 GitHub Settings 中設定的 Secret
-          # 它的名字是 FMP_API_KEY
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        # 告訴 GitHub Actions 使用 Python 來執行下面的程式碼
+        shell: python 
         run: |
-          python -c '
-import requests
-import os
-import sys
+          import requests
+          import os
+          import sys
 
-# 從環境變數讀取 API 金鑰，而不是寫死在程式碼裡
-api_key = os.getenv("FMP_API_KEY")
-if not api_key:
-    print("錯誤：找不到 FMP_API_KEY。請檢查 GitHub Secrets 是否已正確設定。", file=sys.stderr)
-    sys.exit(1)
+          # 從環境變數讀取 API 金鑰
+          api_key = os.getenv("FMP_API_KEY")
+          if not api_key:
+              print("錯誤：找不到 FMP_API_KEY。請檢查 GitHub Secrets 是否已正確設定。", file=sys.stderr)
+              sys.exit(1)
 
-url = "https://financialmodelingprep.com/api/v3/stock-screener"
-params = {
-    "marketCapMoreThan": 10000000000,
-    "isActivelyTrading": "true",
-    "limit": 5000,
-    "apikey": api_key
-}
+          url = "https://financialmodelingprep.com/api/v3/stock-screener"
+          params = {
+              "marketCapMoreThan": 10000000000,
+              "isActivelyTrading": "true",
+              "limit": 5000,
+              "apikey": api_key
+          }
 
-try:
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    companies = response.json()
-    
-    if not companies:
-        print("未找到任何符合條件的公司。", file=sys.stderr)
-    else:
-        # 印出 CSV 標頭
-        print("Symbol,CompanyName,MarketCap,Price")
-        for company in companies:
-            symbol = company.get("symbol", "N/A")
-            name = str(company.get("companyName", "N/A")).replace(",", ";")
-            market_cap = company.get("marketCap", 0)
-            price = company.get("price", 0)
-            print(f"{symbol},{name},{market_cap},{price}")
+          try:
+              response = requests.get(url, params=params)
+              response.raise_for_status()
+              companies = response.json()
+              
+              if not companies:
+                  print("未找到任何符合條件的公司。", file=sys.stderr)
+              else:
+                  # 印出 CSV 標頭
+                  print("Symbol,CompanyName,MarketCap,Price")
+                  for company in companies:
+                      symbol = company.get("symbol", "N/A")
+                      name = str(company.get("companyName", "N/A")).replace(",", ";")
+                      market_cap = company.get("marketCap", 0)
+                      price = company.get("price", 0)
+                      print(f"{symbol},{name},{market_cap},{price}")
 
-except requests.exceptions.RequestException as e:
-    print(f"API 請求失敗: {e}", file=sys.stderr)
-    sys.exit(1)
-'
+          except requests.exceptions.RequestException as e:
+              print(f"API 請求失敗: {e}", file=sys.stderr)
+              sys.exit(1)
