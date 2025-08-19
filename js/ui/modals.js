@@ -1,12 +1,14 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v3.0 - 支援引導式歸因流程
+// == 彈出視窗模組 (modals.js) v3.1 - 修正微觀編輯流程
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
-// 【新增】導入 apiRequest 和 executeApiAction 用於提交數據
 import { apiRequest, executeApiAction } from '../api.js';
+// 【新增】導入 loadGroups 以便在儲存後刷新
+import { loadGroups } from '../events/group.events.js';
+
 
 // --- Helper Functions ---
 
@@ -95,7 +97,7 @@ async function submitAttributionAndSaveTransaction() {
 }
 
 /**
- * 【新增】為微觀編輯視窗儲存變更
+ * 【修改】為微觀編輯視窗儲存變更，並在成功後刷新
  */
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -111,16 +113,16 @@ async function handleMembershipSave() {
     }, {
         loadingText: '正在更新群組歸屬...',
         successMessage: '群組歸屬已更新！',
-        shouldRefreshData: false // 只更新歸屬，通常不需要全局重算和刷新
+        shouldRefreshData: false // 我們手動處理刷新，因此關閉全局刷新
     }).then(() => {
-        // 可選：如果需要，可以觸發一個輕量級的刷新
-        console.log("群組歸屬更新成功。");
+        // 【核心修改】儲存成功後，主動重新載入群組列表以更新UI
+        loadGroups();
     }).catch(err => console.error("更新群組歸屬失敗:", err));
 }
 
 // --- Exported Functions ---
 
-export function openModal(modalId, isEdit = false, data = null) {
+export async function openModal(modalId, isEdit = false, data = null) {
     const { stockNotes, pendingDividends, confirmedDividends, transactions, groups } = getState();
     const formId = modalId.replace('-modal', '-form');
     const form = document.getElementById(formId);
@@ -155,14 +157,42 @@ export function openModal(modalId, isEdit = false, data = null) {
         document.getElementById('stop-loss-price').value = note.stop_loss_price || '';
         document.getElementById('notes-content').value = note.notes || '';
     } else if (modalId === 'dividend-modal') {
-        // ... (dividend modal logic - no changes)
+        const record = isEdit
+            ? confirmedDividends.find(d => d.id === data.id)
+            : pendingDividends[data.index];
+        if (!record) return;
+
+        document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`;
+        document.getElementById('dividend-id').value = record.id || '';
+        document.getElementById('dividend-symbol').value = record.symbol;
+        document.getElementById('dividend-ex-date').value = record.ex_dividend_date;
+        document.getElementById('dividend-currency').value = record.currency;
+        document.getElementById('dividend-quantity').value = record.quantity_at_ex_date;
+        document.getElementById('dividend-original-amount-ps').value = record.amount_per_share;
+        document.getElementById('dividend-info-symbol').textContent = record.symbol;
+        document.getElementById('dividend-info-ex-date').textContent = record.ex_dividend_date.split('T')[0];
+        document.getElementById('dividend-info-quantity').textContent = formatNumber(record.quantity_at_ex_date, isTwStock(record.symbol) ? 0 : 2);
+        document.getElementById('dividend-info-amount-ps').textContent = `${formatNumber(record.amount_per_share, 4)} ${record.currency}`;
+
+        if (isEdit) {
+            document.getElementById('dividend-pay-date').value = record.pay_date.split('T')[0];
+            document.getElementById('dividend-tax-rate').value = record.tax_rate || '';
+            document.getElementById('dividend-total-amount').value = record.total_amount;
+            document.getElementById('dividend-notes').value = record.notes || '';
+        } else {
+            document.getElementById('dividend-pay-date').value = record.ex_dividend_date.split('T')[0];
+            const taxRate = isTwStock(record.symbol) ? 0 : 30;
+            document.getElementById('dividend-tax-rate').value = taxRate;
+            const totalAmount = record.amount_per_share * record.quantity_at_ex_date * (1 - taxRate / 100);
+            document.getElementById('dividend-total-amount').value = totalAmount.toFixed(2);
+            document.getElementById('dividend-notes').value = '';
+        }
     } else if (modalId === 'details-modal') {
         const { symbol } = data;
         if (symbol) {
             renderDetailsModal(symbol);
         }
     } else if (modalId === 'membership-editor-modal') {
-        // 【新增】處理微觀編輯視窗
         const { txId } = data;
         const tx = transactions.find(t => t.id === txId);
         if (!tx) return;
@@ -173,31 +203,38 @@ export function openModal(modalId, isEdit = false, data = null) {
         document.getElementById('membership-date-placeholder').textContent = tx.date.split('T')[0];
         
         const container = document.getElementById('membership-groups-container');
-        // 這裡需要預先請求一次該交易目前的歸屬，簡單起見，我們先假設可以從 state 獲得
-        // 在一個完整的實現中，可能需要一個輕量級API來獲取 `get_transaction_memberships`
-        container.innerHTML = groups.map(g => `
-            <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
-                <input type="checkbox" name="membership_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
-                <span class="font-medium text-gray-700">${g.name}</span>
-            </label>
-        `).join('');
+        container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取歸屬狀態...</p>';
+        
+        try {
+            const result = await apiRequest('get_transaction_memberships', { transactionId: txId });
+            const includedGroupIds = new Set(result.data.groupIds);
+
+            container.innerHTML = groups.length > 0
+                ? groups.map(g => `
+                    <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
+                        <input type="checkbox" name="membership_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
+                        <span class="font-medium text-gray-700">${g.name}</span>
+                    </label>
+                `).join('')
+                : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
+
+        } catch (error) {
+            container.innerHTML = '<p class="text-center text-sm text-red-500 py-4">讀取歸屬狀態失敗。</p>';
+            console.error("讀取交易歸屬失敗:", error);
+        }
     }
 
     document.getElementById(modalId).classList.remove('hidden');
-    // 綁定事件
     if (modalId === 'membership-editor-modal') {
         document.getElementById('save-membership-btn').onclick = handleMembershipSave;
         document.getElementById('cancel-membership-btn').onclick = () => closeModal('membership-editor-modal');
     }
 }
 
-/**
- * 【新增】專門用於開啟群組歸因嚮導的函式
- */
 export function openGroupAttributionModal() {
     renderGroupAttributionContent();
-    openModal('group-attribution-modal');
-    // 綁定事件
+    const modalElement = document.getElementById('group-attribution-modal');
+    modalElement.classList.remove('hidden');
     document.getElementById('confirm-attribution-btn').onclick = submitAttributionAndSaveTransaction;
     document.getElementById('cancel-attribution-btn').onclick = () => closeModal('group-attribution-modal');
 }
