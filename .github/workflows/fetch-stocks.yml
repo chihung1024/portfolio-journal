@@ -50,14 +50,16 @@ jobs:
               if not companies:
                   print("未找到任何符合條件的公司。", file=sys.stderr)
               else:
-                  # 印出 CSV 標頭
-                  print("Symbol,CompanyName,MarketCap,Price")
-                  for company in companies:
-                      symbol = company.get("symbol", "N/A")
-                      name = str(company.get("companyName", "N/A")).replace(",", ";")
-                      market_cap = company.get("marketCap", 0)
-                      price = company.get("price", 0)
-                      print(f"{symbol},{name},{market_cap},{price}")
+                  # --- 修改開始 ---
+                  # 1. 提取所有公司的股票代碼到一個 Python 列表中
+                  tickers = [company.get("symbol", "N/A") for company in companies]
+                  
+                  # 2. 使用逗號 (",") 將列表中的所有代碼串接成一個單一的字串
+                  output_string = ",".join(tickers)
+                  
+                  # 3. 印出這個最終的字串
+                  print(output_string)
+                  # --- 修改結束 ---
 
 
 
