@@ -2,7 +2,7 @@
 // == API 通訊模組 (api.js) v4.2.0 - 支援圖表動態命名
 // =========================================================================================
 
-import { getAuth } from "https://www.gstatic.com/firebasejs/9.10.0/firebase-auth.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
 
