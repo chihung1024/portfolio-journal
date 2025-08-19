@@ -1,35 +1,317 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
-<body>
-    <div id="transaction-modal" class="fixed inset-0 z-30 overflow-y-auto hidden">
-        <div class="flex items-center justify-center min-h-screen">
-            <div class="fixed inset-0 modal-backdrop"></div>
-            <div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4">
-                <h3 id="modal-title" class="text-2xl font-bold mb-6 text-gray-800">新增/編輯交易</h3>
-                <form id="transaction-form">
-                    <input type="hidden" id="transaction-id">
-                    <div class="mb-4"><label for="transaction-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label><input type="date" id="transaction-date" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div>
-                    <div class="mb-4"><label for="stock-symbol" class="block text-sm font-medium text-gray-700 mb-1">股票代碼</label><input type="text" id="stock-symbol" placeholder="例如: AAPL, 2330.TW" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div>
-                    <div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">交易類型</label><div class="flex space-x-4"><label class="flex items-center"><input type="radio" name="transaction-type" value="buy" class="h-4 w-4 text-indigo-600" checked><span class="ml-2">買入</span></label><label class="flex items-center"><input type="radio" name="transaction-type" value="sell" class="h-4 w-4 text-indigo-600"><span class="ml-2">賣出</span></label></div></div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="quantity" class="block text-sm font-medium text-gray-700 mb-1">股數</label><input type="number" step="any" id="quantity" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div><label for="price" class="block text-sm font-medium text-gray-700 mb-1">價格 (原幣)</label><input type="number" step="any" id="price" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div></div>
-                    <div class="mb-4"><label for="currency" class="block text-sm font-medium text-gray-700 mb-1">幣別</label><select id="currency" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="USD">USD</option><option value="TWD">TWD</option><option value="HKD">HKD</option><option value="JPY">JPY</option></select></div>
-                    <div id="exchange-rate-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="exchange-rate" class="block text-sm font-medium text-gray-700">手動匯率 (選填)</label><input type="number" step="any" id="exchange-rate" placeholder="留空則自動抓取" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div>
-                    <div id="total-cost-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="total-cost" class="block text-sm font-medium text-gray-700">總成本 (含費用, 原幣, 選填)</label><input type="number" step="any" id="total-cost" placeholder="留空則自動計算 (股數*價格)" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div>
-                    
-                    <div id="transaction-group-editor" class="hidden mt-6 pt-4 border-t">
-                        <h4 class="text-lg font-semibold mb-2 text-gray-700">群組歸屬</h4>
-                        <div id="transaction-groups-container" class="space-y-3 max-h-40 overflow-y-auto p-2 border rounded-md">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票交易紀錄與資產分析系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
+        .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
+        .btn { transition: all 0.2s ease-in-out; }
+        .modal-backdrop { background-color: rgba(0,0,0,0.5); }
+        .chart-range-btn.active { background-color: #4f46e5; color: white; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <div id="app" class="min-h-screen">
+        <div id="notification-area" class="fixed top-5 right-5 z-50"></div>
+
+        <header class="bg-white shadow-md sticky top-0 z-20">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <i data-lucide="line-chart" class="text-indigo-600 h-8 w-8"></i>
+                    <h1 class="text-2xl font-bold text-gray-800">交易紀錄與資產分析</h1>
+                </div>
+                <div id="auth-status-display" class="flex items-center space-x-4">
+                    <div id="user-info" class="hidden text-xs text-gray-500 text-right">
+                        <span id="auth-status"></span>
+                        <p id="user-id" class="truncate max-w-[150px] sm:max-w-xs"></p>
+                    </div>
+                    <button id="logout-btn" class="hidden btn bg-red-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-red-600">登出</button>
+                </div>
+            </div>
+        </header>
+        
+        <div id="auth-container" class="max-w-md mx-auto bg-white rounded-lg shadow-md p-8 mt-8 hidden">
+            <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">登入或註冊</h2>
+            <form id="auth-form">
+                <div class="mb-4">
+                    <label for="email" class="block text-sm font-medium text-gray-700 mb-1">電子郵件</label>
+                    <input type="email" id="email" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
+                </div>
+                <div class="mb-6">
+                    <label for="password" class="block text-sm font-medium text-gray-700 mb-1">密碼</label>
+                    <input type="password" id="password" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
+                </div>
+                <div class="flex items-center justify-between space-x-4">
+                    <button type="button" id="login-btn" class="w-full btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700">登入</button>
+                    <button type="button" id="register-btn" class="w-full btn bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700">註冊</button>
+                </div>
+            </form>
+        </div>
+
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 hidden">
+            <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-40">
+                <div class="flex flex-col items-center text-center p-4">
+                    <svg class="animate-spin h-10 w-10 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <p id="loading-text" class="mt-4 text-lg font-medium text-gray-700">正在驗證您的身分...</p>
+                </div>
+            </div>
+
+            <div id="global-controls" class="mb-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div class="flex items-center space-x-3">
+                    <label for="group-selector" class="text-sm font-medium text-gray-700 whitespace-nowrap">檢視投資組合:</label>
+                    <select id="group-selector" class="block w-full sm:w-64 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md shadow-sm">
+                        <option value="all">全部股票</option>
+                        </select>
+                </div>
+                <button id="recalculate-group-btn" class="btn bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-green-700 flex items-center space-x-2 hidden">
+                    <i data-lucide="calculator" class="h-5 w-5"></i>
+                    <span>計算群組績效</span>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-5 mb-8">
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">總資產 (TWD)</h3>
+                        <i data-lucide="wallet" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="total-assets-container">
+                        <p id="total-assets" class="text-xl lg:text-2xl font-bold text-gray-800">0</p>
+                    </div>
+                </div>
+            
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">當日損益 (TWD)</h3>
+                        <i data-lucide="zap" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="daily-pl-container" class="flex items-baseline gap-2">
+                        <p id="daily-pl" class="text-xl lg:text-2xl font-bold">0</p>
+                        <span id="daily-pl-percent" class="font-semibold">0.00%</span>
+                    </div>
+                </div>
+                
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">未實現損益 (TWD)</h3>
+                        <i data-lucide="trending-up" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="unrealized-pl-container">
+                         <p id="unrealized-pl" class="text-xl lg:text-2xl font-bold">0</p>
+                    </div>
+                </div>
+            
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">已實現損益 (TWD)</h3>
+                        <i data-lucide="dollar-sign" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="realized-pl-container">
+                        <p id="realized-pl" class="text-xl lg:text-2xl font-bold">0</p>
+                    </div>
+                </div>
+            
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">總報酬率</h3>
+                        <i data-lucide="percent" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="total-return-container">
+                         <p id="total-return" class="text-xl lg:text-2xl font-bold">0.00%</p>
+                    </div>
+                </div>
+            
+                <div class="card p-4">
+                    <div class="flex items-center justify-between mb-1">
+                        <h3 class="text-sm font-medium text-gray-500">XIRR 年化報酬率</h3>
+                        <i data-lucide="calendar-check" class="h-6 w-6 text-gray-400"></i>
+                    </div>
+                    <div id="xirr-value-container">
+                         <p id="xirr-value" class="text-xl lg:text-2xl font-bold">0.00%</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-6 mb-8">
+                <div class="card p-6 mb-8">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                        
+                        <div class="w-full sm:w-auto flex-grow flex flex-col sm:flex-row sm:items-center sm:space-x-4 min-w-0">
+                            
+                            <h2 class="text-xl font-bold text-gray-800 flex-shrink-0">投資組合管理</h2>
+                
+                            <div class="w-full sm:w-auto mt-2 sm:mt-0 min-w-0">
+                                 <div class="border-b sm:border-b-0 sm:border-l sm:pl-4 border-gray-200">
+                                    <nav class="-mb-px flex space-x-6 overflow-x-auto flex-nowrap no-scrollbar" id="tabs">
+                                        <a href="#" data-tab="holdings" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-indigo-500 text-indigo-600">持股一覽</a>
+                                        <a href="#" data-tab="transactions" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">交易紀錄</a>
+                                        <a href="#" data-tab="dividends" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">配息管理</a>
+                                        <a href="#" data-tab="splits" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">拆股事件</a>
+                                        <a href="#" data-tab="groups" class="tab-item whitespace-nowrap py-2 border-b-2 font-medium text-base border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">群組管理</a>
+                                    </nav>
+                                 </div>
                             </div>
+                        </div>
+                
+                        <div class="flex-shrink-0">
+                            <button id="add-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700 flex items-center space-x-2"><i data-lucide="plus-circle" class="h-5 w-5"></i><span>新增交易</span></button>
+                        </div>
                     </div>
+                <div id="holdings-tab" class="tab-content"><div id="holdings-content"></div></div>
+                <div id="transactions-tab" class="tab-content hidden"></div>
+                <div id="dividends-tab" class="tab-content hidden"></div>
+                <div id="splits-tab" class="tab-content hidden">
+                    <div class="flex justify-end mb-4">
+                        <button id="add-split-btn" class="btn bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700 flex items-center space-x-2">
+                            <i data-lucide="plus" class="h-5 w-5"></i>
+                            <span>新增拆股</span>
+                        </button>
+                    </div>
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">比例</th>
+                                <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="splits-table-body" class="bg-white divide-y divide-gray-200"></tbody>
+                    </table>
+                </div>
+                <div id="groups-tab" class="tab-content hidden">
+                    <div class="flex justify-end mb-4">
+                        <button id="add-group-btn" class="btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 flex items-center space-x-2">
+                            <i data-lucide="plus" class="h-5 w-5"></i>
+                            <span>新增群組</span>
+                        </button>
+                    </div>
+                    <div id="groups-content" class="space-y-4">
+                        </div>
+                </div>
+            </div>
+            
+            <div class="card p-6 mb-8">
+                <div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                    <h3 class="text-lg font-semibold text-gray-800">時間加權報酬率 vs. Benchmark</h3>
+                    <div class="flex items-center space-x-2">
+                        <input type="text" id="benchmark-symbol-input" placeholder="e.g., SPY" class="w-32 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        <button id="update-benchmark-btn" class="btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 flex items-center space-x-2">
+                            <i data-lucide="refresh-cw" class="h-5 w-5"></i>
+                            <span>更新</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="twr-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="twr">
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="ytd">今年以來</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1m">1個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3m">3個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="6m">6個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1y">1年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3y">3年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="5y">5年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 active" data-range="all">全部</button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <input type="date" id="twr-start-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                        <span class="text-gray-500">-</span>
+                        <input type="date" id="twr-end-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                    </div>
+                </div>
+                <div id="twr-chart"></div>
+            </div>
+
+            <div class="card p-6 mb-8">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">累積淨利走勢 (TWD)</h3>
+                 <div id="net-profit-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="netProfit">
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="ytd">今年以來</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1m">1個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3m">3個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="6m">6個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1y">1年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3y">3年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="5y">5年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 active" data-range="all">全部</button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <input type="date" id="net-profit-start-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                        <span class="text-gray-500">-</span>
+                        <input type="date" id="net-profit-end-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                    </div>
+                </div>
+                <div id="net-profit-chart"></div>
+            </div>
+
+            <div class="card p-6">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">資產成長曲線 (TWD)</h3>
+                 <div id="asset-chart-controls" class="chart-controls mb-4 flex flex-wrap items-center gap-2" data-chart="asset">
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="ytd">今年以來</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1m">1個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3m">3個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="6m">6個月</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="1y">1年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="3y">3年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300" data-range="5y">5年</button>
+                    <button class="chart-range-btn btn text-xs font-medium px-3 py-1 rounded-md bg-gray-200 hover:bg-gray-300 active" data-range="all">全部</button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <input type="date" id="asset-start-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                        <span class="text-gray-500">-</span>
+                        <input type="date" id="asset-end-date" class="chart-date-input text-sm border-gray-300 rounded-md p-1">
+                    </div>
+                </div>
+                <div id="asset-chart"></div>
+            </div>
+        </main>
+        
+        <div id="transaction-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop" ></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 id="modal-title" class="text-2xl font-bold mb-6 text-gray-800">新增交易紀錄 (步驟 1/2)</h3><form id="transaction-form"><input type="hidden" id="transaction-id"><div class="mb-4"><label for="transaction-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label><input type="date" id="transaction-date" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div class="mb-4"><label for="stock-symbol" class="block text-sm font-medium text-gray-700 mb-1">股票代碼</label><input type="text" id="stock-symbol" placeholder="例如: AAPL, 2330.TW" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">交易類型</label><div class="flex space-x-4"><label class="flex items-center"><input type="radio" name="transaction-type" value="buy" class="h-4 w-4 text-indigo-600" checked><span class="ml-2">買入</span></label><label class="flex items-center"><input type="radio" name="transaction-type" value="sell" class="h-4 w-4 text-indigo-600"><span class="ml-2">賣出</span></label></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="quantity" class="block text-sm font-medium text-gray-700 mb-1">股數</label><input type="number" step="any" id="quantity" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div><label for="price" class="block text-sm font-medium text-gray-700 mb-1">價格 (原幣)</label><input type="number" step="any" id="price" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div></div><div class="mb-4"><label for="currency" class="block text-sm font-medium text-gray-700 mb-1">幣別</label><select id="currency" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="USD">USD</option><option value="TWD">TWD</option><option value="HKD">HKD</option><option value="JPY">JPY</option></select></div><div id="exchange-rate-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="exchange-rate" class="block text-sm font-medium text-gray-700">手動匯率 (選填)</label><input type="number" step="any" id="exchange-rate" placeholder="留空則自動抓取" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div><div id="total-cost-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="total-cost" class="block text-sm font-medium text-gray-700">總成本 (含費用, 原幣, 選填)</label><input type="number" step="any" id="total-cost" placeholder="留空則自動計算 (股數*價格)" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">取消</button><button type="button" id="next-step-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">下一步</button></div></form></div></div></div>
+        <div id="split-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 class="text-2xl font-bold mb-6">新增拆股/合股事件</h3><form id="split-form"><input type="hidden" id="split-id"><div class="mb-4"><label for="split-date" class="block text-sm font-medium">日期</label><input type="date" id="split-date" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="split-symbol" class="block text-sm font-medium">股票代碼</label><input type="text" id="split-symbol" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="split-ratio" class="block text-sm font-medium">比例</label><input type="number" step="any" id="split-ratio" placeholder="1拆10, 輸入10; 10合1, 輸入0.1" class="w-full px-3 py-2 border rounded-md" required></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-split-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-split-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存</button></div></form></div></div></div>
+        <div id="confirm-modal" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-sm mx-4"><h3 id="confirm-title" class="text-lg font-semibold mb-4">確認操作</h3><p id="confirm-message" class="text-gray-600 mb-6">您確定要執行此操作嗎？</p><div class="flex justify-end space-x-4"><button id="confirm-cancel-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button id="confirm-ok-btn" class="btn bg-red-600 text-white py-2 px-4 rounded-lg">確定</button></div></div></div></div>
+        <div id="notes-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="notes-modal-title" class="text-2xl font-bold mb-6">編輯筆記與目標</h3><form id="notes-form"><input type="hidden" id="notes-symbol"><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="target-price" class="block text-sm font-medium">目標價</label><input type="number" step="any" id="target-price" class="w-full px-3 py-2 border rounded-md"></div><div><label for="stop-loss-price" class="block text-sm font-medium">停損價</label><input type="number" step="any" id="stop-loss-price" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="notes-content" class="block text-sm font-medium">投資筆記</label><textarea id="notes-content" rows="6" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-notes-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-notes-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存筆記</button></div></form></div></div></div>
+        <div id="dividend-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="dividend-modal-title" class="text-2xl font-bold mb-6">確認配息入帳</h3><form id="dividend-form"><input type="hidden" id="dividend-id"><input type="hidden" id="dividend-symbol"><input type="hidden" id="dividend-ex-date"><input type="hidden" id="dividend-currency"><input type="hidden" id="dividend-quantity"><input type="hidden" id="dividend-original-amount-ps"><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4 p-4 bg-gray-50 rounded-lg"><div><p class="text-sm text-gray-500">股票代碼</p><p id="dividend-info-symbol" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日</p><p id="dividend-info-ex-date" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日持股</p><p id="dividend-info-quantity" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">每股配息(原幣)</p><p id="dividend-info-amount-ps" class="font-semibold"></p></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4"><div><label for="dividend-pay-date" class="block text-sm font-medium mb-1">實際發放日</label><input type="date" id="dividend-pay-date" class="w-full px-3 py-2 border rounded-md" required></div><div><label for="dividend-tax-rate" class="block text-sm font-medium mb-1">稅率 (%)</label><input type="number" step="any" id="dividend-tax-rate" placeholder="例如: 30" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="dividend-total-amount" class="block text-sm font-medium mb-1">稅後實收總額 (原幣)</label><input type="number" step="any" id="dividend-total-amount" class="w-full px-3 py-2 border rounded-md" required><p class="text-xs text-gray-500 mt-1">此為計算已實現損益的最終依據。</p></div><div class="mb-4"><label for="dividend-notes" class="block text-sm font-medium mb-1">備註 (選填)</label><textarea id="dividend-notes" rows="3" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-dividend-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-dividend-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存紀錄</button></div></form></div></div></div>
+        <div id="dividend-history-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div id="dividend-history-content" class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-2xl mx-4"></div></div></div>
+        <div id="group-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="group-modal-title" class="text-2xl font-bold mb-6">新增/編輯群組</h3><form id="group-form"><input type="hidden" id="group-id"><div class="mb-4"><label for="group-name" class="block text-sm font-medium">群組名稱</label><input type="text" id="group-name" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="group-description" class="block text-sm font-medium">描述 (選填)</label><textarea id="group-description" rows="2" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="mb-4"><label class="block text-sm font-medium">包含股票與交易紀錄</label><div id="group-symbols-container" class="mt-2 p-2 border rounded-md max-h-60 overflow-y-auto space-y-2"></div></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-group-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-group-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存群組</button></div></form></div></div></div>
+        
+        <div id="group-attribution-modal" class="fixed inset-0 z-40 overflow-y-auto hidden">
+            <div class="flex items-center justify-center min-h-screen">
+                <div class="fixed inset-0 modal-backdrop"></div>
+                <div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-lg mx-4">
                     
-                    <div class="flex justify-end space-x-4 mt-6">
-                        <button type="button" id="cancel-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">取消</button>
-                        <button type="submit" id="transaction-submit-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">下一步</button>
+                    <h3 id="attribution-modal-title" class="text-2xl font-bold mb-2">新增交易紀錄 (步驟 2/2)</h3>
+                    
+                    <p class="text-gray-600 mb-6">請為這筆 <strong id="attribution-symbol-placeholder"></strong> 交易選擇歸屬群組。</p>
+                    <div id="attribution-groups-container" class="space-y-3 max-h-60 overflow-y-auto mb-4 p-2 border rounded-md"></div>
+                    <div id="attribution-new-group-container" class="mb-6"></div>
+                    <div class="flex justify-between items-center mt-6">
+                        <button type="button" id="cancel-attribution-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">稍後再說</button>
+                        <button type="button" id="confirm-attribution-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">確認並儲存</button>
                     </div>
-                </form>
+                </div>
             </div>
         </div>
+
+        <div id="membership-editor-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-md mx-4"><h3 class="text-xl font-bold mb-2">編輯群組歸屬</h3><p class="text-gray-600 mb-6">管理 <strong id="membership-symbol-placeholder"></strong> 於 <strong id="membership-date-placeholder"></strong> 的交易。</p><div id="membership-groups-container" class="space-y-3 max-h-60 overflow-y-auto mb-6 p-2 border rounded-md"></div><div class="flex justify-end space-x-4"><button type="button" id="cancel-membership-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="button" id="save-membership-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存變更</button></div></div></div></div>
+
+        <div id="details-modal" class="fixed inset-0 z-30 overflow-y-auto hidden">
+            <div class="flex items-center justify-center min-h-screen p-4">
+                <div class="fixed inset-0 modal-backdrop"></div>
+                <div class="bg-white rounded-lg shadow-xl z-40 w-full max-w-4xl mx-4 transform transition-all">
+                    <div id="details-modal-content" class="p-6">
+                        </div>
+                </div>
+            </div>
+        </div>
+
     </div>
     
-    </body>
+    <script type="module" src="./js/main.js"></script>
+</body>
 </html>
