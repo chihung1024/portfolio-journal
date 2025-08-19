@@ -1,4 +1,4 @@
-name: Fetch Large Cap Stocks List
+name: Fetch Large Cap Stocks List (yfinance compatible)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,6 @@ jobs:
           import os
           import sys
 
-          # 從環境變數讀取 API 金鑰
           api_key = os.getenv("FMP_API_KEY")
           if not api_key:
               print("錯誤：找不到 FMP_API_KEY。請檢查 GitHub Secrets 是否已正確設定。", file=sys.stderr)
@@ -37,8 +36,8 @@ jobs:
           params = {
               "marketCapMoreThan": 10000000000,
               "isActivelyTrading": "true",
-              "country": "US", # 僅限美股
-              "limit": 2000 # 增加限制以獲取更多公司
+              "country": "US",
+              "limit": 2000
           }
 
           try:
@@ -50,8 +49,11 @@ jobs:
                   print("未找到任何符合條件的公司。", file=sys.stderr)
               else:
                   # --- 修改開始 ---
-                  # 1. 提取所有公司的股票代碼到一個 Python 列表中
-                  tickers = [company.get("symbol", "N/A") for company in companies]
+                  # 1. 提取所有公司的股票代碼，並將 '-' 替換成 '.' 以符合 yfinance 格式
+                  tickers = [
+                      company.get("symbol", "N/A").replace(".", "-")
+                      for company in companies
+                  ]
                   
                   # 2. 使用逗號 (",") 將列表中的所有代碼串接成一個單一的字串
                   output_string = ",".join(tickers)
