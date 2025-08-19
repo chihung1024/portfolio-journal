@@ -40,16 +40,16 @@ jobs:
           # 1. 按照市值 (marketCap) 降序 (desc) 排序
           # 2. 限制結果為 500 筆
           # 3. 限定國家為美國 (US)
+          # 步驟 1: 抓取一個更大的候選池 (例如總市值前 2000 名)
+          # 注意：我們仍然按 marketCap (總市值) 排序，因為 API 不支援按流通市值排序
           params = {
               "sortBy": "marketCap",
               "order": "desc",
-              "limit": 1000,
-              #  "country": "US",
+              "limit": 2000,  # 擴大抓取範圍，確保目標公司都在裡面
               "exchange": "NASDAQ,NYSE",
               "isActivelyTrading": "true",
               "apikey": api_key
           }
-          # --- 參數修改結束 ---
 
           try:
               response = requests.get(url, params=params)
@@ -58,19 +58,32 @@ jobs:
               
               if not companies:
                   print("未找到任何符合條件的公司。", file=sys.stderr)
-              else:
-                  # 1. 提取所有公司的股票代碼到一個 Python 列表中
-                  #    (將代碼中的 '.' 替換成 '-'，例如 "BRK.B" -> "BRK-B")
-                  tickers = [
-                      company.get("symbol", "N/A").replace(".", "-")
-                      for company in companies
-                  ]
-                  
-                  # 2. 使用逗號 (",") 將列表中的所有代碼串接成一個單一的字串
-                  output_string = ",".join(tickers)
-                  
-                  # 3. 印出這個最終的字串
-                  print(output_string)
+                  sys.exit(0)
+
+              # 步驟 2: 在 Python 中為每家公司計算流通市值
+              # 使用 .get(key, 0) 來避免缺少數據時出錯
+              for company in companies:
+                  price = company.get('price', 0)
+                  float_shares = company.get('floatShares', 0)
+                  # 檢查 price 和 float_shares 是否為 None 或 0
+                  if price is not None and float_shares is not None:
+                      company['floatMarketCap'] = price * float_shares
+                  else:
+                      company['floatMarketCap'] = 0
+
+              # 步驟 3: 在 Python 中根據我們計算出的 'floatMarketCap' 進行降序排序
+              sorted_companies = sorted(companies, key=lambda x: x['floatMarketCap'], reverse=True)
+
+              # 步驟 4: 從排序後的新列表中選取前 1000 名
+              top_1000_by_float = sorted_companies[:1000]
+              
+              # 從最終的列表中提取股票代碼並輸出
+              tickers = [
+                  company.get("symbol", "N/A").replace(".", "-")
+                  for company in top_1000_by_float
+              ]
+              output_string = ",".join(tickers)
+              print(output_string)
 
           except requests.exceptions.RequestException as e:
               print(f"API 請求失敗: {e}", file=sys.stderr)
