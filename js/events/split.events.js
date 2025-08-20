@@ -3,13 +3,14 @@
 // =========================================================================================
 
 import { executeApiAction } from '../api.js';
-import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 
 // --- Private Functions ---
 
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
+    const { showConfirm } = await import('../ui/modals.js');
     showConfirm('確定要刪除這個拆股事件嗎？', () => {
         executeApiAction('delete_split', { splitId }, {
             loadingText: '正在刪除拆股事件...',
@@ -33,6 +34,7 @@ async function handleSplitFormSubmit(e) {
         return;
     }
     
+    const { closeModal } = await import('../ui/modals.js');
     closeModal('split-modal');
     
     executeApiAction('add_split', splitData, {
@@ -49,10 +51,11 @@ export function initializeSplitEventListeners() {
     // 【修改】將事件監聽器綁定到更具體的父元素上
     const splitsTab = document.getElementById('splits-tab');
     if (splitsTab) {
-        splitsTab.addEventListener('click', (e) => { 
+        splitsTab.addEventListener('click', async (e) => { 
             // 監聽 "新增拆股" 按鈕
             const addBtn = e.target.closest('#add-split-btn');
             if (addBtn) {
+                const { openModal } = await import('../ui/modals.js');
                 openModal('split-modal');
                 return;
             }
@@ -65,5 +68,8 @@ export function initializeSplitEventListeners() {
     }
     
     document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
-    document.getElementById('cancel-split-btn').addEventListener('click', () => closeModal('split-modal'));
+    document.getElementById('cancel-split-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('split-modal');
+    });
 }
