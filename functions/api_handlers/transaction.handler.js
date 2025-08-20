@@ -11,9 +11,9 @@ const { transactionSchema } = require('../schemas');
  * 新增一筆交易紀錄 (支援引導式群組歸因)
  */
 exports.addTransaction = async (uid, data, res) => {
-    // 【修改】從 data 中解構出更複雜的意圖包
-    const { transactionData, groupInclusions, newGroups } = data;
-    const txData = transactionSchema.parse(transactionData);
+    // 【核心修正】將 'transactionData' 改為 'txData' 以與 API 慣例保持一致
+    const { txData, groupInclusions, newGroups } = data;
+    const parsedTxData = transactionSchema.parse(txData);
     const txId = uuidv4();
 
     const dbOps = [];
@@ -34,7 +34,7 @@ exports.addTransaction = async (uid, data, res) => {
     // 步驟 2: 插入新的交易紀錄
     dbOps.push({
         sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        params: [txId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+        params: [txId, uid, parsedTxData.date, parsedTxData.symbol, parsedTxData.type, parsedTxData.quantity, parsedTxData.price, parsedTxData.currency, parsedTxData.totalCost, parsedTxData.exchangeRate]
     });
 
     // 步驟 3: (可選) 處理交易的群組歸屬
@@ -52,7 +52,7 @@ exports.addTransaction = async (uid, data, res) => {
     await d1Client.batch(dbOps);
     
     // 執行同步的全局重算
-    await performRecalculation(uid, txData.date, false);
+    await performRecalculation(uid, parsedTxData.date, false);
 
     // 【維持不變】重算後，查詢並回傳最新的完整 portfolio 狀態
     const [holdings, summaryResult] = await Promise.all([
