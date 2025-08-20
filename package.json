@@ -1,0 +1,17 @@
+{
+  "name": "portfolio-journal-optimized",
+  "version": "1.0.0",
+  "description": "Optimized version with Tailwind CSS build process.",
+  "main": "index.js",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/input.css -o ./dist/output.css --minify"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3"
+  }
+}
