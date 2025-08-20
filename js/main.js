@@ -15,7 +15,7 @@ import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
-import { hideConfirm, toggleOptionalFields } from './ui/modals.js';
+// import { hideConfirm, toggleOptionalFields } from './ui/modals.js'; // 移除靜態導入
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
@@ -57,14 +57,16 @@ async function refreshDashboardAndHoldings() {
 export function startLiveRefresh() {
     stopLiveRefresh(); 
 
-    const poll = () => {
+    const poll = async () => {
         // 【核心修改】增加條件判斷，若正在檢視自訂群組，則不刷新
         const { selectedGroupId } = getState();
         if (selectedGroupId !== 'all') {
             console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
             return;
         }
-
+        
+        // 動態導入 modals 模組來檢查是否有 modal 開啟
+        const { openModal } = await import('./ui/modals.js');
         const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
                             document.querySelector('#split-modal:not(.hidden)') ||
                             document.querySelector('#dividend-modal:not(.hidden)') ||
@@ -297,10 +299,14 @@ export async function loadAndShowDividends() {
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
-    document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
-    document.getElementById('confirm-ok-btn').addEventListener('click', () => { 
+    document.getElementById('confirm-cancel-btn').addEventListener('click', async () => {
+        const { hideConfirm } = await import('./ui/modals.js');
+        hideConfirm();
+    });
+    document.getElementById('confirm-ok-btn').addEventListener('click', async () => { 
         const { confirmCallback } = getState();
         if (confirmCallback) { confirmCallback(); } 
+        const { hideConfirm } = await import('./ui/modals.js');
         hideConfirm(); 
     });
 }
@@ -339,7 +345,10 @@ function setupMainAppEventListeners() {
         }
     });
     
-    document.getElementById('currency').addEventListener('change', toggleOptionalFields);
+    document.getElementById('currency').addEventListener('change', async () => {
+        const { toggleOptionalFields } = await import('./ui/modals.js');
+        toggleOptionalFields();
+    });
 
     const groupSelector = document.getElementById('group-selector');
 
