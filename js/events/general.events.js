@@ -6,7 +6,7 @@ import { getState, setState } from '../state.js';
 // 【修改】導入 apiRequest
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
@@ -22,6 +22,8 @@ async function handleShowDetails(symbol) {
 
     // 檢查 state 中是否已存在此股票的交易紀錄
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+    
+    const { openModal } = await import('../ui/modals.js');
 
     if (hasDataLocally) {
         // 如果本地已有數據，直接開啟彈窗
@@ -81,6 +83,7 @@ async function handleUpdateBenchmark() {
 }
 
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
+    const { closeModal } = await import('../ui/modals.js');
     closeModal(modalToClose);
 
     executeApiAction('save_stock_note', noteData, {
@@ -157,14 +160,22 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
 export function initializeGeneralEventListeners() {
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
-    document.getElementById('cancel-notes-btn').addEventListener('click', () => closeModal('notes-modal'));
+    document.getElementById('cancel-notes-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('notes-modal');
+    });
 
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
-            openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
+            // 此處的 openModal 會在 async 函式中被呼叫，但因事件監聽器本身不是 async,
+            // 我們可以這樣處理：
+            (async () => {
+                const { openModal } = await import('../ui/modals.js');
+                openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
+            })();
             return;
         }
 
@@ -213,8 +224,9 @@ export function initializeGeneralEventListeners() {
         }
     });
     
-    document.getElementById('details-modal').addEventListener('click', (e) => {
+    document.getElementById('details-modal').addEventListener('click', async (e) => {
         if (e.target.closest('#close-details-modal-btn')) {
+            const { closeModal } = await import('../ui/modals.js');
             closeModal('details-modal');
             return;
         }
@@ -232,6 +244,7 @@ export function initializeGeneralEventListeners() {
             const { transactions } = getState();
             const txToEdit = transactions.find(t => t.id === txId);
             if (txToEdit) {
+                const { closeModal, openModal } = await import('../ui/modals.js');
                 closeModal('details-modal');
                 openModal('transaction-modal', true, txToEdit);
             }
@@ -241,6 +254,7 @@ export function initializeGeneralEventListeners() {
         const deleteBtn = e.target.closest('.details-delete-tx-btn');
         if (deleteBtn) {
             const txId = deleteBtn.dataset.id;
+            const { showConfirm } = await import('../ui/modals.js');
             showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
                 executeApiAction('delete_transaction', { txId }, {
                     loadingText: '正在刪除交易...',
