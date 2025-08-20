@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.1 - 支援非同步微觀編輯
+// == 交易事件處理模組 (transaction.events.js) v2.2 - 分離編輯與新增流程
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -22,9 +22,7 @@ function handleEdit(button) {
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
     
-    const titleEl = document.getElementById('modal-title');
-    if(titleEl) titleEl.textContent = '編輯交易紀錄 (步驟 1/2)';
-    
+    // openModal 已經會處理標題和按鈕的顯示/隱藏
     openModal('transaction-modal', true, transaction);
 }
 
@@ -56,7 +54,56 @@ function handleSuccessfulUpdate(result) {
     const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol);
     
-    renderTransactionsTable();
+    // 異步更新交易列表的數據源
+    apiRequest('get_transactions_and_splits', {}).then(res => {
+        if (res.success) {
+            setState({
+                transactions: res.data.transactions || [],
+                userSplits: res.data.splits || [],
+            });
+            renderTransactionsTable();
+        }
+    });
+}
+
+/**
+ * 【核心修改】此函式現在專門處理「編輯交易」表單的提交
+ */
+async function handleTransactionFormSubmit(e) {
+    e.preventDefault(); // 防止瀏覽器預設的表單提交行為
+    
+    const txId = document.getElementById('transaction-id').value;
+    // 再次確認這是在編輯模式下
+    if (!txId) return;
+
+    const transactionData = {
+        date: document.getElementById('transaction-date').value,
+        symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+        type: document.querySelector('input[name="transaction-type"]:checked').value,
+        quantity: parseFloat(document.getElementById('quantity').value),
+        price: parseFloat(document.getElementById('price').value),
+        currency: document.getElementById('currency').value,
+        totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+        exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+    };
+
+    if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
+        showNotification('error', '請填寫所有必填欄位。');
+        return;
+    }
+
+    closeModal('transaction-modal');
+
+    // 直接呼叫 edit_transaction API，不再進入群組選擇步驟
+    executeApiAction('edit_transaction', { txId, txData: transactionData }, {
+        loadingText: '正在更新交易紀錄...',
+        successMessage: '交易紀錄已成功更新！',
+        shouldRefreshData: false // 我們將在 then() 中手動處理數據刷新
+    }).then(result => {
+        handleSuccessfulUpdate(result);
+    }).catch(error => {
+        console.error("編輯交易最終失敗:", error);
+    });
 }
 
 
@@ -80,9 +127,14 @@ async function handleDelete(button) {
     });
 }
 
+/**
+ * 此函式現在專門處理「新增交易」流程的第一步
+ */
 async function handleNextStep() {
     const txId = document.getElementById('transaction-id').value;
-    const isEditing = !!txId;
+    // 確保這不是編輯模式
+    if (txId) return;
+
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -100,8 +152,8 @@ async function handleNextStep() {
     }
     
     setState({ tempTransactionData: {
-        isEditing,
-        txId,
+        isEditing: false, // 明確設定為 false
+        txId: null,
         data: transactionData
     }});
 
@@ -117,16 +169,19 @@ async function handleNextStep() {
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', () => {
         setState({ tempTransactionData: null });
-        const titleEl = document.getElementById('modal-title');
-        if(titleEl) titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
+        // openModal 會處理標題和按鈕
         openModal('transaction-modal');
     });
 
+    // 【核心修改】分離事件監聽
+    // 「下一步」按鈕只用於新增流程
     document.getElementById('next-step-btn').addEventListener('click', handleNextStep);
+    // 表單的 submit 事件只用於編輯流程
+    document.getElementById('transaction-form').addEventListener('submit', handleTransactionFormSubmit);
     
     document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
 
-    document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
+    document.getElementById('transactions-tab').addEventListener('click', async (e) => { 
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
             e.preventDefault();
@@ -145,7 +200,6 @@ export function initializeTransactionEventListeners() {
         if (membershipButton) {
             e.preventDefault();
             const txId = membershipButton.dataset.id;
-            // 由於 openModal 現在對於此視窗是非同步的，我們在這裡使用 await
             await openModal('membership-editor-modal', false, { txId });
             return;
         }
