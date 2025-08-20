@@ -342,29 +342,21 @@ function setupMainAppEventListeners() {
     document.getElementById('currency').addEventListener('change', toggleOptionalFields);
 
     const groupSelector = document.getElementById('group-selector');
-    const recalcBtn = document.getElementById('recalculate-group-btn');
 
+    // 【核心修改】簡化事件監聽器邏輯
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
         if (selectedGroupId === 'all') {
-            recalcBtn.classList.add('hidden');
+            // 切換回「全部股票」視圖
             document.getElementById('loading-overlay').style.display = 'flex';
-            // 【重要修改】當切換回 'all' 時，應觸發完整的標準載入流程
-            // 這裡我們暫時用一個假的 reload 來簡化，理想情況是呼叫一個重置並重新載入的函式
-            window.location.reload(); 
+            loadInitialDashboard(); 
         } else {
-            recalcBtn.classList.remove('hidden');
-            showNotification('info', `已選擇群組。請點擊「計算群組績效」按鈕以檢視報表。`);
-        }
-    });
-
-    recalcBtn.addEventListener('click', () => {
-        const { selectedGroupId } = getState();
-        if (selectedGroupId && selectedGroupId !== 'all') {
+            // 直接計算並顯示選定的群組視圖
             applyGroupView(selectedGroupId);
         }
     });
+
 }
 
 export function initializeAppUI() {
