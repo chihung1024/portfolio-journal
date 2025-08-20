@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢
+// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢 (優化後)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -105,36 +105,72 @@ export function stopLiveRefresh() {
 }
 
 
-export async function loadInitialDashboardAndHoldings() {
+/**
+ * 【新函式】第一階段：僅載入儀表板摘要
+ */
+export async function loadInitialDashboard() {
     try {
-        const result = await apiRequest('get_dashboard_and_holdings', {});
+        const result = await apiRequest('get_dashboard_summary', {}); // <-- 呼叫新的超輕量 API
         if (!result.success) throw new Error(result.message);
 
-        const { summary, holdings, stockNotes } = result.data;
-        const holdingsObject = (holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
+        const { summary, stockNotes } = result.data;
+        
         const stockNotesMap = (stockNotes || []).reduce((map, note) => {
             map[note.symbol] = note; return map;
         }, {});
 
         setState({
-            holdings: holdingsObject,
+            // 先用空的 holdings 初始化，避免錯誤
+            holdings: {},
             stockNotes: stockNotesMap,
             summary: summary
         });
 
-        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable(holdingsObject);
+        // 核心：立即更新儀表板，並顯示一個空的持股表格
+        updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+        renderHoldingsTable({}); // 傳入空物件，會顯示 "沒有持股紀錄..." 的訊息
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
     } catch (error) {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
+        // 完成後，無論成功或失敗，都隱藏主讀取畫面
         document.getElementById('loading-overlay').style.display = 'none';
-        setTimeout(loadChartDataInBackground, 500);
+        // 立即在背景啟動後續數據的載入
+        setTimeout(() => {
+            loadHoldingsInBackground(); // 載入持股
+            loadChartDataInBackground(); // 載入圖表
+        }, 100); // 短暫延遲確保 UI 渲染完成
     }
 }
+
+/**
+ * 【新函式】第二階段：在背景載入持股列表
+ */
+async function loadHoldingsInBackground() {
+    try {
+        console.log("正在背景載入持股數據...");
+        const result = await apiRequest('get_holdings', {}); // <-- 呼叫新的持股專用 API
+        if (result.success) {
+            const { holdings } = result.data;
+            const holdingsObject = (holdings || []).reduce((obj, item) => {
+                obj[item.symbol] = item; return obj;
+            }, {});
+            
+            setState({ holdings: holdingsObject });
+            
+            // 數據回來後，重新渲染儀表板和持股表格
+            const { summary } = getState();
+            updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+            renderHoldingsTable(holdingsObject);
+            console.log("持股數據載入完成。");
+        }
+    } catch (error) {
+        console.error('背景載入持股數據失敗:', error);
+        showNotification('error', '持股列表載入失敗。');
+    }
+}
+
 
 async function loadChartDataInBackground() {
     try {
@@ -314,7 +350,9 @@ function setupMainAppEventListeners() {
         if (selectedGroupId === 'all') {
             recalcBtn.classList.add('hidden');
             document.getElementById('loading-overlay').style.display = 'flex';
-            loadInitialDashboardAndHoldings();
+            // 【重要修改】當切換回 'all' 時，應觸發完整的標準載入流程
+            // 這裡我們暫時用一個假的 reload 來簡化，理想情況是呼叫一個重置並重新載入的函式
+            window.location.reload(); 
         } else {
             recalcBtn.classList.remove('hidden');
             showNotification('info', `已選擇群組。請點擊「計算群組績效」按鈕以檢視報表。`);
