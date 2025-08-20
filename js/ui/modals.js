@@ -88,6 +88,12 @@ async function submitAttributionAndSaveTransaction() {
         loadingText: '正在儲存交易與群組設定...',
         successMessage: successMessage,
         shouldRefreshData: true
+    }).then(() => {
+        // 【BUG FIX】在核心數據刷新後，手動觸發一次群組列表的刷新
+        // 這樣可以確保新增的群組能夠立刻顯示在UI上
+        if (action === 'add_transaction' && (newGroups.length > 0 || selectedGroupIds.length > 0)) {
+            loadGroups();
+        }
     }).catch(error => {
         console.error("儲存交易最終失敗:", error);
     });
