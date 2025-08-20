@@ -93,6 +93,13 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
  * 統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
 function updateAppWithData(portfolioData) {
+    // 【BUG FIX】將交易與拆股的狀態更新移至此處最前方
+    // 確保在所有渲染函式被呼叫前，狀態(state)已經是最新
+    setState({
+        transactions: portfolioData.transactions || [],
+        userSplits: portfolioData.splits || [],
+    });
+
     const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
         map[note.symbol] = note;
         return map;
@@ -127,26 +134,23 @@ function updateAppWithData(portfolioData) {
     });
     
     renderHoldingsTable(holdingsObject);
-    renderTransactionsTable(); 
+    renderTransactionsTable(); // 現在此函式會使用上面剛更新的 transaction 狀態
     renderSplitsTable();
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
-    // ========================= 【核心修改 - 開始】 =========================
     const { selectedGroupId, groups } = getState();
-    let seriesName = '投資組合'; // 預設名稱
+    let seriesName = '投資組合'; 
     if (selectedGroupId && selectedGroupId !== 'all') {
         const selectedGroup = groups.find(g => g.id === selectedGroupId);
         if (selectedGroup) {
-            seriesName = selectedGroup.name; // 如果是群組視圖，使用群組名稱
+            seriesName = selectedGroup.name; 
         }
     }
     
-    // 將決定的名稱傳遞給圖表更新函式
     updateAssetChart(seriesName); 
     updateNetProfitChart(seriesName);
     const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol, seriesName);
-    // ========================= 【核心修改 - 結束】 =========================
 
     document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
@@ -176,12 +180,8 @@ export async function loadPortfolioData() {
     try {
         const result = await apiRequest('get_data', {});
         
+        // 此函式現在會處理所有必要的狀態更新和 UI 渲染
         updateAppWithData(result.data);
-        
-        setState({
-            transactions: result.data.transactions || [],
-            userSplits: result.data.splits || [],
-        });
 
     } catch (error) {
         console.error('Failed to load portfolio data:', error);
