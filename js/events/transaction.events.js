@@ -5,7 +5,7 @@
 import { getState, setState } from '../state.js';
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js';
+// import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { updateDashboard } from '../ui/dashboard.js';
@@ -16,7 +16,7 @@ import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 
 // --- Private Functions (內部函式) ---
 
-function handleEdit(button) {
+async function handleEdit(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
     const transaction = transactions.find(t => t.id === txId);
@@ -25,6 +25,7 @@ function handleEdit(button) {
     const titleEl = document.getElementById('modal-title');
     if(titleEl) titleEl.textContent = '編輯交易紀錄 (步驟 1/2)';
     
+    const { openModal } = await import('../ui/modals.js');
     openModal('transaction-modal', true, transaction);
 }
 
@@ -63,6 +64,7 @@ function handleSuccessfulUpdate(result) {
 async function handleDelete(button) {
     const txId = button.dataset.id;
     
+    const { showConfirm } = await import('../ui/modals.js');
     showConfirm('確定要刪除這筆交易紀錄嗎？此操作將同時移除此交易在所有群組中的紀錄。', () => {
         executeApiAction('delete_transaction', { txId }, {
             loadingText: '正在刪除交易紀錄...',
@@ -104,7 +106,8 @@ async function handleNextStep() {
         txId,
         data: transactionData
     }});
-
+    
+    const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
     closeModal('transaction-modal');
 
     setTimeout(() => {
@@ -115,16 +118,21 @@ async function handleNextStep() {
 // --- Public Function (公開函式，由 main.js 呼叫) ---
 
 export function initializeTransactionEventListeners() {
-    document.getElementById('add-transaction-btn').addEventListener('click', () => {
+    document.getElementById('add-transaction-btn').addEventListener('click', async () => {
         setState({ tempTransactionData: null });
         const titleEl = document.getElementById('modal-title');
         if(titleEl) titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
+        
+        const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
 
     document.getElementById('next-step-btn').addEventListener('click', handleNextStep);
     
-    document.getElementById('cancel-btn').addEventListener('click', () => closeModal('transaction-modal'));
+    document.getElementById('cancel-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('transaction-modal');
+    });
 
     document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
         const editButton = e.target.closest('.edit-btn');
@@ -146,6 +154,7 @@ export function initializeTransactionEventListeners() {
             e.preventDefault();
             const txId = membershipButton.dataset.id;
             // 由於 openModal 現在對於此視窗是非同步的，我們在這裡使用 await
+            const { openModal } = await import('../ui/modals.js');
             await openModal('membership-editor-modal', false, { txId });
             return;
         }
