@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v1.2 - 最終 group_id 讀取修正)
+// == 檔案：functions/api_handlers/portfolio.handler.js (優化後)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
@@ -44,7 +44,36 @@ exports.getData = async (uid, res) => {
 };
 
 /**
- * 【新增】輕量級 API：只獲取儀表板和持股數據
+ * 【新增】超輕量級 API：只獲取儀表板摘要數據
+ */
+exports.getDashboardSummary = async (uid, res) => {
+    const [summaryResult, stockNotes] = await Promise.all([
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+        d1Client.query('SELECT symbol, target_price, stop_loss_price FROM user_stock_notes WHERE uid = ?', [uid]) // 只拿筆記中的關鍵價格欄位
+    ]);
+
+    const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            summary: summaryData,
+            stockNotes // 將筆記數據一併回傳，因為它很小且儀表板會用到
+        }
+    });
+};
+
+/**
+ * 【新增】API：只獲取持股列表 (Holdings)
+ */
+exports.getHoldings = async (uid, res) => {
+    const holdings = await d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+    return res.status(200).send({ success: true, data: { holdings } });
+};
+
+
+/**
+ * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據 (此函式現在可被拆分的 API 取代，但暫時保留以防萬一)
  */
 exports.getDashboardAndHoldings = async (uid, res) => {
     const [holdings, summaryResult, stockNotes] = await Promise.all([
