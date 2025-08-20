@@ -87,8 +87,15 @@ exports.unifiedPortfolioHandler = functions.region('asia-east1').https.onRequest
                     return await portfolioHandlers.getData(uid, res);
                 case 'update_benchmark':
                     return await portfolioHandlers.updateBenchmark(uid, data, res);
+                // 【舊 API - get_dashboard_and_holdings - 維持不變，向下相容】
                 case 'get_dashboard_and_holdings':
                     return await portfolioHandlers.getDashboardAndHoldings(uid, res);
+                // 【新增的輕量級 API】
+                case 'get_dashboard_summary':
+                    return await portfolioHandlers.getDashboardSummary(uid, res);
+                case 'get_holdings':
+                    return await portfolioHandlers.getHoldings(uid, res);
+                // 【維持不變的 API】
                 case 'get_transactions_and_splits':
                     return await portfolioHandlers.getTransactionsAndSplits(uid, res);
                 case 'get_chart_data':
