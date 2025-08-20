@@ -4,7 +4,7 @@
 
 import { getState, setState } from '../state.js';
 import { apiRequest } from '../api.js';
-import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
 
@@ -76,6 +76,7 @@ async function handleGroupFormSubmit(e) {
 
     try {
         await apiRequest('save_group', groupData);
+        const { closeModal } = await import('../ui/modals.js');
         closeModal('group-modal');
         showNotification('success', '群組已成功儲存！');
         await loadGroups();
@@ -90,12 +91,13 @@ async function handleGroupFormSubmit(e) {
 /**
  * 處理刪除群組按鈕點擊
  */
-function handleDeleteGroup(button) {
+async function handleDeleteGroup(button) {
     const groupId = button.dataset.groupId;
     const { groups } = getState();
     const group = groups.find(g => g.id === groupId);
     if (!group) return;
 
+    const { showConfirm } = await import('../ui/modals.js');
     showConfirm(`您確定要刪除群組 "${group.name}" 嗎？此操作無法復原。`, async () => {
         try {
             await apiRequest('delete_group', { groupId });
@@ -114,6 +116,7 @@ export function initializeGroupEventListeners() {
     document.getElementById('groups-tab').addEventListener('click', async (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
+            const { openModal } = await import('../ui/modals.js');
             openModal('group-modal');
             renderGroupModal(null);
             return;
@@ -133,6 +136,7 @@ export function initializeGroupEventListeners() {
                 const result = await apiRequest('get_group_details', { groupId });
                 if (result.success) {
                     const groupToEdit = result.data;
+                    const { openModal } = await import('../ui/modals.js');
                     openModal('group-modal');
                     renderGroupModal(groupToEdit);
                 } else {
@@ -155,7 +159,10 @@ export function initializeGroupEventListeners() {
     });
 
     document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
-    document.getElementById('cancel-group-btn').addEventListener('click', () => closeModal('group-modal'));
+    document.getElementById('cancel-group-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('group-modal');
+    });
     
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {
