@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v2.8.2
+// == 身份驗證模組 (auth.js) v2.8.2 (優化後)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -15,7 +15,7 @@ import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
 // 【修改】從 main.js 引入新的函式
-import { initializeAppUI, loadInitialDashboardAndHoldings, startLiveRefresh, stopLiveRefresh } from './main.js';
+import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -50,7 +50,7 @@ export function initializeAuth() {
             loadingText.textContent = '正在讀取核心資產數據...';
             loadingOverlay.style.display = 'flex';
             
-            loadInitialDashboardAndHoldings(); // <--- 呼叫新的輕量級載入函式
+            loadInitialDashboard(); // <--- 呼叫新的、超輕量級的載入函式
 
             // 【新增】在初始資料載入後，啟動自動刷新
             startLiveRefresh();
