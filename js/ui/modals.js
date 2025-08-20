@@ -71,7 +71,7 @@ async function submitAttributionAndSaveTransaction() {
                            .map(cb => ({ tempId: cb.value, name: cb.dataset.newName }));
 
     const finalPayload = {
-        transactionData: tempTransactionData.data,
+        txData: tempTransactionData.data, // 【核心修正】將 'transactionData' 改為 'txData'
         groupInclusions: selectedGroupIds,
         newGroups: newGroups,
     };
@@ -80,7 +80,7 @@ async function submitAttributionAndSaveTransaction() {
 
     const action = tempTransactionData.isEditing ? 'edit_transaction' : 'add_transaction';
     const payloadForApi = tempTransactionData.isEditing 
-        ? { txId: tempTransactionData.txId, txData: finalPayload.transactionData, groupInclusions: finalPayload.groupInclusions, newGroups: finalPayload.newGroups }
+        ? { txId: tempTransactionData.txId, txData: finalPayload.txData, groupInclusions: finalPayload.groupInclusions, newGroups: finalPayload.newGroups }
         : finalPayload;
     const successMessage = tempTransactionData.isEditing ? '交易已成功更新！' : '交易已成功新增！';
 
