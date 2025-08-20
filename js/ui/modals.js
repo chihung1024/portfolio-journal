@@ -127,7 +127,8 @@ export async function openModal(modalId, isEdit = false, data = null) {
     if (modalId === 'transaction-modal') {
         document.getElementById('transaction-id').value = '';
         if (isEdit && data) {
-            document.getElementById('modal-title').textContent = '編輯交易紀錄 (步驟 1/2)';
+            // 【核心修改】簡化編輯模式下的標題
+            document.getElementById('modal-title').textContent = '編輯交易紀錄';
             document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
             document.getElementById('stock-symbol').value = data.symbol;
@@ -138,6 +139,7 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
+            // 新增模式下的標題維持不變
             document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
