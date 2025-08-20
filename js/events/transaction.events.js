@@ -22,8 +22,9 @@ async function handleEdit(button) {
     const transaction = transactions.find(t => t.id === txId);
     if (!transaction) return;
     
+    // 確保標題正確
     const titleEl = document.getElementById('modal-title');
-    if(titleEl) titleEl.textContent = '編輯交易紀錄 (步驟 1/2)';
+    if(titleEl) titleEl.textContent = '編輯交易紀錄';
     
     const { openModal } = await import('../ui/modals.js');
     openModal('transaction-modal', true, transaction);
@@ -101,18 +102,37 @@ async function handleNextStep() {
         return;
     }
     
-    setState({ tempTransactionData: {
-        isEditing,
-        txId,
-        data: transactionData
-    }});
-    
     const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
     closeModal('transaction-modal');
 
-    setTimeout(() => {
-        openGroupAttributionModal();
-    }, 150);
+    if (isEditing) {
+        // 【核心修改】如果是編輯模式，直接儲存，不再進入第二步
+        const payloadForApi = { txId: txId, txData: transactionData };
+        executeApiAction('edit_transaction', payloadForApi, {
+            loadingText: '正在儲存變更...',
+            successMessage: '交易已成功更新！',
+            shouldRefreshData: false
+        }).then(result => {
+             // 編輯成功後，需要手動更新 state 中的 transactions 陣列
+            const { transactions } = getState();
+            const updatedTransactions = transactions.map(t => t.id === txId ? { ...t, ...transactionData } : t);
+            setState({ transactions: updatedTransactions });
+            handleSuccessfulUpdate(result);
+        }).catch(error => {
+            console.error("編輯交易最終失敗:", error);
+        });
+    } else {
+        // 【維持不變】如果是新增模式，則進入第二步的群組歸屬流程
+        setState({ tempTransactionData: {
+            isEditing,
+            txId,
+            data: transactionData
+        }});
+
+        setTimeout(() => {
+            openGroupAttributionModal();
+        }, 150);
+    }
 }
 
 // --- Public Function (公開函式，由 main.js 呼叫) ---
@@ -120,16 +140,14 @@ async function handleNextStep() {
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
         setState({ tempTransactionData: null });
-        const titleEl = document.getElementById('modal-title');
-        if(titleEl) titleEl.textContent = '新增交易紀錄 (步驟 1/2)';
         
         const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
 
-    document.getElementById('next-step-btn').addEventListener('click', handleNextStep);
+    document.getElementById('confirm-transaction-btn').addEventListener('click', handleNextStep);
     
-    document.getElementById('cancel-btn').addEventListener('click', async () => {
+    document.getElementById('cancel-transaction-btn').addEventListener('click', async () => {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('transaction-modal');
     });
@@ -153,7 +171,6 @@ export function initializeTransactionEventListeners() {
         if (membershipButton) {
             e.preventDefault();
             const txId = membershipButton.dataset.id;
-            // 由於 openModal 現在對於此視窗是非同步的，我們在這裡使用 await
             const { openModal } = await import('../ui/modals.js');
             await openModal('membership-editor-modal', false, { txId });
             return;
