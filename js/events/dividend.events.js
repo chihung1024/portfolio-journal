@@ -6,7 +6,7 @@
 import { getState, setState } from '../state.js';
 // [核心修改] 導入 executeApiAction，不再需要 loadPortfolioData
 import { apiRequest, executeApiAction } from '../api.js';
-import { openModal, closeModal, showConfirm } from '../ui/modals.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
 // [核心修改] 從 main.js 引入 loadAndShowDividends，因為它是跨模組調用的
@@ -20,6 +20,7 @@ async function handleBulkConfirm() {
         showNotification('info', '沒有需要確認的配息。');
         return;
     }
+    const { showConfirm } = await import('../ui/modals.js');
     showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, () => {
         // [核心修改] 使用 executeApiAction 處理
         executeApiAction('bulk_confirm_all_dividends', { pendingDividends }, {
@@ -52,6 +53,7 @@ async function handleDividendFormSubmit(e) {
     };
     if (isEditing) { dividendData.id = id; }
     
+    const { closeModal } = await import('../ui/modals.js');
     closeModal('dividend-modal');
 
     // [核心修改] 使用 executeApiAction 處理
@@ -68,6 +70,7 @@ async function handleDividendFormSubmit(e) {
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
+    const { showConfirm } = await import('../ui/modals.js');
     showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', () => {
         // [核心修改] 使用 executeApiAction 處理
         executeApiAction('delete_user_dividend', { dividendId }, {
@@ -86,7 +89,7 @@ async function handleDeleteDividend(button) {
 
 export function initializeDividendEventListeners() {
     // 監聽配息管理分頁內的所有互動
-    document.getElementById('dividends-tab').addEventListener('click', (e) => {
+    document.getElementById('dividends-tab').addEventListener('click', async (e) => {
         const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
         if (bulkConfirmBtn) {
             handleBulkConfirm();
@@ -94,11 +97,13 @@ export function initializeDividendEventListeners() {
         }
         const editBtn = e.target.closest('.edit-dividend-btn');
         if (editBtn) {
+            const { openModal } = await import('../ui/modals.js');
             openModal('dividend-modal', true, { id: editBtn.dataset.id });
             return;
         }
         const confirmBtn = e.target.closest('.confirm-dividend-btn');
         if (confirmBtn) {
+            const { openModal } = await import('../ui/modals.js');
             openModal('dividend-modal', false, { index: confirmBtn.dataset.index });
             return;
         }
@@ -119,9 +124,13 @@ export function initializeDividendEventListeners() {
     
     // 監聽配息表單的提交與取消
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
-    document.getElementById('cancel-dividend-btn').addEventListener('click', () => closeModal('dividend-modal'));
-    document.getElementById('dividend-history-modal').addEventListener('click', (e) => {
+    document.getElementById('cancel-dividend-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('dividend-modal');
+    });
+    document.getElementById('dividend-history-modal').addEventListener('click', async (e) => {
         if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
+            const { closeModal } = await import('../ui/modals.js');
             closeModal('dividend-history-modal');
         }
     });
