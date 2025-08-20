@@ -78,6 +78,7 @@ async function handleDelete(button) {
             setState({ transactions: updatedTransactions });
             
             handleSuccessfulUpdate(result);
+            loadGroups(); // 【BUG FIX】在刪除成功後，手動刷新群組列表
         }).catch(error => {
             console.error("刪除交易最終失敗:", error);
         });
