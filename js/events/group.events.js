@@ -1,6 +1,5 @@
 // =========================================================================================
 // == 檔案：js/events/group.events.js (v2.2 - 修正編輯邏輯)
-// == 職責：處理所有與群組管理相關的用戶互動事件
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -43,14 +42,10 @@ function updateGroupSelector() {
         selector.appendChild(option);
     });
 
+    // 確保在群組被刪除或變更後，選擇器能正確地反映當前狀態
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
     
-    const recalcBtn = document.getElementById('recalculate-group-btn');
-    if (selector.value !== 'all') {
-         recalcBtn.classList.remove('hidden');
-    } else {
-         recalcBtn.classList.add('hidden');
-    }
+    // 【核心修改】移除對 #recalculate-group-btn 的操作，因為該按鈕已被刪除
 }
 
 /**
