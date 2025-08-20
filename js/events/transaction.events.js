@@ -12,6 +12,7 @@ import { updateDashboard } from '../ui/dashboard.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
+import { loadGroups } from './group.events.js'; // 【BUG FIX】導入 loadGroups 函式
 
 
 // --- Private Functions (內部函式) ---
@@ -118,6 +119,7 @@ async function handleNextStep() {
             const updatedTransactions = transactions.map(t => t.id === txId ? { ...t, ...transactionData } : t);
             setState({ transactions: updatedTransactions });
             handleSuccessfulUpdate(result);
+            loadGroups(); // 【BUG FIX】手動刷新群組列表
         }).catch(error => {
             console.error("編輯交易最終失敗:", error);
         });
