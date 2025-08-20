@@ -126,8 +126,12 @@ export async function openModal(modalId, isEdit = false, data = null) {
 
     if (modalId === 'transaction-modal') {
         document.getElementById('transaction-id').value = '';
+        const confirmBtn = document.getElementById('confirm-transaction-btn');
+        
         if (isEdit && data) {
-            document.getElementById('modal-title').textContent = '編輯交易紀錄 (步驟 1/2)';
+            document.getElementById('modal-title').textContent = '編輯交易紀錄';
+            if(confirmBtn) confirmBtn.textContent = '儲存變更';
+            
             document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
             document.getElementById('stock-symbol').value = data.symbol;
@@ -139,6 +143,7 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
             document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
+            if(confirmBtn) confirmBtn.textContent = '下一步';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
