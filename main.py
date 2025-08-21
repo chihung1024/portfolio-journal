@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v5.4 - Hyper-Detailed Debug Logging)
+# == Python 每日增量更新腳本 (v5.6 - Fix CLOSED Session Logic)
 # =========================================================================================
 
 import os
@@ -59,19 +59,19 @@ def get_update_targets():
     print("正在全面獲取所有需要更新的金融商品列表...")
     all_symbols, currency_to_fx = set(), {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
     
-    holdings_sql = "SELECT DISTINCT symbol FROM holdings"
+    holdings_sql = "SELECT DISTINCT upper(symbol) as symbol FROM holdings"
     holdings_results = d1_query(holdings_sql, api_key=D1_API_KEY)
     if holdings_results:
         for row in holdings_results: all_symbols.add(row['symbol'])
             
-    currencies_sql = "SELECT DISTINCT currency FROM transactions"
+    currencies_sql = "SELECT DISTINCT upper(currency) as currency FROM transactions"
     currencies_results = d1_query(currencies_sql, api_key=D1_API_KEY)
     if currencies_results:
         for row in currencies_results:
             currency = row.get('currency')
             if currency in currency_to_fx: all_symbols.add(currency_to_fx[currency])
 
-    benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
+    benchmark_sql = "SELECT DISTINCT upper(value) AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql, api_key=D1_API_KEY)
     if benchmark_results:
         for row in benchmark_results: all_symbols.add(row['symbol'])
@@ -92,7 +92,6 @@ def get_current_market_session():
     if 13 <= now_utc.hour < 20 and now_utc.weekday() < 5: return 'NYSE'
     return 'CLOSED'
 
-# ========================= 【核心優化 - 開始：超詳細日誌】 =========================
 def fetch_intraday_prices(symbols):
     print("\n--- 【即時更新階段】開始抓取盤中最新價格 ---")
     if not symbols: return {}
@@ -109,10 +108,12 @@ def fetch_intraday_prices(symbols):
     latest_prices, skipped_symbols = {}, {}
     
     if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.set_levels([lvl.upper() for lvl in data.columns.levels[1]], level=1)
         data.columns = data.columns.swaplevel(0, 1)
-
+    
     print("逐筆檢查 yfinance 回傳數據...")
-    for symbol in symbols:
+    for symbol_orig in symbols:
+        symbol = symbol_orig.upper()
         try:
             symbol_data = data[symbol] if isinstance(data.columns, pd.MultiIndex) else data
             if not isinstance(symbol_data, pd.DataFrame) or symbol_data.empty or symbol_data['Close'].isnull().all():
@@ -123,20 +124,18 @@ def fetch_intraday_prices(symbols):
             last_price = last_valid_row['Close']
             last_timestamp = last_valid_row.name 
 
-            # 新增：檢查價格是否為有效數字
             if pd.isna(last_price):
                 skipped_symbols[symbol] = f"最新的價格值為無效數字(NaN)"
                 continue
 
             is_fx = "=" in symbol
-            is_tw_stock = '.TW' in symbol.upper() or '.TWO' in symbol.upper()
+            is_tw_stock = '.TW' in symbol or '.TWO' in symbol
             market_tz = tz_taipei if is_tw_stock or is_fx else tz_ny
             
             price_date_in_market_tz = last_timestamp.tz_convert(market_tz).date()
             today_in_market_tz = datetime.now(market_tz).date()
 
             if price_date_in_market_tz == today_in_market_tz:
-                # 成功獲取，先在日誌中明確記錄下來
                 print(f"  [成功] {symbol}: 價格 {last_price:.4f} @ {price_date_in_market_tz.strftime('%Y-%m-%d')}")
                 latest_prices[symbol] = {"price": last_price, "date": price_date_in_market_tz.strftime('%Y-%m-%d')}
             else:
@@ -149,22 +148,22 @@ def fetch_intraday_prices(symbols):
         print(f"成功獲取 {len(latest_prices)} 筆有效的盤中最新價格。")
     else:
         print("未獲取到任何有效的盤中最新價格。")
-        
     if skipped_symbols:
         print(f"跳過了 {len(skipped_symbols)} 筆標的:")
-        for symbol, reason in skipped_symbols.items():
-            print(f"  - {symbol}: {reason}")
+        for symbol, reason in skipped_symbols.items(): print(f"  - {symbol}: {reason}")
     
     return latest_prices
-# ========================= 【核心優化 - 結束】 =========================
 
-def fetch_and_append_market_data(symbols, batch_size=10):
+# ========================= 【核心修正 - 開始】 =========================
+# == 修改 fetch_and_append_market_data 函式，使其接收 session 參數
+# =========================================================================================
+def fetch_and_append_market_data(symbols, session, batch_size=10):
     if not symbols: return
     print("\n--- 【歷史數據階段】開始更新每日歷史收盤價 ---")
     
     placeholders_all = ','.join('?' for _ in symbols)
-    all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders_all}) GROUP BY symbol"
-    first_tx_dates_results = d1_query(all_first_tx_sql, symbols, api_key=D1_API_KEY)
+    all_first_tx_sql = f"SELECT upper(symbol) as symbol, MIN(date) as first_tx_date FROM transactions WHERE upper(symbol) IN ({placeholders_all}) GROUP BY symbol"
+    first_tx_dates_results = d1_query(all_first_tx_sql, [s.upper() for s in symbols], api_key=D1_API_KEY)
     first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
     
     today_str = datetime.now().strftime('%Y-%m-%d')
@@ -173,19 +172,21 @@ def fetch_and_append_market_data(symbols, batch_size=10):
     for i, batch in enumerate(symbol_batches):
         print(f"\n--- 正在處理歷史數據批次 {i+1}/{len(symbol_batches)}: {batch} ---")
         
-        placeholders = ','.join('?' for _ in batch)
-        price_history_sql = f"SELECT symbol, MAX(date) as latest_date FROM price_history WHERE symbol IN ({placeholders}) GROUP BY symbol"
-        price_results = d1_query(price_history_sql, batch, api_key=D1_API_KEY)
-        exchange_rates_sql = f"SELECT symbol, MAX(date) as latest_date FROM exchange_rates WHERE symbol IN ({placeholders}) GROUP BY symbol"
-        fx_results = d1_query(exchange_rates_sql, batch, api_key=D1_API_KEY)
+        upper_batch = [s.upper() for s in batch]
+        placeholders = ','.join('?' for _ in upper_batch)
+        price_history_sql = f"SELECT upper(symbol) as symbol, MAX(date) as latest_date FROM price_history WHERE upper(symbol) IN ({placeholders}) GROUP BY symbol"
+        price_results = d1_query(price_history_sql, upper_batch, api_key=D1_API_KEY)
+        exchange_rates_sql = f"SELECT upper(symbol) as symbol, MAX(date) as latest_date FROM exchange_rates WHERE upper(symbol) IN ({placeholders}) GROUP BY symbol"
+        fx_results = d1_query(exchange_rates_sql, upper_batch, api_key=D1_API_KEY)
         
         latest_dates = {row['symbol']: row['latest_date'].split('T')[0] for row in (price_results or []) if row.get('latest_date')}
         latest_dates.update({row['symbol']: row['latest_date'].split('T')[0] for row in (fx_results or []) if row.get('latest_date')})
         
         start_dates, symbols_to_fetch = {}, []
         for symbol in batch:
-            latest_date_str = latest_dates.get(symbol)
-            start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol, "2000-01-01")
+            symbol_upper = symbol.upper()
+            latest_date_str = latest_dates.get(symbol_upper)
+            start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol_upper, "2000-01-01")
             if start_date <= today_str:
                 start_dates[symbol] = start_date
                 symbols_to_fetch.append(symbol)
@@ -198,13 +199,14 @@ def fetch_and_append_market_data(symbols, batch_size=10):
         def yf_historical_func():
             return yf.download(tickers=symbols_to_fetch, start=min(start_dates.values()), interval="1d", auto_adjust=False, back_adjust=False, progress=False)
         data = robust_request(yf_historical_func, name="YFinance Historical Download")
-        if data is None or data.empty:
-            print("yfinance 沒有回傳任何新的歷史數據。")
-            continue
+        if data is None or data.empty: continue
         
-        print(f"成功抓取到歷史數據，共 {len(data)} 筆時間紀錄。")
         db_ops_upsert, symbols_successfully_processed = [], []
-        for symbol in symbols_to_fetch:
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.set_levels([lvl.upper() for lvl in data.columns.levels[1]], level=1)
+        
+        for symbol_orig in symbols_to_fetch:
+            symbol = symbol_orig.upper()
             symbol_data = pd.DataFrame() 
             if isinstance(data.columns, pd.MultiIndex):
                 try:
@@ -216,7 +218,7 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             is_fx = "=" in symbol
             price_table, dividend_table = ("exchange_rates", None) if is_fx else ("price_history", "dividend_history")
             if symbol_data.empty or 'Close' not in symbol_data.columns or symbol_data['Close'].isnull().all(): continue
-            symbol_data = symbol_data.dropna(subset=['Close']); symbol_data = symbol_data[symbol_data.index >= pd.to_datetime(start_dates[symbol])]
+            symbol_data = symbol_data.dropna(subset=['Close']); symbol_data = symbol_data[symbol_data.index >= pd.to_datetime(start_dates[symbol_orig])]
             if symbol_data.empty: continue
             
             for _, row in symbol_data[['Close']].reset_index().iterrows():
@@ -230,28 +232,34 @@ def fetch_and_append_market_data(symbols, batch_size=10):
             print(f"成功！ 批次 {batch} 的歷史數據已安全地更新/寫入。")
             coverage_updates = []
             for symbol in symbols_successfully_processed:
-                if start_dates.get(symbol, first_tx_dates.get(symbol)):
-                    coverage_updates.append({"sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)", "params": [symbol, start_dates.get(symbol, first_tx_dates.get(symbol)), today_str]})
+                if first_tx_dates.get(symbol):
+                    coverage_updates.append({"sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)", "params": [symbol, first_tx_dates.get(symbol), today_str]})
             if coverage_updates and not d1_batch(coverage_updates, api_key=D1_API_KEY): print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
             
-    latest_prices_info = fetch_intraday_prices(symbols)
-    if latest_prices_info:
-        intraday_db_ops = []
-        # ========================= 【核心優化 - 開始：寫入前日誌】 =========================
-        print(f"\n準備將 {len(latest_prices_info)} 筆盤中價格寫入資料庫...")
-        for symbol, info in latest_prices_info.items():
-            is_fx = "=" in symbol
-            table_name = "exchange_rates" if is_fx else "price_history"
-            sql = f"INSERT INTO {table_name} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;"
-            params = [symbol, info['date'], info['price']]
-            # 新增的詳細日誌
-            print(f"  [排隊寫入] {symbol} -> {params}")
-            intraday_db_ops.append({"sql": sql, "params": params})
-        # ========================= 【核心優化 - 結束】 =========================
-        
-        if intraday_db_ops:
-            if d1_batch(intraday_db_ops, api_key=D1_API_KEY): print("資料庫批次寫入請求已成功發送！")
-            else: print("FATAL: 資料庫批次寫入請求失敗！")
+    # 新增的條件判斷：只有在市場不是 CLOSED 狀態時，才執行即時更新
+    if session != 'CLOSED':
+        latest_prices_info = fetch_intraday_prices(symbols)
+        if latest_prices_info:
+            intraday_db_ops = []
+            print(f"\n準備將 {len(latest_prices_info)} 筆盤中價格寫入資料庫...")
+            for symbol, info in latest_prices_info.items():
+                symbol_upper = symbol.upper()
+                is_fx = "=" in symbol_upper
+                table_name = "exchange_rates" if is_fx else "price_history"
+                sql = f"INSERT INTO {table_name} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;"
+                params = [symbol_upper, info['date'], info['price']]
+                print(f"  [排隊寫入] {symbol_upper} -> {params}")
+                intraday_db_ops.append({"sql": sql, "params": params})
+            
+            if intraday_db_ops:
+                if d1_batch(intraday_db_ops, api_key=D1_API_KEY): print("資料庫批次寫入請求已成功發送！")
+                else: print("FATAL: 資料庫批次寫入請求失敗！")
+    else:
+        # 如果是 CLOSED 狀態，則明確印出跳過訊息
+        print("\n--- 【即時更新階段】跳過：市場休市中。 ---")
+
+# ========================= 【核心修正 - 結束】 =========================
+
 
 def trigger_recalculations(uids):
     if not uids: print("沒有找到需要觸發重算的使用者。"); return
@@ -270,8 +278,9 @@ def trigger_recalculations(uids):
     elif response: print(f"觸發全部重算失敗. 狀態碼: {response.status_code}, 回應: {response.text}")
     else: print("觸發全部重算最終失敗。")
 
+
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.4 - Hyper-Detailed Debug Logging) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.6 - Fix CLOSED Session Logic) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
@@ -283,13 +292,14 @@ if __name__ == "__main__":
     elif session == 'NYSE':
         print("篩選目標：僅處理非台股的美股及其他國際市場標的。")
         symbols_to_process = [s for s in all_symbols if not s.upper().endswith(('.TW', '.TWO'))]
-    else:
+    else: # 'CLOSED'
         print("市場休市中，腳本將僅執行歷史數據補全，不抓取即時盤中價。")
         symbols_to_process = all_symbols
 
     if symbols_to_process:
         print(f"最終將處理 {len(symbols_to_process)} 個標的: {symbols_to_process}")
-        fetch_and_append_market_data(symbols_to_process)
+        # 【核心修正】將 session 狀態傳遞下去
+        fetch_and_append_market_data(symbols_to_process, session)
         if all_uids: trigger_recalculations(all_uids)
     else:
         print("根據當前市場時段，沒有需要處理的標的。")
