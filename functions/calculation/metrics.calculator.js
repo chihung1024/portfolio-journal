@@ -68,6 +68,15 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 }
 
 
+/**
+ * Calculates the final state of holdings including daily profit/loss.
+ * This corrected version accurately calculates daily P/L in TWD by considering
+ * fluctuations in both asset price and currency exchange rates.
+ * @param {object} pf - The portfolio state object.
+ * @param {object} market - The market data object.
+ * @param {Array} allEvts - The list of all events (transactions, splits, etc.).
+ * @returns {{holdingsToUpdate: object}} - An object containing the updated holdings.
+ */
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
     
@@ -79,37 +88,51 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
 
-            // ================== 【最終修正邏輯開始】 ==================
             const symbolPrices = market[sym]?.prices || {};
             const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a)); // 日期從新到舊排序
 
             let latestPrice = 0;
             let priceBefore = 0;
-            let latestPriceDate = new Date();
+            let latestDateStr = new Date().toISOString().split('T')[0];
+            let beforeDateStr = new Date().toISOString().split('T')[0];
 
             if (availableDates.length > 0) {
-                const latestDateStr = availableDates[0];
+                latestDateStr = availableDates[0];
                 latestPrice = symbolPrices[latestDateStr];
-                latestPriceDate = new Date(latestDateStr);
 
                 if (availableDates.length > 1) {
-                    const beforeDateStr = availableDates[1];
+                    beforeDateStr = availableDates[1];
                     priceBefore = symbolPrices[beforeDateStr];
                 } else {
-                    // 如果只有一天數據，則前一日價格等於最新價
+                    // 如果只有一天數據，則前一日價格等於最新價，損益為0
+                    beforeDateStr = latestDateStr;
                     priceBefore = latestPrice;
                 }
             }
-            // ================== 【最終修正邏輯結束】 ==================
-
-            const fx = findFxRate(market, h.currency, latestPriceDate);
+            
+            const latestPriceDate = new Date(latestDateStr);
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym.toUpperCase() && toDate(e.date) > latestPriceDate);
             const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
-            const mktVal = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : fx);
+            // ================== 【核心修正邏輯開始】 ==================
+
+            // 1. 分別獲取今日與昨日的匯率
+            const latestFx = findFxRate(market, h.currency, latestPriceDate);
+            const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
+
+            // 2. 分別計算今日與昨日的台幣總市值
+            const marketValueTodayTWD = qty * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
+            const marketValueYesterdayTWD = qty * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
+            
+            // 3. 將兩者相減，得出包含股價和匯率變動的真實總損益
+            const daily_pl_twd = marketValueTodayTWD - marketValueYesterdayTWD;
+
+            // 4. 更新 mktVal 的計算方式，確保與今日市值一致
+            const mktVal = marketValueTodayTWD;
+            
+            // ================== 【核心修正邏輯結束】 ==================
             
             const daily_change_percent = priceBefore > 0 ? ((unadjustedPrice - priceBefore) / priceBefore) * 100 : 0;
-            const daily_pl_twd = (unadjustedPrice - priceBefore) * qty * fx;
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -123,7 +146,7 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
                 daily_change_percent: daily_change_percent,
-                daily_pl_twd: daily_pl_twd
+                daily_pl_twd: daily_pl_twd // 使用修正後的值
             };
         }
     }
