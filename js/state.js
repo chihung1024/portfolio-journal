@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
+// == 狀態管理模組 (state.js) v5.0.0 - 支援 ATLAS-COMMIT 架構
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -18,11 +18,14 @@ let state = {
     netProfitChart: null, 
     confirmCallback: null,
 
-    isSyncing: false,
+    // 【新增】ATLAS-COMMIT 架構所需的核心狀態
+    hasStagedChanges: false, // 是否有任何未提交的變更
+    stagedChanges: [],       // 在前端樂觀更新的操作紀錄
+    isCommitting: false,     // 是否正在提交變更 (用於鎖定 UI)
 
-    // 【新增】用於引導式流程的暫存數據
-    tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
-    tempMembershipEdit: null, // 儲存 { txId }
+    // 【移除】舊的、分散的暫存數據，由 stagedChanges 統一管理
+    // tempTransactionData: null, 
+    // tempMembershipEdit: null,
 
     // 群組相關狀態
     groups: [],
