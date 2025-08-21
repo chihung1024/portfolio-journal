@@ -2,8 +2,7 @@
 // == GCP Cloud Function 主入口 (v5.2.1 - Cloud Run 相容性修正)
 // =========================================================================================
 
-// 【核心修改】移除 'firebase-functions' 的依賴，因為我們直接處理 HTTP 請求
-// const functions = require("firebase-functions"); 
+// 【核心修改】移除 'firebase-functions' 的依賴
 const admin = require('firebase-admin');
 const { z } = require("zod");
 
@@ -19,8 +18,7 @@ const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
-//  migrationHandlers 可能在未來有用，暫時保留
-// const migrationHandlers = require('./api_handlers/migration.handler');
+const migrationHandlers = require('./api_handlers/migration.handler');
 
 try {
     admin.initializeApp();
@@ -30,7 +28,7 @@ try {
 
 // 【核心修改】直接導出一個處理 (req, res) 的標準 Node.js 函式
 exports.unifiedPortfolioHandler = async (req, res) => {
-    // CORS and OPTIONS request handling - 這部分邏輯完全不變
+    // CORS and OPTIONS request handling - 邏輯完全不變
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
         'https://dev.portfolio-journal.pages.dev',
@@ -49,7 +47,7 @@ exports.unifiedPortfolioHandler = async (req, res) => {
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // Service Account request handling - 這部分邏輯完全不變
+    // Service Account request handling - 邏輯完全不變
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -66,19 +64,25 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 }
                 return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
             } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
+        } else if (req.body.action === '_internal_run_migration_v3') {
+            try {
+                await migrationHandlers.runMigration(req, res);
+                return;
+            } catch (error) {
+                return res.status(500).send({ success: false, message: `遷移過程中發生錯誤: ${error.message}` });
+            }
         }
-        // ... 其他 service account 邏輯 ...
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
-    // Main request routing - 這部分邏輯也完全不變，但現在是在一個標準函式內
+    // Main request routing - 邏輯完全不變
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid;
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
-            // 所有的 switch case 邏輯維持原樣
+            // 【100%完整】所有的 switch case 邏輯
             switch (action) {
                 // Portfolio
                 case 'get_data':
@@ -151,4 +155,4 @@ exports.unifiedPortfolioHandler = async (req, res) => {
             res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
         }
     });
-}; // 【核心修改】結束標準函式的定義
+};
