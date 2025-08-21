@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v2.8.2 (優化後)
+// == 身份驗證模組 (auth.js) v3.0.0 - ATLAS-COMMIT Architecture
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -14,8 +14,8 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-// 【修改】從 main.js 引入新的函式
-import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
+// [核心修改] 從 main.js 引入新的主流程函式
+import { onLoginSuccess } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -25,17 +25,14 @@ const auth = getAuth(firebaseApp);
  * 初始化 Firebase 認證監聽器
  */
 export function initializeAuth() {
-    onAuthStateChanged(auth, (user) => {
+    onAuthStateChanged(auth, async (user) => {
         const loadingOverlay = document.getElementById('loading-overlay');
-        const loadingText = document.getElementById('loading-text');
-
+        
         if (user) {
-            // 使用者已登入
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // --- 【核心修改】---
-            // 1. 立即顯示 App 主 UI 介面
+            // 更新 UI 登入狀態
             document.getElementById('auth-container').style.display = 'none';
             document.querySelector('main').classList.remove('hidden');
             document.getElementById('logout-btn').style.display = 'block';
@@ -43,85 +40,73 @@ export function initializeAuth() {
             document.getElementById('user-id').textContent = user.email;
             document.getElementById('auth-status').textContent = '已連線';
             
-            // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
-            initializeAppUI();
-            
-            // 3. 執行新的、更輕量的初始資料載入函式
-            loadingText.textContent = '正在讀取核心資產數據...';
-            loadingOverlay.style.display = 'flex';
-            
-            loadInitialDashboard(); // <--- 呼叫新的、超輕量級的載入函式
-
-            // 【新增】在初始資料載入後，啟動自動刷新
-            startLiveRefresh();
+            // [核心修改] 將控制權交給 main.js 的主流程函式
+            await onLoginSuccess();
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
-            // 登出時，重設 App 狀態
-            setState({ 
-                currentUserId: null,
-                isAppInitialized: false // 允許下次登入時重新初始化
-            });
+            setState({ currentUserId: null, isAppInitialized: false });
         
-            // 更新 UI
+            // 更新 UI 登出狀態
             document.getElementById('auth-container').classList.remove('hidden'); 
             document.querySelector('main').classList.add('hidden');
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('user-info').classList.add('hidden');
         
-            // 確保登出時隱藏讀取畫面
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
             }
-            
-            // 【新增】使用者登出時，停止自動刷新
-            stopLiveRefresh();
         }
     });
 }
 
 /**
- * 處理使用者註冊
+ * 處理使用者註冊 (維持不變)
  */
 export async function handleRegister() {
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    if (!email || !password) {
+        showNotification('error', '請輸入電子郵件和密碼。');
+        return;
+    }
     try {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         showNotification('success', `註冊成功！歡迎 ${userCredential.user.email}`);
     } catch (error) {
-        console.error("註冊失敗:", error);
         showNotification('error', `註冊失敗: ${error.message}`);
     }
 }
 
 /**
- * 處理使用者登入
+ * 處理使用者登入 (維持不變)
  */
 export async function handleLogin() {
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    if (!email || !password) {
+        showNotification('error', '請輸入電子郵件和密碼。');
+        return;
+    }
     try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         showNotification('success', `登入成功！歡迎回來 ${userCredential.user.email}`);
     } catch (error) {
-        console.error("登入失敗:", error);
         showNotification('error', `登入失敗: ${error.message}`);
     }
 }
 
 /**
- * 處理使用者登出
+ * 處理使用者登出 (維持不變)
  */
 export async function handleLogout() {
     try {
         await signOut(auth);
-        // 【新增】在登出前手動停止，確保計時器被清除
-        stopLiveRefresh();
         showNotification('info', '您已成功登出。');
+        // 刷新頁面以確保所有狀態被清除
+        window.location.reload();
     } catch (error) {
-        console.error("登出失敗:", error);
         showNotification('error', `登出失敗: ${error.message}`);
     }
 }
