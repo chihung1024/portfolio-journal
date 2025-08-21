@@ -1,6 +1,6 @@
 // =========================================================================================
-// == [最終修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.3 - Bulletproof
-// == 職責：處理所有與暫存區相關的 API Action，採用絕對穩健的重寫邏輯
+// == [最終修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.2
+// == 職責：處理所有與暫存區相關的 API Action，採用更穩健的兩階段處理模式
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -17,12 +17,13 @@ const changeOperationSchema = z.object({
 });
 
 /**
- * 1. Stage Change API: (此函式邏輯不變)
+ * 1. Stage Change API: 將單一操作意圖寫入暫存區 (此函式邏輯不變)
  */
 exports.stageChange = async (uid, data, res) => {
     const { op, entity, payload } = changeOperationSchema.parse(data);
     let validatedPayload;
     let entityId = null;
+
     switch (`${entity}:${op}`) {
         case 'transaction:CREATE':
             validatedPayload = schemas.transactionSchema.parse(payload);
@@ -36,109 +37,100 @@ exports.stageChange = async (uid, data, res) => {
             entityId = validatedPayload.id;
             break;
         case 'group_membership:UPDATE':
-            validatedPayload = z.object({ transactionId: z.string().uuid(), groupIds: z.array(z.string()) }).parse(payload);
+            validatedPayload = z.object({
+                transactionId: z.string().uuid(),
+                groupIds: z.array(z.string())
+            }).parse(payload);
             entityId = validatedPayload.transactionId;
             break;
         default:
             return res.status(400).send({ success: false, message: `不支援的操作: ${entity}:${op}` });
     }
+
     const changeId = uuidv4();
     await d1Client.query(
         `INSERT INTO staged_changes (id, uid, entity_type, operation_type, entity_id, payload) VALUES (?, ?, ?, ?, ?, ?)`,
         [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]
     );
+
     return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId });
 };
 
+
 /**
- * 2. Get Merged View API: 【防彈重寫】
+ * 2. Get Merged View API: 採用更穩健的兩階段處理模式
  */
 exports.getTransactionsWithStaging = async (uid, data, res) => {
-    try {
-        const { page = 1, pageSize = 15 } = z.object({
-            page: z.number().int().positive().optional(),
-            pageSize: z.number().int().positive().optional()
-        }).parse(data || {});
+    const { page = 1, pageSize = 15 } = z.object({
+        page: z.number().int().positive().optional(),
+        pageSize: z.number().int().positive().optional()
+    }).parse(data || {});
 
-        const [committedTxs, stagedChanges] = await Promise.all([
-            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-            d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])
-        ]);
+    const [committedTxs, stagedChanges] = await Promise.all([
+        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])
+    ]);
 
-        const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
+    const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
 
-        // 【核心修正】第一階段：處理所有 CREATE 和 UPDATE 操作
-        for (const change of stagedChanges) {
-            if (change.operation_type !== 'CREATE' && change.operation_type !== 'UPDATE') {
-                continue;
+    // 【核心修正】第一階段：處理所有 CREATE 和 UPDATE 操作
+    stagedChanges
+        .filter(c => c.operation_type === 'CREATE' || c.operation_type === 'UPDATE')
+        .forEach(change => {
+            const payload = JSON.parse(change.payload);
+            const entityId = change.entity_id || change.id;
+            const existingTx = txMap.get(entityId);
+
+            if (change.operation_type === 'CREATE') {
+                txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' });
+            } else if (change.operation_type === 'UPDATE' && existingTx) {
+                // 防呆：只有當項目存在時才更新
+                txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' });
             }
-            try {
-                const payload = JSON.parse(change.payload);
-                const entityId = change.entity_id || change.id;
-                if (!entityId) continue;
+        });
 
-                if (change.operation_type === 'CREATE') {
-                    txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' });
-                } else { // UPDATE
-                    const existingTx = txMap.get(entityId);
-                    if (existingTx && typeof existingTx === 'object') {
-                        txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' });
-                    }
+    // 【核心修正】第二階段：獨立處理所有 DELETE 操作
+    stagedChanges
+        .filter(c => c.operation_type === 'DELETE')
+        .forEach(change => {
+            const payload = JSON.parse(change.payload);
+            const entityId = change.entity_id || payload.id;
+            const existingTx = txMap.get(entityId);
+
+            if (existingTx) { // 防呆：只有當項目存在時才進行操作
+                if (existingTx.status === 'STAGED_CREATE') {
+                    txMap.delete(entityId); // 如果是刪除一個暫存的新增，直接移除
+                } else {
+                    existingTx.status = 'STAGED_DELETE'; // 否則，標記為刪除
                 }
-            } catch (e) {
-                console.error(`Error processing CREATE/UPDATE change ${change.id}:`, e);
             }
-        }
+        });
 
-        // 【核心修正】第二階段：獨立處理所有 DELETE 操作
-        for (const change of stagedChanges) {
-            if (change.operation_type !== 'DELETE') {
-                continue;
-            }
-            try {
-                const payload = JSON.parse(change.payload);
-                const entityId = change.entity_id || payload.id;
-                if (!entityId) continue;
+    // 後續邏輯不變：排序、過濾、分頁
+    const mergedTxs = Array.from(txMap.values())
+        .filter(tx => tx.status !== 'STAGED_DELETE')
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-                const existingTx = txMap.get(entityId);
-                // 增加最嚴格的防禦性檢查
-                if (existingTx && typeof existingTx === 'object' && existingTx.hasOwnProperty('status')) {
-                    if (existingTx.status === 'STAGED_CREATE') {
-                        txMap.delete(entityId);
-                    } else {
-                        existingTx.status = 'STAGED_DELETE';
-                    }
-                }
-            } catch(e) {
-                 console.error(`Error processing DELETE change ${change.id}:`, e);
-            }
-        }
+    const offset = (page - 1) * pageSize;
+    const paginatedTxs = mergedTxs.slice(offset, offset + pageSize);
 
-        const mergedTxs = Array.from(txMap.values())
-            .filter(tx => tx && tx.status !== 'STAGED_DELETE')
-            .sort((a, b) => new Date(b.date) - new Date(a.date));
-
-        const offset = (page - 1) * pageSize;
-        const paginatedTxs = mergedTxs.slice(offset, offset + pageSize);
-
-        return res.status(200).send({ success: true, data: { transactions: paginatedTxs, hasStagedChanges: stagedChanges.length > 0 } });
-    } catch (error) {
-        console.error("Critical error in getTransactionsWithStaging:", error);
-        return res.status(500).send({ success: false, message: `伺服器處理交易列表時發生嚴重錯誤: ${error.message}` });
-    }
+    return res.status(200).send({ success: true, data: { transactions: paginatedTxs, hasStagedChanges: stagedChanges.length > 0 } });
 };
 
+
 /**
- * 3. Commit API: (此函式邏輯不變)
+ * 3. Commit API: 提交所有暫存變更並觸發重算 (此函式邏輯不變)
  */
 exports.commitAllChanges = async (uid, res) => {
-    // ... (此函式內容維持不變)
     const pendingChanges = await d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND status = 'PENDING' ORDER BY created_at ASC`, [uid]);
-    if (pendingChanges.length === 0) return res.status(200).send({ success: true, message: '沒有待處理的變更。' });
+    if (pendingChanges.length === 0) {
+        return res.status(200).send({ success: true, message: '沒有待處理的變更。' });
+    }
     const batchId = uuidv4();
     const pendingIds = pendingChanges.map(c => c.id);
     const placeholders = pendingIds.map(() => '?').join(',');
     await d1Client.query(`UPDATE staged_changes SET status = 'COMMITTING', batch_id = ? WHERE id IN (${placeholders})`, [batchId, ...pendingIds]);
+
     try {
         pendingChanges.forEach(change => {
             const payload = JSON.parse(change.payload);
@@ -154,6 +146,7 @@ exports.commitAllChanges = async (uid, res) => {
         await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [error.message, batchId]);
         return res.status(400).send({ success: false, message: '提交的變更中有無效數據，請檢查。', error: error.message });
     }
+
     const dbOperations = [];
     let earliestChangeDate = new Date().toISOString();
     pendingChanges.forEach(change => {
@@ -173,21 +166,56 @@ exports.commitAllChanges = async (uid, res) => {
                 break;
             case 'group_membership:UPDATE':
                  dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [payload.transactionId, uid]});
-                 payload.groupIds.forEach(groupId => { dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, groupId, payload.transactionId] }); });
+                 payload.groupIds.forEach(groupId => {
+                     dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, groupId, payload.transactionId] });
+                 });
                 break;
         }
     });
     dbOperations.push({ sql: `DELETE FROM staged_changes WHERE batch_id = ?`, params: [batchId] });
+
     try {
         await d1Client.batch(dbOperations);
     } catch (dbError) {
         await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [dbError.message, batchId]);
         return res.status(500).send({ success: false, message: '資料庫寫入失敗，您的變更已還原。', error: dbError.message });
     }
+    
     try {
         await performRecalculation(uid, earliestChangeDate, false);
     } catch (recalcError) {
-        console.error(`[CRITICAL] UID ${uid}, BatchID ${batchId}: DB commit OK, but recalc failed! Error: ${recalcError.message}`);
+        console.error(`[CRITICAL] UID ${uid}, BatchID ${batchId}: 資料庫提交成功，但後續重算失敗! Error: ${recalcError.message}`);
         return res.status(500).send({ success: false, message: `資料庫已更新，但績效計算過程中發生錯誤。請聯繫管理員。 Batch ID: ${batchId}` });
     }
-    const [holdings, summaryResult] = await Promise.all([ d
+
+    const [holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all'])
+    ]);
+    const summaryRow = summaryResult[0] || {};
+    const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    return res.status(200).send({ success: true, message: '所有變更已成功提交並計算完畢。', data: { holdings, summary: summary_data, history: portfolioHistory, twrHistory, netProfitHistory, benchmarkHistory } });
+};
+
+
+/**
+ * 4. Revert API: 捨棄單筆暫存變更 (此函式邏輯不變)
+ */
+exports.revertStagedChange = async (uid, data, res) => {
+    const { changeId } = z.object({ changeId: z.string() }).parse(data);
+    await d1Client.query(`DELETE FROM staged_changes WHERE id = ? AND uid = ?`, [changeId, uid]);
+    return res.status(200).send({ success: true, message: '變更已捨棄。' });
+};
+
+/**
+ * 5. Health Check API: 監控系統健康狀態 (此函式邏輯不變)
+ */
+exports.getSystemHealth = async (uid, res) => {
+    const snapshotResult = await d1Client.query('SELECT MAX(snapshot_date) as last_snapshot_date FROM portfolio_snapshots WHERE uid = ?', [uid]);
+    const lastSnapshotDate = snapshotResult[0]?.last_snapshot_date || null;
+    return res.status(200).send({ success: true, data: { lastSnapshotDate } });
+};
