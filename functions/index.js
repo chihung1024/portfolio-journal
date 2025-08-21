@@ -18,7 +18,6 @@ const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
-const migrationHandlers = require('./api_handlers/migration.handler');
 
 try {
     admin.initializeApp();
