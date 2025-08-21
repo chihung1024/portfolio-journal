@@ -1,25 +1,33 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢 (優化後)
+// == 主程式進入點 (main.js) v6.0.1 - ATLAS-COMMIT Architecture (Full Version)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-import { apiRequest, applyGroupView } from './api.js';
+// [核心修改] 引入新的和保留的 API 函式
+import { 
+    getTransactionsWithStaging,
+    commitAllChanges,
+    revertStagedChange, // 暫未使用，為未來捨棄單筆預留
+    hydrateAppState, 
+    loadPortfolioData,
+    applyGroupView,
+    getSystemHealth,
+    apiRequest // 舊函式中可能會用到
+} from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 
 // --- UI Module Imports ---
-import { initializeAssetChart, updateAssetChart } from './ui/charts/assetChart.js';
-import { initializeTwrChart, updateTwrChart } from './ui/charts/twrChart.js';
-import { initializeNetProfitChart, updateNetProfitChart } from './ui/charts/netProfitChart.js';
+import { initializeAssetChart } from './ui/charts/assetChart.js';
+import { initializeTwrChart } from './ui/charts/twrChart.js';
+import { initializeNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
-// import { hideConfirm, toggleOptionalFields } from './ui/modals.js'; // 移除靜態導入
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
-import { getDateRangeForPreset } from './ui/utils.js';
 
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
@@ -28,247 +36,82 @@ import { initializeDividendEventListeners } from './events/dividend.events.js';
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
-let liveRefreshInterval = null;
 
-async function refreshDashboardAndHoldings() {
-    try {
-        const result = await apiRequest('get_dashboard_and_holdings', {});
-        if (!result.success) return;
-
-        const { summary, holdings } = result.data;
-        const holdingsObject = (holdings || []).reduce((obj, item) => {
-            obj[item.symbol] = item; return obj;
-        }, {});
-
-        setState({
-            holdings: holdingsObject,
-            summary: summary
-        });
-
-        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable(holdingsObject);
-        console.log("Live refresh complete.");
-
-    } catch (error) {
-        console.error("Live refresh failed:", error);
-    }
-}
-
-export function startLiveRefresh() {
-    stopLiveRefresh(); 
-
-    const poll = async () => {
-        // 【核心修改】增加條件判斷，若正在檢視自訂群組，則不刷新
-        const { selectedGroupId } = getState();
-        if (selectedGroupId !== 'all') {
-            console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
-            return;
-        }
-        
-        // 動態導入 modals 模組來檢查是否有 modal 開啟
-        const { openModal } = await import('./ui/modals.js');
-        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
-                            document.querySelector('#split-modal:not(.hidden)') ||
-                            document.querySelector('#dividend-modal:not(.hidden)') ||
-                            document.querySelector('#notes-modal:not(.hidden)') ||
-                            document.querySelector('#details-modal:not(.hidden)') ||
-                            document.querySelector('#group-modal:not(.hidden)');
-
-        if (isModalOpen) {
-            console.log("A modal is open, skipping live refresh to avoid interruption.");
-            return;
-        }
-
-        const now = new Date();
-        const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
-        const dayOfWeek = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getDay();
-
-        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-            const isTwMarketOpen = taipeiHour >= 9 && taipeiHour < 14;
-            const isUsMarketOpen = taipeiHour >= 21 || taipeiHour < 4;
-
-            if (isTwMarketOpen || isUsMarketOpen) {
-                 console.log("Market is open. Refreshing data...");
-                 refreshDashboardAndHoldings();
-            }
-        }
-    };
-    
-    liveRefreshInterval = setInterval(poll, 60000); 
-    poll();
-}
-
-export function stopLiveRefresh() {
-    if (liveRefreshInterval) {
-        clearInterval(liveRefreshInterval);
-        liveRefreshInterval = null;
-        console.log("Live refresh stopped.");
-    }
-}
-
+// [移除] Live Refresh 相關邏輯，因其與暫存區模型衝突
+// let liveRefreshInterval = null;
+// function refreshDashboardAndHoldings() { ... }
+// export function startLiveRefresh() { ... }
+// export function stopLiveRefresh() { ... }
 
 /**
- * 【新函式】第一階段：僅載入儀表板摘要
+ * [新增] 更新全局橫幅的顯示狀態
  */
-export async function loadInitialDashboard() {
-    try {
-        const result = await apiRequest('get_dashboard_summary', {}); // <-- 呼叫新的超輕量 API
-        if (!result.success) throw new Error(result.message);
+function updateStagingBanner() {
+    const { hasStagedChanges, transactions } = getState();
+    const banner = document.getElementById('staging-banner');
+    const bannerText = document.getElementById('staging-banner-text');
 
-        const { summary, stockNotes } = result.data;
-        
-        const stockNotesMap = (stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note; return map;
-        }, {});
+    const stagedCount = transactions.filter(t => t.status && t.status !== 'COMMITTED').length;
 
-        setState({
-            // 先用空的 holdings 初始化，避免錯誤
-            holdings: {},
-            stockNotes: stockNotesMap,
-            summary: summary
-        });
-
-        // 核心：立即更新儀表板，並顯示一個空的持股表格
-        updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable({}); // 傳入空物件，會顯示 "沒有持股紀錄..." 的訊息
-        document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
-
-    } catch (error) {
-        showNotification('error', `讀取核心數據失敗: ${error.message}`);
-    } finally {
-        // 完成後，無論成功或失敗，都隱藏主讀取畫面
-        document.getElementById('loading-overlay').style.display = 'none';
-        // 立即在背景啟動後續數據的載入
-        setTimeout(() => {
-            loadHoldingsInBackground(); // 載入持股
-            loadChartDataInBackground(); // 載入圖表
-        }, 100); // 短暫延遲確保 UI 渲染完成
+    if (hasStagedChanges && stagedCount > 0) {
+        bannerText.textContent = `您有 ${stagedCount} 項未提交的變更。`;
+        banner.classList.remove('hidden');
+        lucide.createIcons();
+    } else {
+        banner.classList.add('hidden');
     }
 }
 
 /**
- * 【新函式】第二階段：在背景載入持股列表
+ * [新增] 全局刷新函式，用於獲取最新暫存態並更新 UI
  */
-async function loadHoldingsInBackground() {
-    try {
-        console.log("正在背景載入持股數據...");
-        const result = await apiRequest('get_holdings', {}); // <-- 呼叫新的持股專用 API
-        if (result.success) {
-            const { holdings } = result.data;
-            const holdingsObject = (holdings || []).reduce((obj, item) => {
-                obj[item.symbol] = item; return obj;
-            }, {});
-            
-            setState({ holdings: holdingsObject });
-            
-            // 數據回來後，重新渲染儀表板和持股表格
-            const { summary } = getState();
-            updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-            renderHoldingsTable(holdingsObject);
-            console.log("持股數據載入完成。");
-        }
-    } catch (error) {
-        console.error('背景載入持股數據失敗:', error);
-        showNotification('error', '持股列表載入失敗。');
-    }
-}
-
-
-async function loadChartDataInBackground() {
-    try {
-        console.log("正在背景載入圖表數據...");
-        const result = await apiRequest('get_chart_data', {});
-        if (result.success) {
-            setState({
-                portfolioHistory: result.data.portfolioHistory || {},
-                twrHistory: result.data.twrHistory || {},
-                benchmarkHistory: result.data.benchmarkHistory || {},
-                netProfitHistory: result.data.netProfitHistory || {}
-            });
-            
-            const { summary, portfolioHistory, twrHistory, netProfitHistory } = getState();
-            updateAssetChart();
-            updateTwrChart(summary?.benchmarkSymbol || 'SPY');
-            updateNetProfitChart();
-
-            const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
-            document.getElementById('asset-start-date').value = assetDates.startDate;
-            document.getElementById('asset-end-date').value = assetDates.endDate;
-            
-            const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
-            document.getElementById('twr-start-date').value = twrDates.startDate;
-            document.getElementById('twr-end-date').value = twrDates.endDate;
-
-            const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
-            document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
-            document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
-            
-            console.log("圖表數據與日期範圍載入完成。");
-            
-            loadSecondaryDataInBackground();
-
-        }
-    } catch (error) {
-        console.error('背景載入圖表數據失敗:', error);
-        showNotification('error', '背景圖表數據載入失敗，部分圖表可能無法顯示。');
-    }
-}
-
-async function loadSecondaryDataInBackground() {
-    console.log("正在背景預載次要數據 (交易紀錄、配息等)...");
-    
-    const results = await Promise.allSettled([
-        apiRequest('get_transactions_and_splits', {}),
-        apiRequest('get_dividends_for_management', {})
-    ]);
-
-    if (results[0].status === 'fulfilled' && results[0].value.success) {
+export async function refreshStagedView() {
+    const data = await getTransactionsWithStaging();
+    if (data) {
         setState({
-            transactions: results[0].value.data.transactions || [],
-            userSplits: results[0].value.data.splits || [],
+            transactions: data.transactions,
+            hasStagedChanges: data.hasStagedChanges
         });
-        console.log("交易與拆股數據預載完成。");
-    } else {
-        console.error("預載交易紀錄失敗:", results[0].reason || results[0].value.message);
-    }
-    
-    if (results[1].status === 'fulfilled' && results[1].value.success) {
-        setState({
-            pendingDividends: results[1].value.data.pendingDividends,
-            confirmedDividends: results[1].value.data.confirmedDividends,
-        });
-        console.log("配息數據預載完成。");
-    } else {
-        console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
+        renderTransactionsTable();
+        updateStagingBanner();
     }
 }
 
+/**
+ * [新增] 系統健康檢查
+ */
+async function checkSystemHealth() {
+    const health = await getSystemHealth();
+    if (health && health.lastSnapshotDate) {
+        const lastDate = new Date(health.lastSnapshotDate);
+        const today = new Date();
+        const daysDiff = (today - lastDate) / (1000 * 60 * 60 * 24);
+        if (daysDiff > 8) {
+            showNotification('info', '系統維護可能已延遲，部分操作回應可能較慢。');
+        }
+    }
+}
 
+// [移除] 舊的、分階段的數據載入流程
+// export async function loadInitialDashboard() { ... }
+// async function loadHoldingsInBackground() { ... }
+// async function loadChartDataInBackground() { ... }
+// async function loadSecondaryDataInBackground() { ... }
+
+
+// [修改] 此函式現在主要用於按需加載，核心載入由 onLoginSuccess 處理
 async function loadTransactionsData() {
     const { transactions } = getState();
+    // 如果 state 中已有數據 (無論是來自初始載入還是暫存刷新)，直接渲染
     if (transactions && transactions.length > 0) {
         renderTransactionsTable();
         return;
     }
-    
-    document.getElementById('loading-overlay').style.display = 'flex';
-    try {
-        const result = await apiRequest('get_transactions_and_splits', {});
-        if (result.success) {
-            setState({
-                transactions: result.data.transactions || [],
-                userSplits: result.data.splits || [],
-            });
-            renderTransactionsTable();
-            renderSplitsTable();
-        }
-    } catch (error) {
-        showNotification('error', `讀取交易紀錄失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
+    // 否則，執行一次刷新
+    await refreshStagedView();
 }
 
+// [修改] 此函式現在主要用於按需加載
 export async function loadAndShowDividends() {
     const { pendingDividends, confirmedDividends } = getState();
     if (pendingDividends && confirmedDividends) {
@@ -296,6 +139,7 @@ export async function loadAndShowDividends() {
     }
 }
 
+// [維持不變] 登入前即可使用的通用事件監聽
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
@@ -311,6 +155,7 @@ function setupCommonEventListeners() {
     });
 }
 
+// [修改] 登入後的主應用程式事件監聽
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
@@ -321,26 +166,14 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            const { transactions, pendingDividends, confirmedDividends, userSplits } = getState();
-
-            if (tabName === 'dividends') {
-                if (pendingDividends && confirmedDividends) {
-                    renderDividendsManagementTab(pendingDividends, confirmedDividends);
-                } else {
-                    await loadAndShowDividends();
-                }
-            } else if (tabName === 'transactions') {
-                if (transactions.length > 0) {
-                    renderTransactionsTable();
-                } else {
-                    await loadTransactionsData();
-                }
+            if (tabName === 'transactions') {
+                await refreshStagedView();
+            } else if (tabName === 'dividends') {
+                await loadAndShowDividends();
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
-                if(userSplits) {
-                    renderSplitsTable();
-                }
+                renderSplitsTable();
             }
         }
     });
@@ -350,24 +183,39 @@ function setupMainAppEventListeners() {
         toggleOptionalFields();
     });
 
-    const groupSelector = document.getElementById('group-selector');
-
-    // 【核心修改】簡化事件監聽器邏輯
-    groupSelector.addEventListener('change', (e) => {
+    document.getElementById('group-selector').addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
         if (selectedGroupId === 'all') {
-            // 切換回「全部股票」視圖
             document.getElementById('loading-overlay').style.display = 'flex';
-            loadInitialDashboard(); 
+            loadPortfolioData().then(() => refreshStagedView());
         } else {
-            // 直接計算並顯示選定的群組視圖
             applyGroupView(selectedGroupId);
         }
     });
 
+    // [新增] 暫存區橫幅的事件監聽
+    document.getElementById('commit-btn').addEventListener('click', commitAllChanges);
+
+    document.getElementById('revert-all-btn').addEventListener('click', async () => {
+        const { showConfirm } = await import('./ui/modals.js');
+        const { transactions } = getState();
+        const stagedCount = transactions.filter(t => t.status && t.status !== 'COMMITTED').length;
+        if (stagedCount === 0) {
+            showNotification('info', '沒有可以捨棄的變更。');
+            return;
+        }
+
+        showConfirm(`您確定要捨棄所有 ${stagedCount} 項未提交的變更嗎？此操作無法復原。`, () => {
+             // 重新載入頁面是清除所有樂觀更新狀態並從後端重新獲取的最可靠方法
+             window.location.reload();
+        });
+    });
 }
 
+/**
+ * [修改] 應用程式 UI 初始化
+ */
 export function initializeAppUI() {
     if (getState().isAppInitialized) {
         return;
@@ -386,12 +234,31 @@ export function initializeAppUI() {
     initializeDividendEventListeners();
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
+    
     lucide.createIcons();
-
     setState({ isAppInitialized: true });
 }
 
+/**
+ * [新增] 應用程式登入成功後的主流程函式
+ */
+export async function onLoginSuccess() {
+    // 1. 初始化 UI 元件和事件監聽
+    initializeAppUI();
+
+    // 2. 載入初始的、已確認的 portfolio 數據 (儀表板、圖表、持股等)
+    await loadPortfolioData();
+
+    // 3. 在背景檢查並刷新暫存區狀態
+    await refreshStagedView();
+
+    // 4. 在背景執行一次系統健康檢查
+    checkSystemHealth();
+}
+
+// 應用程式啟動入口
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
+    // 初始化認證流程，它將在內部處理登入成功後的回調
     initializeAuth(); 
 });
