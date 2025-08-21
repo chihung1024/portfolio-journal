@@ -152,7 +152,7 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 case 'stage_change':
                     return await stagingHandlers.stageChange(uid, data, res);
                 case 'get_transactions_with_staging':
-                    return await stagingHandlers.getTransactionsWithStaging(uid, res);
+                    return await stagingHandlers.getTransactionsWithStaging(uid, data, res);
                 case 'commit_all_changes':
                     return await stagingHandlers.commitAllChanges(uid, res);
                 case 'revert_staged_change':
