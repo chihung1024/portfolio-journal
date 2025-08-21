@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v5.0.0 - ATLAS-COMMIT Architecture
+// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -8,7 +8,7 @@ let state = {
     transactions: [],
     userSplits: [],
     stockNotes: {},
-    marketDataForFrontend: {}, // Note: This might be deprecated or unused with new architecture
+    marketDataForFrontend: {},
     pendingDividends: [],
     confirmedDividends: [],
     holdings: {},
@@ -20,12 +20,9 @@ let state = {
 
     isSyncing: false,
 
-    // [移除] 不再需要前端暫存區，唯一真實來源是後端
-    // tempTransactionData: null, 
-    // tempMembershipEdit: null,
-
-    // [新增] 用於快速判斷是否需要顯示「提交」橫幅的旗標
-    hasStagedChanges: false,
+    // 【新增】用於引導式流程的暫存數據
+    tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
+    tempMembershipEdit: null, // 儲存 { txId }
 
     // 群組相關狀態
     groups: [],
