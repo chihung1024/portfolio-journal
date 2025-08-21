@@ -88,8 +88,8 @@ def get_update_targets():
 
 def get_current_market_session():
     now_utc = datetime.utcnow()
-    if 0 <= now_utc.hour < 7 and now_utc.weekday() < 5: return 'TPE'
-    if 13 <= now_utc.hour < 21 and now_utc.weekday() < 5: return 'NYSE'
+    if 1 <= now_utc.hour < 6 and now_utc.weekday() < 5: return 'TPE'
+    if 13 <= now_utc.hour < 20 and now_utc.weekday() < 5: return 'NYSE'
     return 'CLOSED'
 
 # ========================= 【核心優化 - 開始：超詳細日誌】 =========================
