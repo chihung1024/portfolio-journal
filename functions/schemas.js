@@ -30,8 +30,16 @@ const userDividendSchema = z.object({
     notes: z.string().optional().nullable(),
 });
 
+// 【新增】為暫存區操作定義更具體的 schema
+const groupMembershipSchema = z.object({
+    transactionId: z.string().uuid(),
+    groupIds: z.array(z.string().uuid())
+});
+
+
 module.exports = {
     transactionSchema,
     splitSchema,
     userDividendSchema,
+    groupMembershipSchema, // 【新增】導出新的 schema
 };
