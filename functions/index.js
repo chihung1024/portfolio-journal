@@ -18,9 +18,6 @@ const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
-// 【新增】引入新的 staging handler
-const stagingHandlers = require('./api_handlers/staging.handler');
-
 
 try {
     admin.initializeApp();
@@ -148,18 +145,6 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 case 'update_transaction_group_membership':
                     return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
 
-                // Staging Area -- 【新增】註冊所有暫存區相關的 API Actions
-                case 'stage_change':
-                    return await stagingHandlers.stageChange(uid, data, res);
-                case 'get_transactions_with_staging':
-                    return await stagingHandlers.getTransactionsWithStaging(uid, data, res);
-                case 'commit_all_changes':
-                    return await stagingHandlers.commitAllChanges(uid, res);
-                case 'revert_staged_change':
-                    return await stagingHandlers.revertStagedChange(uid, data, res);
-                case 'get_system_health':
-                    return await stagingHandlers.getSystemHealth(uid, res);
-                
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
             }
