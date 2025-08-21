@@ -1,7 +1,8 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v6.0 - ATLAS-COMMIT Staging Architecture)
+// == GCP Cloud Function 主入口 (v5.2.1 - Cloud Run 相容性修正)
 // =========================================================================================
 
+// 【核心修改】移除 'firebase-functions' 的依賴
 const admin = require('firebase-admin');
 const { z } = require("zod");
 
@@ -17,9 +18,6 @@ const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
-const migrationHandlers = require('./api_handlers/migration.handler');
-// 【新增】引入新的 staging handler
-const stagingHandlers = require('./api_handlers/staging.handler');
 
 try {
     admin.initializeApp();
@@ -27,8 +25,9 @@ try {
     // Firebase Admin SDK already initialized
 }
 
+// 【核心修改】直接導出一個處理 (req, res) 的標準 Node.js 函式
 exports.unifiedPortfolioHandler = async (req, res) => {
-    // CORS and OPTIONS request handling
+    // CORS and OPTIONS request handling - 邏輯完全不變
     const allowedOrigins = [
         'https://portfolio-journal.pages.dev',
         'https://dev.portfolio-journal.pages.dev',
@@ -47,7 +46,7 @@ exports.unifiedPortfolioHandler = async (req, res) => {
     }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // Service Account request handling
+    // Service Account request handling - 邏輯完全不變
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
         if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
@@ -75,77 +74,76 @@ exports.unifiedPortfolioHandler = async (req, res) => {
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
-    // Main request routing
+    // Main request routing - 邏輯完全不變
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid;
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
+            // 【100%完整】所有的 switch case 邏輯
             switch (action) {
-                // ================== 【新增】Staging Workflow Actions ==================
-                case 'stage_change':
-                    return await stagingHandlers.stageChange(uid, data, res);
-                case 'get_transactions_with_staging':
-                    return await stagingHandlers.getTransactionsWithStaging(uid, res);
-                case 'commit_all_changes':
-                    return await stagingHandlers.commitAllChanges(uid, res); // data is not needed here
-                case 'revert_staged_change':
-                    return await stagingHandlers.revertStagedChange(uid, data, res);
-                case 'get_system_health':
-                    return await stagingHandlers.getSystemHealth(uid, res);
-
-
-                // ================== Legacy & Read-Only Actions (維持不變) ==================
-                // Portfolio (Read-only parts)
+                // Portfolio
                 case 'get_data':
                     return await portfolioHandlers.getData(uid, res);
-                case 'update_benchmark': // This is a write operation but simple enough to keep
+                case 'update_benchmark':
                     return await portfolioHandlers.updateBenchmark(uid, data, res);
+                case 'get_dashboard_and_holdings':
+                    return await portfolioHandlers.getDashboardAndHoldings(uid, res);
                 case 'get_dashboard_summary':
                     return await portfolioHandlers.getDashboardSummary(uid, res);
                 case 'get_holdings':
                     return await portfolioHandlers.getHoldings(uid, res);
+                case 'get_transactions_and_splits':
+                    return await portfolioHandlers.getTransactionsAndSplits(uid, res);
                 case 'get_chart_data':
                     return await portfolioHandlers.getChartData(uid, res);
                 case 'get_symbol_details':
                     return await detailsHandlers.getSymbolDetails(uid, data, res);
-                // Dividends (Read-only parts)
+
+                // Transactions
+                case 'add_transaction':
+                    return await transactionHandlers.addTransaction(uid, data, res);
+                case 'edit_transaction':
+                    return await transactionHandlers.editTransaction(uid, data, res);
+                case 'delete_transaction':
+                    return await transactionHandlers.deleteTransaction(uid, data, res);
+
+                // Splits
+                case 'add_split':
+                    return await splitHandlers.addSplit(uid, data, res);
+                case 'delete_split':
+                    return await splitHandlers.deleteSplit(uid, data, res);
+
+                // Dividends
                 case 'get_dividends_for_management':
                     return await dividendHandlers.getDividendsForManagement(uid, res);
-                // Groups (Read-only and management)
+                case 'save_user_dividend':
+                    return await dividendHandlers.saveUserDividend(uid, data, res);
+                case 'bulk_confirm_all_dividends':
+                    return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
+                case 'delete_user_dividend':
+                    return await dividendHandlers.deleteUserDividend(uid, data, res);
+                
+                // Notes
+                case 'save_stock_note':
+                    return await noteHandlers.saveStockNote(uid, data, res);
+
+                // Groups
                 case 'get_groups':
                     return await groupHandlers.getGroups(uid, res);
                 case 'get_group_details':
                     return await groupHandlers.getGroupDetails(uid, data, res);
                 case 'get_transaction_memberships':
                     return await groupHandlers.getTransactionMemberships(uid, data, res);
-                case 'calculate_group_on_demand':
-                    return await groupHandlers.calculateGroupOnDemand(uid, data, res);
-                // Notes are simple writes, can be kept as-is
-                case 'save_stock_note':
-                    return await noteHandlers.saveStockNote(uid, data, res);
-                // Group management is meta-data, can be kept
                 case 'save_group':
                     return await groupHandlers.saveGroup(uid, data, res);
                 case 'delete_group':
                     return await groupHandlers.deleteGroup(uid, data, res);
+                case 'calculate_group_on_demand':
+                    return await groupHandlers.calculateGroupOnDemand(uid, data, res);
                 case 'update_transaction_group_membership':
                     return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
-                
-                // ================== 【棄用】Direct Write Actions ==================
-                // Transaction write actions are now handled by staging workflow
-                case 'add_transaction':
-                case 'edit_transaction':
-                case 'delete_transaction':
-                // Split write actions should also be staged
-                case 'add_split':
-                case 'delete_split':
-                // Dividend write actions should also be staged
-                case 'save_user_dividend':
-                case 'bulk_confirm_all_dividends':
-                case 'delete_user_dividend':
-                    return res.status(400).send({ success: false, message: `操作 '${action}' 已被新的暫存區工作流取代。請更新您的前端應用。` });
 
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
