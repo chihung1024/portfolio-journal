@@ -1,6 +1,6 @@
 // =========================================================================================
-// == [修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.1
-// == 職責：處理所有與暫存區相關的 API Action，實現暫存、讀取、提交與還原功能
+// == [最終修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.2
+// == 職責：處理所有與暫存區相關的 API Action，採用更穩健的兩階段處理模式
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -58,57 +58,59 @@ exports.stageChange = async (uid, data, res) => {
 
 
 /**
- * 2. Get Merged View API: 獲取融合了暫存區數據的統一視圖 (修正分頁邏輯)
+ * 2. Get Merged View API: 採用更穩健的兩階段處理模式
  */
 exports.getTransactionsWithStaging = async (uid, data, res) => {
     const { page = 1, pageSize = 15 } = z.object({
         page: z.number().int().positive().optional(),
         pageSize: z.number().int().positive().optional()
     }).parse(data || {});
-    
-    // 【核心修正】步驟一：獲取 **所有** 已提交的交易和 **所有** 相關的暫存變更
+
     const [committedTxs, stagedChanges] = await Promise.all([
         d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
         d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])
     ]);
 
-    // 步驟二：在記憶體中建立完整的交易地圖 (Map)
     const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
 
-    // 步驟三：在完整的地圖上，預演所有暫存變更
-    stagedChanges.forEach(change => {
-        const payload = JSON.parse(change.payload);
-        const entityId = change.entity_id || change.id;
+    // 【核心修正】第一階段：處理所有 CREATE 和 UPDATE 操作
+    stagedChanges
+        .filter(c => c.operation_type === 'CREATE' || c.operation_type === 'UPDATE')
+        .forEach(change => {
+            const payload = JSON.parse(change.payload);
+            const entityId = change.entity_id || change.id;
+            const existingTx = txMap.get(entityId);
 
-        const existingTx = txMap.get(entityId);
-
-        switch (change.operation_type) {
-            case 'CREATE':
+            if (change.operation_type === 'CREATE') {
                 txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' });
-                break;
-            case 'UPDATE':
-                if (existingTx) {
-                    txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' });
-                }
-                break;
-            case 'DELETE':
-                if (existingTx) {
-                    if (existingTx.status === 'STAGED_CREATE') {
-                        txMap.delete(entityId);
-                    } else {
-                        existingTx.status = 'STAGED_DELETE';
-                    }
-                }
-                break;
-        }
-    });
+            } else if (change.operation_type === 'UPDATE' && existingTx) {
+                // 防呆：只有當項目存在時才更新
+                txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' });
+            }
+        });
 
-    // 步驟四：將合併後的完整列表轉換為陣列，過濾掉已刪除的，並排序
+    // 【核心修正】第二階段：獨立處理所有 DELETE 操作
+    stagedChanges
+        .filter(c => c.operation_type === 'DELETE')
+        .forEach(change => {
+            const payload = JSON.parse(change.payload);
+            const entityId = change.entity_id || payload.id;
+            const existingTx = txMap.get(entityId);
+
+            if (existingTx) { // 防呆：只有當項目存在時才進行操作
+                if (existingTx.status === 'STAGED_CREATE') {
+                    txMap.delete(entityId); // 如果是刪除一個暫存的新增，直接移除
+                } else {
+                    existingTx.status = 'STAGED_DELETE'; // 否則，標記為刪除
+                }
+            }
+        });
+
+    // 後續邏輯不變：排序、過濾、分頁
     const mergedTxs = Array.from(txMap.values())
         .filter(tx => tx.status !== 'STAGED_DELETE')
         .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    // 【核心修正】步驟五：在記憶體中對 **最終的、正確的** 結果進行分頁
     const offset = (page - 1) * pageSize;
     const paginatedTxs = mergedTxs.slice(offset, offset + pageSize);
 
