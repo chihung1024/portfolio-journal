@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v_final_settlement_rate_fix
+// == 核心指標計算模組 (metrics.calculator.js) - FINAL & COMPLETE VERSION
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -285,30 +285,8 @@ function calculateCoreMetrics(evts, market) {
 
         switch (e.eventType) {
             case "transaction": {
+                const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
                 
-                // ========================= 【核心修改 - 開始】 =========================
-                let fx;
-                // 檢查是否有手動填寫的正數匯率
-                if (e.exchangeRate && e.exchangeRate > 0 && e.currency !== 'TWD') {
-                    fx = e.exchangeRate;
-                } else if (e.currency !== 'TWD') {
-                    // 如果沒有手動匯率，或匯率為 null/0，則觸發自動結算日匯率查找
-                    const settlementDays = e.type === 'buy' ? 1 : 2;
-                    const txDate = toDate(e.date);
-                    
-                    const settlementDate = new Date(txDate);
-                    settlementDate.setDate(txDate.getDate() + settlementDays);
-                    
-                    // 使用 findFxRate 查找結算日的匯率，findFxRate 會自動往過去找最近的交易日
-                    // 為了確保找到的是 T+N 當天或之後的，我們需要一個新的輔助函式或修改邏輯
-                    // 暫時的簡化作法：直接用 findFxRate 查找結算日當天的匯率（它會自動回退）
-                    fx = findFxRate(market, e.currency, settlementDate);
-                } else {
-                    // 如果是台幣交易，匯率為 1
-                    fx = 1;
-                }
-                // ========================= 【核心修改 - 結束】 =========================
-
                 if (e.type === "buy") {
                     const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
                     totalBuyCostTWD += buyCostTWD; 
