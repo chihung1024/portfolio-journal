@@ -1,16 +1,12 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v5.2.1 - Cloud Run 相容性修正)
+// == GCP Cloud Function 主入口 (v5.2.3 - 最終修正 統一 API 呼叫簽名)
 // =========================================================================================
 
-// 【核心修改】移除 'firebase-functions' 的依賴
 const admin = require('firebase-admin');
 const { z } = require("zod");
-
 const { d1Client } = require('./d1.client');
 const { performRecalculation } = require('./performRecalculation');
 const { verifyFirebaseToken } = require('./middleware');
-
-// 引入所有 handlers
 const transactionHandlers = require('./api_handlers/transaction.handler');
 const dividendHandlers = require('./api_handlers/dividend.handler');
 const splitHandlers = require('./api_handlers/split.handler');
@@ -18,135 +14,81 @@ const noteHandlers = require('./api_handlers/note.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
+const stagingHandlers = require('./api_handlers/staging.handler');
 
-try {
-    admin.initializeApp();
-} catch (e) {
-    // Firebase Admin SDK already initialized
-}
+try { admin.initializeApp(); } catch (e) {}
 
-// 【核心修改】直接導出一個處理 (req, res) 的標準 Node.js 函式
 exports.unifiedPortfolioHandler = async (req, res) => {
-    // CORS and OPTIONS request handling - 邏輯完全不變
-    const allowedOrigins = [
-        'https://portfolio-journal.pages.dev',
-        'https://dev.portfolio-journal.pages.dev',
-        'https://portfolio-journal-467915.firebaseapp.com'
-    ];
+    // CORS and OPTIONS handling
+    const allowedOrigins = ['https://portfolio-journal.pages.dev', 'https://dev.portfolio-journal.pages.dev', 'https://portfolio-journal-467915.firebaseapp.com'];
     const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-        res.set('Access-Control-Allow-Origin', origin);
-    }
-    if (req.method === 'OPTIONS') {
-        res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY');
-        res.set('Access-Control-Max-Age', '3600');
-        res.status(204).send('');
-        return;
-    }
+    if (allowedOrigins.includes(origin)) { res.set('Access-Control-Allow-Origin', origin); }
+    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-    // Service Account request handling - 邏輯完全不變
+    // Service Account request handling
     const serviceAccountKey = req.headers['x-service-account-key'];
     if (serviceAccountKey) {
-        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
-            return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
-        }
+        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) { return res.status(403).send({ success: false, message: 'Invalid Service Account Key' }); }
         if (req.body.action === 'recalculate_all_users') {
             try {
                 const createSnapshot = req.body.createSnapshot || false;
-                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
-
                 const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
-                for (const row of allUidsResult) {
-                    await performRecalculation(row.uid, null, createSnapshot);
-                }
+                for (const row of allUidsResult) { await performRecalculation(row.uid, null, createSnapshot); }
                 return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
             } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
-        } else if (req.body.action === '_internal_run_migration_v3') {
-            try {
-                await migrationHandlers.runMigration(req, res);
-                return;
-            } catch (error) {
-                return res.status(500).send({ success: false, message: `遷移過程中發生錯誤: ${error.message}` });
-            }
         }
         return res.status(400).send({ success: false, message: '無效的服務操作。' });
     }
 
-    // Main request routing - 邏輯完全不變
+    // Main request routing
     await verifyFirebaseToken(req, res, async () => {
         try {
             const uid = req.user.uid;
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
-            // 【100%完整】所有的 switch case 邏輯
             switch (action) {
                 // Portfolio
-                case 'get_data':
-                    return await portfolioHandlers.getData(uid, res);
-                case 'update_benchmark':
-                    return await portfolioHandlers.updateBenchmark(uid, data, res);
-                case 'get_dashboard_and_holdings':
-                    return await portfolioHandlers.getDashboardAndHoldings(uid, res);
-                case 'get_dashboard_summary':
-                    return await portfolioHandlers.getDashboardSummary(uid, res);
-                case 'get_holdings':
-                    return await portfolioHandlers.getHoldings(uid, res);
-                case 'get_transactions_and_splits':
-                    return await portfolioHandlers.getTransactionsAndSplits(uid, res);
-                case 'get_chart_data':
-                    return await portfolioHandlers.getChartData(uid, res);
-                case 'get_symbol_details':
-                    return await detailsHandlers.getSymbolDetails(uid, data, res);
-
+                case 'get_data': return await portfolioHandlers.getData(uid, res);
+                case 'update_benchmark': return await portfolioHandlers.updateBenchmark(uid, data, res);
+                case 'get_dashboard_and_holdings': return await portfolioHandlers.getDashboardAndHoldings(uid, res);
+                case 'get_dashboard_summary': return await portfolioHandlers.getDashboardSummary(uid, res);
+                case 'get_holdings': return await portfolioHandlers.getHoldings(uid, res);
+                case 'get_transactions_and_splits': return await portfolioHandlers.getTransactionsAndSplits(uid, res);
+                case 'get_chart_data': return await portfolioHandlers.getChartData(uid, res);
+                case 'get_symbol_details': return await detailsHandlers.getSymbolDetails(uid, data, res);
                 // Transactions
-                case 'add_transaction':
-                    return await transactionHandlers.addTransaction(uid, data, res);
-                case 'edit_transaction':
-                    return await transactionHandlers.editTransaction(uid, data, res);
-                case 'delete_transaction':
-                    return await transactionHandlers.deleteTransaction(uid, data, res);
-
+                case 'add_transaction': return await transactionHandlers.addTransaction(uid, data, res);
+                case 'edit_transaction': return await transactionHandlers.editTransaction(uid, data, res);
+                case 'delete_transaction': return await transactionHandlers.deleteTransaction(uid, data, res);
                 // Splits
-                case 'add_split':
-                    return await splitHandlers.addSplit(uid, data, res);
-                case 'delete_split':
-                    return await splitHandlers.deleteSplit(uid, data, res);
-
+                case 'add_split': return await splitHandlers.addSplit(uid, data, res);
+                case 'delete_split': return await splitHandlers.deleteSplit(uid, data, res);
                 // Dividends
-                case 'get_dividends_for_management':
-                    return await dividendHandlers.getDividendsForManagement(uid, res);
-                case 'save_user_dividend':
-                    return await dividendHandlers.saveUserDividend(uid, data, res);
-                case 'bulk_confirm_all_dividends':
-                    return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
-                case 'delete_user_dividend':
-                    return await dividendHandlers.deleteUserDividend(uid, data, res);
-                
+                case 'get_dividends_for_management': return await dividendHandlers.getDividendsForManagement(uid, res);
+                case 'save_user_dividend': return await dividendHandlers.saveUserDividend(uid, data, res);
+                case 'bulk_confirm_all_dividends': return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
+                case 'delete_user_dividend': return await dividendHandlers.deleteUserDividend(uid, data, res);
                 // Notes
-                case 'save_stock_note':
-                    return await noteHandlers.saveStockNote(uid, data, res);
-
+                case 'save_stock_note': return await noteHandlers.saveStockNote(uid, data, res);
                 // Groups
-                case 'get_groups':
-                    return await groupHandlers.getGroups(uid, res);
-                case 'get_group_details':
-                    return await groupHandlers.getGroupDetails(uid, data, res);
-                case 'get_transaction_memberships':
-                    return await groupHandlers.getTransactionMemberships(uid, data, res);
-                case 'save_group':
-                    return await groupHandlers.saveGroup(uid, data, res);
-                case 'delete_group':
-                    return await groupHandlers.deleteGroup(uid, data, res);
-                case 'calculate_group_on_demand':
-                    return await groupHandlers.calculateGroupOnDemand(uid, data, res);
-                case 'update_transaction_group_membership':
-                    return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
-
-                default:
-                    return res.status(400).send({ success: false, message: '未知的操作' });
+                case 'get_groups': return await groupHandlers.getGroups(uid, res);
+                case 'get_group_details': return await groupHandlers.getGroupDetails(uid, data, res);
+                case 'get_transaction_memberships': return await groupHandlers.getTransactionMemberships(uid, data, res);
+                case 'save_group': return await groupHandlers.saveGroup(uid, data, res);
+                case 'delete_group': return await groupHandlers.deleteGroup(uid, data, res);
+                case 'calculate_group_on_demand': return await groupHandlers.calculateGroupOnDemand(uid, data, res);
+                case 'update_transaction_group_membership': return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
+                
+                // Staging Area -- 【最終修正】確保所有呼叫都使用 (uid, data, res) 格式
+                case 'stage_change': return await stagingHandlers.stageChange(uid, data, res);
+                case 'get_transactions_with_staging': return await stagingHandlers.getTransactionsWithStaging(uid, data, res);
+                case 'commit_all_changes': return await stagingHandlers.commitAllChanges(uid, data, res);
+                case 'revert_staged_change': return await stagingHandlers.revertStagedChange(uid, data, res);
+                case 'get_system_health': return await stagingHandlers.getSystemHealth(uid, data, res);
+                
+                default: return res.status(400).send({ success: false, message: '未知的操作' });
             }
         } catch (error) {
             console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
