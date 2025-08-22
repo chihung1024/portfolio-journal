@@ -1,13 +1,13 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v5.6 - Fix CLOSED Session Logic)
+# == Python 每日增量更新腳本 (v5.8 - Unified History Fetch)
 # =========================================================================================
 
 import os
 import yfinance as yf
 import requests
 import json
-from datetime import datetime, timedelta
-import time
+from datetime import datetime, timedelta, time
+import time as time_sleep
 import pandas as pd
 import pytz
 
@@ -27,7 +27,7 @@ def robust_request(func, max_retries=3, delay=5, name="Request"):
                 print(f"FATAL: {name} 在 {max_retries} 次嘗試後最終失敗。")
                 return None
             print(f"將在 {delay} 秒後重試...")
-            time.sleep(delay)
+            time_sleep.sleep(delay)
 
 def d1_query(sql, params=None, api_key=None):
     if params is None:
@@ -87,14 +87,35 @@ def get_update_targets():
     return symbols_list, uids
 
 def get_current_market_session():
-    now_utc = datetime.utcnow()
-    if 1 <= now_utc.hour < 6 and now_utc.weekday() < 5: return 'TPE'
-    if 13 <= now_utc.hour < 20 and now_utc.weekday() < 5: return 'NYSE'
-    return 'CLOSED'
+    """根據台灣時間，判斷當前處於哪個市場的交易時段"""
+    try:
+        tz_taipei = pytz.timezone('Asia/Taipei')
+        now_taipei = datetime.now(tz_taipei)
+        weekday_taipei = now_taipei.weekday()
+        time_taipei = now_taipei.time()
+
+        is_tpe_weekday = weekday_taipei < 5
+        is_tpe_time = time(9, 0) <= time_taipei <= time(13, 30)
+        if is_tpe_weekday and is_tpe_time:
+            return 'TPE'
+
+        is_us_evening = time(21, 30) <= time_taipei and is_tpe_weekday
+        is_us_morning = time_taipei <= time(4, 0) and (0 < weekday_taipei < 6)
+        
+        if is_us_evening or is_us_morning:
+            return 'NYSE'
+            
+        return 'CLOSED'
+    except Exception as e:
+        print(f"警告: 判斷市場時段時發生錯誤: {e}。預設為 CLOSED。")
+        return 'CLOSED'
+
 
 def fetch_intraday_prices(symbols):
     print("\n--- 【即時更新階段】開始抓取盤中最新價格 ---")
-    if not symbols: return {}
+    if not symbols: 
+        print("沒有需要抓取盤中價的標的。")
+        return {}
     
     def yf_intraday_func():
         return yf.download(tickers=symbols, period="2d", interval="1m", progress=False, auto_adjust=False, back_adjust=False)
@@ -155,19 +176,19 @@ def fetch_intraday_prices(symbols):
     return latest_prices
 
 # ========================= 【核心修正 - 開始】 =========================
-# == 修改 fetch_and_append_market_data 函式，使其接收 session 參數
+# == 修改 fetch_and_append_market_data 與主程式區塊，分離歷史與即時數據的處理邏輯
 # =========================================================================================
-def fetch_and_append_market_data(symbols, session, batch_size=10):
-    if not symbols: return
-    print("\n--- 【歷史數據階段】開始更新每日歷史收盤價 ---")
+def fetch_and_append_market_data(all_symbols, session, batch_size=10):
+    if not all_symbols: return
+    print("\n--- 【歷史數據階段】開始為所有標的更新每日歷史收盤價 ---")
     
-    placeholders_all = ','.join('?' for _ in symbols)
+    placeholders_all = ','.join('?' for _ in all_symbols)
     all_first_tx_sql = f"SELECT upper(symbol) as symbol, MIN(date) as first_tx_date FROM transactions WHERE upper(symbol) IN ({placeholders_all}) GROUP BY symbol"
-    first_tx_dates_results = d1_query(all_first_tx_sql, [s.upper() for s in symbols], api_key=D1_API_KEY)
+    first_tx_dates_results = d1_query(all_first_tx_sql, [s.upper() for s in all_symbols], api_key=D1_API_KEY)
     first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
     
     today_str = datetime.now().strftime('%Y-%m-%d')
-    symbol_batches = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+    symbol_batches = [all_symbols[i:i + batch_size] for i in range(0, len(all_symbols), batch_size)]
 
     for i, batch in enumerate(symbol_batches):
         print(f"\n--- 正在處理歷史數據批次 {i+1}/{len(symbol_batches)}: {batch} ---")
@@ -235,30 +256,37 @@ def fetch_and_append_market_data(symbols, session, batch_size=10):
                 if first_tx_dates.get(symbol):
                     coverage_updates.append({"sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)", "params": [symbol, first_tx_dates.get(symbol), today_str]})
             if coverage_updates and not d1_batch(coverage_updates, api_key=D1_API_KEY): print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
-            
-    # 新增的條件判斷：只有在市場不是 CLOSED 狀態時，才執行即時更新
+    
+    # --- 即時數據處理邏輯 ---
     if session != 'CLOSED':
-        latest_prices_info = fetch_intraday_prices(symbols)
-        if latest_prices_info:
-            intraday_db_ops = []
-            print(f"\n準備將 {len(latest_prices_info)} 筆盤中價格寫入資料庫...")
-            for symbol, info in latest_prices_info.items():
-                symbol_upper = symbol.upper()
-                is_fx = "=" in symbol_upper
-                table_name = "exchange_rates" if is_fx else "price_history"
-                sql = f"INSERT INTO {table_name} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;"
-                params = [symbol_upper, info['date'], info['price']]
-                print(f"  [排隊寫入] {symbol_upper} -> {params}")
-                intraday_db_ops.append({"sql": sql, "params": params})
-            
-            if intraday_db_ops:
-                if d1_batch(intraday_db_ops, api_key=D1_API_KEY): print("資料庫批次寫入請求已成功發送！")
-                else: print("FATAL: 資料庫批次寫入請求失敗！")
+        # 根據當前時段，篩選出需要抓取即時價格的標的
+        symbols_for_intraday = []
+        if session == 'TPE':
+            print("篩選目標：僅處理台股 (.TW, .TWO) 及匯率相關標的。")
+            symbols_for_intraday = [s for s in all_symbols if s.upper().endswith(('.TW', '.TWO')) or '=' in s]
+        elif session == 'NYSE':
+            print("篩選目標：僅處理非台股的美股及其他國際市場標的。")
+            symbols_for_intraday = [s for s in all_symbols if not s.upper().endswith(('.TW', '.TWO'))]
+        
+        if symbols_for_intraday:
+            latest_prices_info = fetch_intraday_prices(symbols_for_intraday)
+            if latest_prices_info:
+                intraday_db_ops = []
+                print(f"\n準備將 {len(latest_prices_info)} 筆盤中價格寫入資料庫...")
+                for symbol, info in latest_prices_info.items():
+                    symbol_upper = symbol.upper()
+                    is_fx = "=" in symbol_upper
+                    table_name = "exchange_rates" if is_fx else "price_history"
+                    sql = f"INSERT INTO {table_name} (symbol, date, price) VALUES (?, ?, ?) ON CONFLICT(symbol, date) DO UPDATE SET price = excluded.price;"
+                    params = [symbol_upper, info['date'], info['price']]
+                    print(f"  [排隊寫入] {symbol_upper} -> {params}")
+                    intraday_db_ops.append({"sql": sql, "params": params})
+                
+                if intraday_db_ops:
+                    if d1_batch(intraday_db_ops, api_key=D1_API_KEY): print("資料庫批次寫入請求已成功發送！")
+                    else: print("FATAL: 資料庫批次寫入請求失敗！")
     else:
-        # 如果是 CLOSED 狀態，則明確印出跳過訊息
         print("\n--- 【即時更新階段】跳過：市場休市中。 ---")
-
-# ========================= 【核心修正 - 結束】 =========================
 
 
 def trigger_recalculations(uids):
@@ -280,27 +308,18 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.6 - Fix CLOSED Session Logic) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.8 - Unified History Fetch) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
     
-    symbols_to_process = []
-    if session == 'TPE':
-        print("篩選目標：僅處理台股 (.TW, .TWO) 及匯率相關標的。")
-        symbols_to_process = [s for s in all_symbols if s.upper().endswith(('.TW', '.TWO')) or '=' in s]
-    elif session == 'NYSE':
-        print("篩選目標：僅處理非台股的美股及其他國際市場標的。")
-        symbols_to_process = [s for s in all_symbols if not s.upper().endswith(('.TW', '.TWO'))]
-    else: # 'CLOSED'
-        print("市場休市中，腳本將僅執行歷史數據補全，不抓取即時盤中價。")
-        symbols_to_process = all_symbols
-
-    if symbols_to_process:
-        print(f"最終將處理 {len(symbols_to_process)} 個標的: {symbols_to_process}")
-        # 【核心修正】將 session 狀態傳遞下去
-        fetch_and_append_market_data(symbols_to_process, session)
+    # 【修改】移除主程式區塊的篩選邏輯
+    if all_symbols:
+        print(f"將為所有 {len(all_symbols)} 個標的檢查歷史數據並更新: {all_symbols}")
+        # 【修改】始終傳入 all_symbols
+        fetch_and_append_market_data(all_symbols, session)
         if all_uids: trigger_recalculations(all_uids)
     else:
-        print("根據當前市場時段，沒有需要處理的標的。")
+        print("資料庫中沒有找到任何需要處理的標的。")
     print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# ========================= 【核心修正 - 結束】 =========================
