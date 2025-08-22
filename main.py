@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v5.8 - Unified History Fetch)
+# == Python 每日增量更新腳本 (v5.9 - Fix History Fetch Logic)
 # =========================================================================================
 
 import os
@@ -175,9 +175,7 @@ def fetch_intraday_prices(symbols):
     
     return latest_prices
 
-# ========================= 【核心修正 - 開始】 =========================
-# == 修改 fetch_and_append_market_data 與主程式區塊，分離歷史與即時數據的處理邏輯
-# =========================================================================================
+
 def fetch_and_append_market_data(all_symbols, session, batch_size=10):
     if not all_symbols: return
     print("\n--- 【歷史數據階段】開始為所有標的更新每日歷史收盤價 ---")
@@ -207,10 +205,14 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
         for symbol in batch:
             symbol_upper = symbol.upper()
             latest_date_str = latest_dates.get(symbol_upper)
-            start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol_upper, "2000-01-01")
-            if start_date <= today_str:
+
+            # ========================= 【核心修正 - 開始】 =========================
+            if not latest_date_str or latest_date_str < today_str:
+                start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol_upper, "2000-01-01")
+                
                 start_dates[symbol] = start_date
                 symbols_to_fetch.append(symbol)
+            # ========================= 【核心修正 - 結束】 =========================
 
         if not symbols_to_fetch:
             print("此批次所有標的歷史數據都已是最新，跳過抓取。")
@@ -218,7 +220,16 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
 
         print(f"準備從 yfinance 併發抓取 {len(symbols_to_fetch)} 筆歷史數據...")
         def yf_historical_func():
-            return yf.download(tickers=symbols_to_fetch, start=min(start_dates.values()), interval="1d", auto_adjust=False, back_adjust=False, progress=False)
+            end_date_for_fetch = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            return yf.download(
+                tickers=symbols_to_fetch, 
+                start=min(start_dates.values()), 
+                end=end_date_for_fetch,
+                interval="1d", 
+                auto_adjust=False, 
+                back_adjust=False, 
+                progress=False
+            )
         data = robust_request(yf_historical_func, name="YFinance Historical Download")
         if data is None or data.empty: continue
         
@@ -259,7 +270,6 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
     
     # --- 即時數據處理邏輯 ---
     if session != 'CLOSED':
-        # 根據當前時段，篩選出需要抓取即時價格的標的
         symbols_for_intraday = []
         if session == 'TPE':
             print("篩選目標：僅處理台股 (.TW, .TWO) 及匯率相關標的。")
@@ -308,18 +318,15 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.8 - Unified History Fetch) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.9 - Fix History Fetch Logic) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
     
-    # 【修改】移除主程式區塊的篩選邏輯
     if all_symbols:
         print(f"將為所有 {len(all_symbols)} 個標的檢查歷史數據並更新: {all_symbols}")
-        # 【修改】始終傳入 all_symbols
         fetch_and_append_market_data(all_symbols, session)
         if all_uids: trigger_recalculations(all_uids)
     else:
         print("資料庫中沒有找到任何需要處理的標的。")
     print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-# ========================= 【核心修正 - 結束】 =========================
