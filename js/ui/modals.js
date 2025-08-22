@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v3.2 - 修復編輯歸屬流程
+// == 彈出視窗模組 (modals.js) v3.3 - 支援鍵盤操作
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -303,3 +303,32 @@ export function toggleOptionalFields() {
         exchangeRateField.style.display = 'block';
     }
 }
+
+// ========================= 【核心修改 - 開始】 =========================
+// 為 document 增加一次性的全域 Enter 鍵監聽
+// 這樣可以處理那些沒有標準 form 標籤的彈窗
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+
+    // 處理群組歸屬設定彈窗
+    const attributionModal = document.getElementById('group-attribution-modal');
+    if (!attributionModal.classList.contains('hidden')) {
+        e.preventDefault();
+        // 如果焦點在新增群組的輸入框，則觸發新增按鈕，否則觸發確認按鈕
+        if (document.activeElement === document.getElementById('new-group-name-input')) {
+            document.getElementById('add-new-group-btn').click();
+        } else {
+            document.getElementById('confirm-attribution-btn').click();
+        }
+        return;
+    }
+
+    // 處理編輯群組歸屬彈窗
+    const membershipModal = document.getElementById('membership-editor-modal');
+    if (!membershipModal.classList.contains('hidden')) {
+        e.preventDefault();
+        document.getElementById('save-membership-btn').click();
+        return;
+    }
+});
+// ========================= 【核心修改 - 結束】 =========================
