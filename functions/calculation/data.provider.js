@@ -74,15 +74,26 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
 }
 
 /**
- * 確保所有需要的金融商品數據都是最新的
+ * 確保所有需要的金融商品數據都是最新的（更新到昨天）
  */
 async function ensureDataFreshness(symbols) {
     if (!symbols || symbols.length === 0) return;
 
     // ========================= 【核心修正 - 開始】 =========================
     // Bug Fix: 將目標日期從「昨天」改為「今天」，以確保在盤中時段能強制檢查並獲取即時數據
+    // 這樣可以解決因資料庫同步延遲導致計算引擎讀到舊數據的問題。
     const today = new Date();
-    const targetDateStr = today.toISOString().split('T')[0];
+    // 判斷是否為美股或台股的交易日
+    const dayOfWeek = today.getUTCDay(); 
+    const isTradingDay = (dayOfWeek >= 1 && dayOfWeek <= 5); // 週一到週五
+    
+    // 只有在交易日，才嚴格要求數據必須是今天的。週末則放寬到前一個交易日。
+    const targetDate = new Date(today);
+    if (!isTradingDay) {
+        // 如果是週末，找到最近的上一個週五
+        targetDate.setDate(today.getDate() - (dayOfWeek === 6 ? 1 : 2));
+    }
+    const targetDateStr = targetDate.toISOString().split('T')[0];
     // ========================= 【核心修正 - 結束】 =========================
 
     const fetchPromises = symbols.map(async (symbol) => {
@@ -96,7 +107,10 @@ async function ensureDataFreshness(symbols) {
             startDate.setDate(startDate.getDate() + 1);
             const startDateStr = startDate.toISOString().split('T')[0];
             console.log(`[Data Provider] ${symbol} 的數據不是最新的 (DB: ${latestDateStr} vs Target: ${targetDateStr})，將從 ${startDateStr} 開始抓取增量數據...`);
-            return fetchAndSaveMarketDataRange(symbol, startDateStr, today.toISOString().split('T')[0]);
+            // 抓取到明天以確保包含今天的完整數據
+            const endDateForFetch = new Date();
+            endDateForFetch.setDate(endDateForFetch.getDate() + 1);
+            return fetchAndSaveMarketDataRange(symbol, startDateStr, endDateForFetch.toISOString().split('T')[0]);
         }
     });
 
