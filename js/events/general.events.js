@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.2 - 支援漸進式載入
+// == 通用事件處理模組 (general.events.js) v3.3 - 支援鍵盤操作
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -165,6 +165,17 @@ export function initializeGeneralEventListeners() {
         closeModal('notes-modal');
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為主筆記表單增加 Enter 鍵監聽
+    document.getElementById('notes-form').addEventListener('keydown', (e) => {
+        // 使用 Ctrl+Enter 或 Command+Enter 送出，避免在輸入筆記時誤觸
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            document.getElementById('save-notes-btn').click();
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
+
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
@@ -293,6 +304,16 @@ export function initializeGeneralEventListeners() {
             });
         }
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 使用事件委派，為詳情彈窗內的筆記表單增加 Enter 鍵監聽
+    document.getElementById('details-modal').addEventListener('keydown', (e) => {
+        if (e.target.closest('#details-notes-form') && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            document.getElementById('details-save-notes-btn').click();
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 
     // Chart controls listeners (unchanged)
     const twrControls = document.getElementById('twr-chart-controls');
