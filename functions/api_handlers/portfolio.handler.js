@@ -73,21 +73,21 @@ exports.getHoldings = async (uid, res) => {
 
 
 /**
- * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據 (此函式現在可被拆分的 API 取代，但暫時保留以防萬一)
+ * 【旧版 API - 修改】轻量级 API：只获取仪表板和持股数据（此函式现在是盘中刷新的核心）
  */
 exports.getDashboardAndHoldings = async (uid, res) => {
-    // ========================= 【核心修改 - 開始】 =========================
-    // 現在這個 API 會一次性獲取所有盤中刷新需要的數據
+    // ========================= 【核心修改 - 开始】 =========================
+    // 现在这个 API 会一次性获取所有盘中刷新需要的数据
     const [holdings, summaryResult, stockNotes] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
-        // 獲取完整的 summary row，而不僅僅是 summary_data
+        // 获取完整的 summary row，而不仅仅是 summary_data
         d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid])
     ]);
 
     const summaryRow = summaryResult[0] || {};
     const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
-    // 從完整的 summary row 中解析出圖表歷史數據
+    // 从完整的 summary row 中解析出图表历史数据
     const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
 
@@ -97,12 +97,12 @@ exports.getDashboardAndHoldings = async (uid, res) => {
             summary: summaryData,
             holdings,
             stockNotes,
-            // 將圖表歷史數據也一併回傳給前端
+            // 将图表历史数据也一并回传给前端
             twrHistory,
             benchmarkHistory
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
+    // ========================= 【核心修改 - 结束】 =========================
 };
 
 /**
