@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.1 - 支援非同步微觀編輯
+// == 交易事件處理模組 (transaction.events.js) v2.2 - 修正匯率欄位送出邏輯
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -88,6 +88,12 @@ async function handleDelete(button) {
 async function handleNextStep() {
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    const exchangeRateInput = document.getElementById('exchange-rate').value;
+    const exchangeRateValue = exchangeRateInput.trim() === '' ? null : parseFloat(exchangeRateInput);
+    // ========================= 【核心修改 - 結束】 =========================
+
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -96,7 +102,7 @@ async function handleNextStep() {
         price: parseFloat(document.getElementById('price').value),
         currency: document.getElementById('currency').value,
         totalCost: parseFloat(document.getElementById('total-cost').value) || null,
-        exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+        exchangeRate: exchangeRateValue // 使用我們處理過的值
     };
 
     if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
