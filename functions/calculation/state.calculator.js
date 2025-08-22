@@ -143,7 +143,7 @@ function dailyValue(state, market, date, allEvts) {
         const s = state[sym];
         const qty = s.lots.reduce((sum, lot) => sum + lot.quantity, 0);
 
-        if (qty < 1e-9) continue;
+        if (Math.abs(qty) < 1e-9) continue;
 
         const priceInfo = findNearest(market[sym]?.prices, date);
 
@@ -159,7 +159,7 @@ function dailyValue(state, market, date, allEvts) {
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
-        const fx = findFxRate(market, s.currency, priceDate);
+        const fx = findFxRate(market, s.currency, date);
 
         totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
     }
