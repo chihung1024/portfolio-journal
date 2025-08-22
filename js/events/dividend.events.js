@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 配息事件處理模組 (dividend.events.js)
+// == 配息事件處理模듈 (dividend.events.js) v1.1 - 支援鍵盤操作
 // == 職責：處理所有與配息管理分頁相關的用戶互動事件。
 // =========================================================================================
 
@@ -128,6 +128,17 @@ export function initializeDividendEventListeners() {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('dividend-modal');
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為配息表單增加 Enter 鍵監聽
+    document.getElementById('dividend-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.target.matches('textarea')) { // 避免在多行備註欄位按 Enter 就送出
+            e.preventDefault();
+            document.getElementById('save-dividend-btn').click();
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
+    
     document.getElementById('dividend-history-modal').addEventListener('click', async (e) => {
         if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {
             const { closeModal } = await import('../ui/modals.js');
