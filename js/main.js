@@ -231,7 +231,7 @@ async function loadHoldingsInBackground() {
     }
 }
 
-// ... 其他載入函式 (loadChartDataInBackground, loadSecondaryDataInBackground) 維持不變 ...
+
 async function loadChartDataInBackground() {
     try {
         const result = await apiRequest('get_chart_data', {});
@@ -245,6 +245,7 @@ async function loadChartDataInBackground() {
             updateAssetChart();
             updateTwrChart(getState().summary?.benchmarkSymbol || 'SPY');
             updateNetProfitChart();
+            // 【修改】將二次資料載入移至此處，確保圖表數據優先載入
             loadSecondaryDataInBackground();
         }
     } catch (error) {
@@ -253,6 +254,7 @@ async function loadChartDataInBackground() {
 }
 
 async function loadSecondaryDataInBackground() {
+    // 【修改】此處的 API 呼叫已包含 splits, transactions 和 dividends
     const results = await Promise.allSettled([
         apiRequest('get_transactions_with_staging', {}),
         apiRequest('get_dividends_for_management', {}),
@@ -283,7 +285,7 @@ async function loadSecondaryDataInBackground() {
     } else {
         console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
     }
-    
+
     // 【新增】處理拆股資料
     if (results[2].status === 'fulfilled' && results[2].value.success) {
         setState({
@@ -301,7 +303,7 @@ async function loadSecondaryDataInBackground() {
 async function loadTransactionsData() {
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
-        const result = await apiRequest('get_transactions_with_staging', {}); // 【修改】改為呼叫新的 API
+        const result = await apiRequest('get_transactions_with_staging', {});
         if (result.success) {
             const { transactions, hasStagedChanges } = result.data;
             setState({
@@ -353,7 +355,6 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     
-    // 【新增】為 "全部提交" 按鈕綁定事件
     document.getElementById('commit-all-btn').addEventListener('click', commitAllChanges);
 
     document.getElementById('tabs').addEventListener('click', async (e) => {
@@ -362,18 +363,19 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            if (tabName === 'transactions' && getState().transactions.length === 0) {
-                await loadTransactionsData();
-            } else if (tabName === 'dividends' && !getState().pendingDividends) {
-                await loadAndShowDividends();
-            }
+            // 【移除】按需載入邏輯，因為現在是預載
+            // if (tabName === 'transactions' && getState().transactions.length === 0) {
+            //     await loadTransactionsData();
+            // } else if (tabName === 'dividends' && !getState().pendingDividends) {
+            //     await loadAndShowDividends();
+            // }
         }
     });
 
     document.getElementById('group-selector').addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
-        applyGroupView(selectedGroupId); // applyGroupView 內部已處理 'all' 的情況
+        applyGroupView(selectedGroupId);
     });
 }
 
@@ -394,7 +396,7 @@ export function initializeAppUI() {
     initializeGroupEventListeners();
     lucide.createIcons();
     
-    startSystemHealthCheck(); // 【新增】啟動健康檢查
+    startSystemHealthCheck();
 
     setState({ isAppInitialized: true });
 }
