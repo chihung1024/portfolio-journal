@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v2.8.2 (優化後)
+// == 身份驗證模組 (auth.js) v2.9.0 (支援鍵盤操作)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -14,7 +14,6 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-// 【修改】從 main.js 引入新的函式
 import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
@@ -79,6 +78,16 @@ export function initializeAuth() {
             stopLiveRefresh();
         }
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為登入表單增加 Enter 鍵監聽
+    document.getElementById('auth-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault(); // 防止表單預設提交行為
+            document.getElementById('login-btn').click(); // 觸發登入按鈕
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
