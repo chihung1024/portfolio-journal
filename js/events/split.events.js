@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v2.0 - UI Refinements
+// == 拆股事件處理模組 (split.events.js) v2.1 - 支援鍵盤操作
 // =========================================================================================
 
 import { executeApiAction } from '../api.js';
@@ -72,4 +72,14 @@ export function initializeSplitEventListeners() {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('split-modal');
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為拆股表單增加 Enter 鍵監聽
+    document.getElementById('split-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('save-split-btn').click();
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 }
