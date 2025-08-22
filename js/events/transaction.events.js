@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.0.0 - (核心重構) 支援 ATLAS-COMMIT
+// == 交易事件處理模組 (transaction.events.js) v3.1.0 - (修正) 導出還原函式
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -13,9 +13,6 @@ import { v4 as uuidv4 } from 'https://jspm.dev/uuid';
 
 // --- Private Functions (內部函式) ---
 
-/**
- * 處理新增或編輯交易表單的提交 (新架構核心邏輯)
- */
 async function handleTransactionFormSubmit() {
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
@@ -39,11 +36,9 @@ async function handleTransactionFormSubmit() {
     closeModal('transaction-modal');
 
     const op = isEditing ? 'UPDATE' : 'CREATE';
-    // 對於新增操作，我們在前端生成一個臨時 UUID，以便後續操作 (如還原)
     const entityId = isEditing ? txId : uuidv4(); 
     const payload = isEditing ? { ...transactionData, id: entityId } : transactionData;
 
-    // 步驟 1: 樂觀更新 UI
     const currentState = getState();
     let updatedTransactions;
 
@@ -57,22 +52,14 @@ async function handleTransactionFormSubmit() {
     } else {
         const newTransaction = {
             ...payload,
-            id: entityId, // 使用我們生成的臨時 ID
+            id: entityId,
             status: 'STAGED_CREATE'
         };
         updatedTransactions = [newTransaction, ...currentState.transactions];
     }
 
-    const change = {
-        id: entityId, // 使用交易ID作為變更ID
-        op,
-        entity: 'transaction',
-        payload
-    };
-    
-    // 從 stagedChanges 中移除對同一個項目的舊變更（如果有的話）
+    const change = { id: entityId, op, entity: 'transaction', payload };
     const otherChanges = currentState.stagedChanges.filter(c => c.id !== entityId);
-
 
     setState({
         transactions: updatedTransactions,
@@ -83,13 +70,11 @@ async function handleTransactionFormSubmit() {
     renderTransactionsTable();
     updateStagingBanner();
 
-    // 步驟 2: 背景發送暫存請求
     try {
         await apiRequest('stage_change', { op, entity: 'transaction', payload });
         showNotification('info', `一筆交易變更已加入待辦，請記得提交。`);
     } catch (error) {
         showNotification('error', `暫存變更失敗: ${error.message}，正在還原 UI...`);
-        // 如果 API 失敗，則還原前端狀態
         setState({
             transactions: currentState.transactions,
             stagedChanges: currentState.stagedChanges,
@@ -100,10 +85,6 @@ async function handleTransactionFormSubmit() {
     }
 }
 
-
-/**
- * 處理刪除交易按鈕 (新架構核心邏輯)
- */
 async function handleDelete(button) {
     const txId = button.dataset.id;
     const { transactions } = getState();
@@ -111,26 +92,16 @@ async function handleDelete(button) {
     if (!transactionToDelete) return;
 
     showConfirm('確定要刪除這筆交易紀錄嗎？此操作將加入待辦清單。', () => {
-        // 步驟 1: 樂觀更新 UI
         const currentState = getState();
-        
         let updatedTransactions = currentState.transactions.map(t => {
             if (t.id === txId) {
-                if (t.status === 'STAGED_CREATE') {
-                    return null;
-                }
+                if (t.status === 'STAGED_CREATE') return null;
                 return { ...t, status: 'STAGED_DELETE' };
             }
             return t;
         }).filter(Boolean);
         
-        const change = {
-            id: txId,
-            op: 'DELETE',
-            entity: 'transaction',
-            payload: { id: txId }
-        };
-
+        const change = { id: txId, op: 'DELETE', entity: 'transaction', payload: { id: txId } };
         const otherChanges = currentState.stagedChanges.filter(c => c.id !== txId);
 
         setState({
@@ -142,14 +113,12 @@ async function handleDelete(button) {
         renderTransactionsTable();
         updateStagingBanner();
 
-        // 步驟 2: 背景發送暫存請求
         apiRequest('stage_change', { op: 'DELETE', entity: 'transaction', payload: { id: txId } })
             .then(() => {
                 showNotification('info', '一筆刪除操作已加入待辦，請記得提交。');
             })
             .catch(error => {
                 showNotification('error', `暫存刪除操作失敗: ${error.message}，正在還原 UI...`);
-                // 還原前端狀態
                 setState({
                     transactions: currentState.transactions,
                     stagedChanges: currentState.stagedChanges,
@@ -162,35 +131,30 @@ async function handleDelete(button) {
 }
 
 /**
- * 【新增】處理還原暫存變更
+ * 【修改】處理還原暫存變更，並將其導出
  */
-async function handleRevertChange(button) {
+export async function handleRevertChange(button) {
     const changeId = button.dataset.changeId;
-    
-    // 步驟 1: 樂觀更新 UI (此處的簡化邏輯是直接觸發後端重新獲取)
     const currentState = getState();
-    
+
+    // 先從 UI 上移除，提供即時反饋（雖然最終會被後端資料覆蓋）
     const updatedStagedChanges = currentState.stagedChanges.filter(c => c.id !== changeId);
-    
     setState({
         stagedChanges: updatedStagedChanges,
         hasStagedChanges: updatedStagedChanges.length > 0
     });
     
-    // 步驟 2: 背景發送還原請求
     try {
         await apiRequest('revert_staged_change', { changeId });
         showNotification('success', '變更已成功還原。');
         
-        // 為了確保 UI 正確性，從後端重新獲取一次合併後的交易列表
+        // 從後端重新獲取權威的交易列表
         const result = await apiRequest('get_transactions_with_staging', {});
         
-        const otherStagedChanges = getState().stagedChanges;
-        const finalChanges = otherStagedChanges.filter(c => c.entity !== 'transaction');
-        
+        // 更新 state 並重繪
         setState({ 
-            transactions: result.data.transactions,
-            hasStagedChanges: finalChanges.length > 0 || result.data.hasStagedChanges
+            transactions: result.data.transactions || [],
+            hasStagedChanges: result.data.hasStagedChanges,
         });
 
         renderTransactionsTable();
@@ -198,32 +162,29 @@ async function handleRevertChange(button) {
 
     } catch (error) {
         showNotification('error', `還原失敗: ${error.message}`);
-        // 還原 state
+        // 如果失敗，還原 state
         setState({
             stagedChanges: currentState.stagedChanges,
             hasStagedChanges: currentState.hasStagedChanges,
         });
+        renderTransactionsTable();
+        updateStagingBanner();
     }
 }
-
 
 // --- Public Function (公開函式，由 main.js 呼叫) ---
 
 export function initializeTransactionEventListeners() {
-    // "新增交易" 按鈕行為不變，僅是打開 modal
     document.getElementById('add-transaction-btn').addEventListener('click', () => {
         openModal('transaction-modal');
     });
 
-    // Modal 中的 "下一步" 按鈕現在觸發新的提交邏輯
     document.getElementById('confirm-transaction-btn').addEventListener('click', handleTransactionFormSubmit);
     
-    // "取消" 按鈕行為不變
     document.getElementById('cancel-transaction-btn').addEventListener('click', () => {
         closeModal('transaction-modal');
     });
 
-    // 對整個 Tab 進行事件委託
     document.getElementById('transactions-tab').addEventListener('click', (e) => {
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
@@ -251,7 +212,6 @@ export function initializeTransactionEventListeners() {
             return;
         }
 
-        // 【新增】監聽還原按鈕
         const revertButton = e.target.closest('.revert-change-btn');
         if (revertButton) {
             e.preventDefault();
@@ -271,7 +231,6 @@ export function initializeTransactionEventListeners() {
         }
     });
 
-    // 篩選器行為不變
     document.getElementById('transactions-tab').addEventListener('change', (e) => {
         if (e.target.id === 'transaction-symbol-filter') {
             setState({ 
