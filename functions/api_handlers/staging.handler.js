@@ -1,99 +1,128 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v5.2.3 - 最終修正 統一 API 呼叫簽名)
+// == [最終修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.4 - 統一簽名
+// == 職責：處理所有與暫存區相關的 API Action，統一所有函式簽名以確保穩定性
 // =========================================================================================
 
-const admin = require('firebase-admin');
+const { v4: uuidv4 } = require('uuid');
 const { z } = require("zod");
-const { d1Client } = require('./d1.client');
-const { performRecalculation } = require('./performRecalculation');
-const { verifyFirebaseToken } = require('./middleware');
-const transactionHandlers = require('./api_handlers/transaction.handler');
-const dividendHandlers = require('./api_handlers/dividend.handler');
-const splitHandlers = require('./api_handlers/split.handler');
-const noteHandlers = require('./api_handlers/note.handler');
-const portfolioHandlers = require('./api_handlers/portfolio.handler');
-const groupHandlers = require('./api_handlers/group.handler');
-const detailsHandlers = require('./api_handlers/details.handler');
-const stagingHandlers = require('./api_handlers/staging.handler');
+const { d1Client } = require('../d1.client');
+const { performRecalculation } = require('../performRecalculation');
+const schemas = require('../schemas');
 
-try { admin.initializeApp(); } catch (e) {}
+const changeOperationSchema = z.object({
+    op: z.enum(['CREATE', 'UPDATE', 'DELETE']),
+    entity: z.enum(['transaction', 'split', 'dividend', 'group_membership']),
+    payload: z.any()
+});
 
-exports.unifiedPortfolioHandler = async (req, res) => {
-    // CORS and OPTIONS handling
-    const allowedOrigins = ['https://portfolio-journal.pages.dev', 'https://dev.portfolio-journal.pages.dev', 'https://portfolio-journal-467915.firebaseapp.com'];
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) { res.set('Access-Control-Allow-Origin', origin); }
-    if (req.method === 'OPTIONS') { res.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY'); res.set('Access-Control-Max-Age', '3600'); res.status(204).send(''); return; }
-    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
-
-    // Service Account request handling
-    const serviceAccountKey = req.headers['x-service-account-key'];
-    if (serviceAccountKey) {
-        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) { return res.status(403).send({ success: false, message: 'Invalid Service Account Key' }); }
-        if (req.body.action === 'recalculate_all_users') {
-            try {
-                const createSnapshot = req.body.createSnapshot || false;
-                const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
-                for (const row of allUidsResult) { await performRecalculation(row.uid, null, createSnapshot); }
-                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
-            } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
-        }
-        return res.status(400).send({ success: false, message: '無效的服務操作。' });
+exports.stageChange = async (uid, data, res) => {
+    // ... (此函式內容維持不變)
+    const { op, entity, payload } = changeOperationSchema.parse(data);
+    let validatedPayload;
+    let entityId = null;
+    switch (`${entity}:${op}`) {
+        case 'transaction:CREATE': validatedPayload = schemas.transactionSchema.parse(payload); break;
+        case 'transaction:UPDATE': validatedPayload = schemas.transactionSchema.extend({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        case 'transaction:DELETE': validatedPayload = z.object({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        case 'group_membership:UPDATE': validatedPayload = z.object({ transactionId: z.string().uuid(), groupIds: z.array(z.string()) }).parse(payload); entityId = validatedPayload.transactionId; break;
+        default: return res.status(400).send({ success: false, message: `不支援的操作: ${entity}:${op}` });
     }
+    const changeId = uuidv4();
+    await d1Client.query( `INSERT INTO staged_changes (id, uid, entity_type, operation_type, entity_id, payload) VALUES (?, ?, ?, ?, ?, ?)`, [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]);
+    return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId });
+};
 
-    // Main request routing
-    await verifyFirebaseToken(req, res, async () => {
-        try {
-            const uid = req.user.uid;
-            const { action, data } = req.body;
-            if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+exports.getTransactionsWithStaging = async (uid, data, res) => {
+    // ... (維持 v1.3 的防彈邏輯不變)
+    try {
+        const { page = 1, pageSize = 15 } = z.object({ page: z.number().int().positive().optional(), pageSize: z.number().int().positive().optional() }).parse(data || {});
+        const [committedTxs, stagedChanges] = await Promise.all([ d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]), d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])]);
+        const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
+        for (const change of stagedChanges) {
+            if (change.operation_type !== 'CREATE' && change.operation_type !== 'UPDATE') continue;
+            try {
+                const payload = JSON.parse(change.payload); const entityId = change.entity_id || change.id; if (!entityId) continue;
+                if (change.operation_type === 'CREATE') { txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' }); }
+                else { const existingTx = txMap.get(entityId); if (existingTx && typeof existingTx === 'object') { txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' }); } }
+            } catch (e) { console.error(`Error processing CREATE/UPDATE change ${change.id}:`, e); }
+        }
+        for (const change of stagedChanges) {
+            if (change.operation_type !== 'DELETE') continue;
+            try {
+                const payload = JSON.parse(change.payload); const entityId = change.entity_id || payload.id; if (!entityId) continue;
+                const existingTx = txMap.get(entityId);
+                if (existingTx && typeof existingTx === 'object' && existingTx.hasOwnProperty('status')) {
+                    if (existingTx.status === 'STAGED_CREATE') { txMap.delete(entityId); } else { existingTx.status = 'STAGED_DELETE'; }
+                }
+            } catch(e) { console.error(`Error processing DELETE change ${change.id}:`, e); }
+        }
+        const mergedTxs = Array.from(txMap.values()).filter(tx => tx && tx.status !== 'STAGED_DELETE').sort((a, b) => new Date(b.date) - new Date(a.date));
+        const offset = (page - 1) * pageSize;
+        const paginatedTxs = mergedTxs.slice(offset, offset + pageSize);
+        return res.status(200).send({ success: true, data: { transactions: paginatedTxs, hasStagedChanges: stagedChanges.length > 0 } });
+    } catch (error) {
+        console.error("Critical error in getTransactionsWithStaging:", error);
+        return res.status(500).send({ success: false, message: `伺服器處理交易列表時發生嚴重錯誤: ${error.message}` });
+    }
+};
 
-            switch (action) {
-                // Portfolio
-                case 'get_data': return await portfolioHandlers.getData(uid, res);
-                case 'update_benchmark': return await portfolioHandlers.updateBenchmark(uid, data, res);
-                case 'get_dashboard_and_holdings': return await portfolioHandlers.getDashboardAndHoldings(uid, res);
-                case 'get_dashboard_summary': return await portfolioHandlers.getDashboardSummary(uid, res);
-                case 'get_holdings': return await portfolioHandlers.getHoldings(uid, res);
-                case 'get_transactions_and_splits': return await portfolioHandlers.getTransactionsAndSplits(uid, res);
-                case 'get_chart_data': return await portfolioHandlers.getChartData(uid, res);
-                case 'get_symbol_details': return await detailsHandlers.getSymbolDetails(uid, data, res);
-                // Transactions
-                case 'add_transaction': return await transactionHandlers.addTransaction(uid, data, res);
-                case 'edit_transaction': return await transactionHandlers.editTransaction(uid, data, res);
-                case 'delete_transaction': return await transactionHandlers.deleteTransaction(uid, data, res);
-                // Splits
-                case 'add_split': return await splitHandlers.addSplit(uid, data, res);
-                case 'delete_split': return await splitHandlers.deleteSplit(uid, data, res);
-                // Dividends
-                case 'get_dividends_for_management': return await dividendHandlers.getDividendsForManagement(uid, res);
-                case 'save_user_dividend': return await dividendHandlers.saveUserDividend(uid, data, res);
-                case 'bulk_confirm_all_dividends': return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
-                case 'delete_user_dividend': return await dividendHandlers.deleteUserDividend(uid, data, res);
-                // Notes
-                case 'save_stock_note': return await noteHandlers.saveStockNote(uid, data, res);
-                // Groups
-                case 'get_groups': return await groupHandlers.getGroups(uid, res);
-                case 'get_group_details': return await groupHandlers.getGroupDetails(uid, data, res);
-                case 'get_transaction_memberships': return await groupHandlers.getTransactionMemberships(uid, data, res);
-                case 'save_group': return await groupHandlers.saveGroup(uid, data, res);
-                case 'delete_group': return await groupHandlers.deleteGroup(uid, data, res);
-                case 'calculate_group_on_demand': return await groupHandlers.calculateGroupOnDemand(uid, data, res);
-                case 'update_transaction_group_membership': return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
-                
-                // Staging Area -- 【最終修正】確保所有呼叫都使用 (uid, data, res) 格式
-                case 'stage_change': return await stagingHandlers.stageChange(uid, data, res);
-                case 'get_transactions_with_staging': return await stagingHandlers.getTransactionsWithStaging(uid, data, res);
-                case 'commit_all_changes': return await stagingHandlers.commitAllChanges(uid, data, res);
-                case 'revert_staged_change': return await stagingHandlers.revertStagedChange(uid, data, res);
-                case 'get_system_health': return await stagingHandlers.getSystemHealth(uid, data, res);
-                
-                default: return res.status(400).send({ success: false, message: '未知的操作' });
+/**
+ * 3. Commit API: 【核心修正】統一函式簽名
+ */
+exports.commitAllChanges = async (uid, data, res) => { // 新增 data 參數
+    // ... (內部邏輯完全不變)
+    const pendingChanges = await d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND status = 'PENDING' ORDER BY created_at ASC`, [uid]);
+    if (pendingChanges.length === 0) return res.status(200).send({ success: true, message: '沒有待處理的變更。' });
+    const batchId = uuidv4();
+    const pendingIds = pendingChanges.map(c => c.id);
+    const placeholders = pendingIds.map(() => '?').join(',');
+    await d1Client.query(`UPDATE staged_changes SET status = 'COMMITTING', batch_id = ? WHERE id IN (${placeholders})`, [batchId, ...pendingIds]);
+    try {
+        pendingChanges.forEach(change => {
+            const payload = JSON.parse(change.payload); const { entity_type: entity, operation_type: op } = change;
+            switch (`${entity}:${op}`) {
+                case 'transaction:CREATE': schemas.transactionSchema.parse(payload); break;
+                case 'transaction:UPDATE': schemas.transactionSchema.extend({ id: z.string().uuid() }).parse(payload); break;
+                case 'transaction:DELETE': z.object({ id: z.string().uuid() }).parse(payload); break;
+                case 'group_membership:UPDATE': z.object({ transactionId: z.string().uuid(), groupIds: z.array(z.string()) }).parse(payload); break;
             }
-        } catch (error) {
-            console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
-            if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });
-            res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
+        });
+    } catch (error) {
+        await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [error.message, batchId]);
+        return res.status(400).send({ success: false, message: '提交的變更中有無效數據，請檢查。', error: error.message });
+    }
+    const dbOperations = []; let earliestChangeDate = new Date().toISOString();
+    pendingChanges.forEach(change => {
+        const payload = JSON.parse(change.payload); const date = payload.date || new Date().toISOString(); if (date < earliestChangeDate) { earliestChangeDate = date; }
+        switch (`${change.entity_type}:${change.operation_type}`) {
+            case 'transaction:CREATE': dbOperations.push({ sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, params: [change.id, uid, payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate] }); break;
+            case 'transaction:UPDATE': dbOperations.push({ sql: `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, params: [payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate, payload.id, uid] }); break;
+            case 'transaction:DELETE': dbOperations.push({ sql: 'DELETE FROM transactions WHERE id = ? AND uid = ?', params: [payload.id, uid] }); dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [payload.id, uid] }); break;
+            case 'group_membership:UPDATE': dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [payload.transactionId, uid]}); payload.groupIds.forEach(groupId => { dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, groupId, payload.transactionId] }); }); break;
         }
     });
+    dbOperations.push({ sql: `DELETE FROM staged_changes WHERE batch_id = ?`, params: [batchId] });
+    try { await d1Client.batch(dbOperations); }
+    catch (dbError) { await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [dbError.message, batchId]); return res.status(500).send({ success: false, message: '資料庫寫入失敗，您的變更已還原。', error: dbError.message }); }
+    try { await performRecalculation(uid, earliestChangeDate, false); }
+    catch (recalcError) { console.error(`[CRITICAL] UID ${uid}, BatchID ${batchId}: DB commit OK, but recalc failed! Error: ${recalcError.message}`); return res.status(500).send({ success: false, message: `資料庫已更新，但績效計算過程中發生錯誤。請聯繫管理員。 Batch ID: ${batchId}` }); }
+    const [holdings, summaryResult] = await Promise.all([ d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']), d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all'])]);
+    const summaryRow = summaryResult[0] || {}; const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {}; const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {}; const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {}; const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {}; const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    return res.status(200).send({ success: true, message: '所有變更已成功提交並計算完畢。', data: { holdings, summary: summary_data, history: portfolioHistory, twrHistory, netProfitHistory, benchmarkHistory } });
+};
+
+exports.revertStagedChange = async (uid, data, res) => {
+    // ... (此函式邏輯不變)
+    const { changeId } = z.object({ changeId: z.string() }).parse(data);
+    await d1Client.query(`DELETE FROM staged_changes WHERE id = ? AND uid = ?`, [changeId, uid]);
+    return res.status(200).send({ success: true, message: '變更已捨棄。' });
+};
+
+/**
+ * 5. Health Check API: 【核心修正】統一函式簽名
+ */
+exports.getSystemHealth = async (uid, data, res) => { // 新增 data 參數
+    const snapshotResult = await d1Client.query('SELECT MAX(snapshot_date) as last_snapshot_date FROM portfolio_snapshots WHERE uid = ?', [uid]);
+    const lastSnapshotDate = snapshotResult[0]?.last_snapshot_date || null;
+    return res.status(200).send({ success: true, data: { lastSnapshotDate } });
 };
