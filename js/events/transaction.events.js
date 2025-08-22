@@ -204,8 +204,46 @@ export function initializeTransactionEventListeners() {
         openModal('transaction-modal');
     });
 
-    // Modal 中的 "下一步" 按鈕現在觸發新的提交邏輯
-    document.getElementById('confirm-transaction-btn').addEventListener('click', handleTransactionFormSubmit);
+    // Modal 中的 "下一步" 按鈕現在觸發新的提交流程
+    document.getElementById('confirm-transaction-btn').addEventListener('click', async () => {
+        // 從 modals.js 引入需要的函式
+        const { openGroupAttributionModal, closeModal } = await import('../ui/modals.js');
+        const { setState } = await import('../state.js');
+    
+        const txId = document.getElementById('transaction-id').value;
+        const isEditing = !!txId;
+    
+        // 收集第一頁的表單資料
+        const transactionData = {
+            date: document.getElementById('transaction-date').value,
+            symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+            type: document.querySelector('input[name="transaction-type"]:checked').value,
+            quantity: parseFloat(document.getElementById('quantity').value),
+            price: parseFloat(document.getElementById('price').value),
+            currency: document.getElementById('currency').value,
+            totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+            exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+        };
+    
+        // 驗證資料
+        if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
+            showNotification('error', '請填寫所有必填欄位。');
+            return;
+        }
+        
+        // 將資料暫存在 state 中，供第二步使用
+        setState({
+            tempTransactionData: {
+                isEditing: isEditing,
+                txId: txId,
+                data: transactionData
+            }
+        });
+    
+        // 關閉第一步的視窗，並打開第二步的視窗
+        closeModal('transaction-modal');
+        openGroupAttributionModal();
+    });
     
     // "取消" 按鈕行為不變
     document.getElementById('cancel-transaction-btn').addEventListener('click', () => {
