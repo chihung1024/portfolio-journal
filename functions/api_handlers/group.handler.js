@@ -147,28 +147,19 @@ exports.calculateGroupOnDemand = async (uid, data, res) => {
 
     // ========================= 【核心修正 - 開始】 =========================
     
-    // 步驟 1: 建立一個只包含群組內股票代碼的 Set，以便高效查詢。
-    const symbolsInGroup = new Set(txsInGroup.map(t => t.symbol.toUpperCase()));
-
-    const [allSplits, allUserDividends, controlsData] = await Promise.all([
+    const [allUserSplits, allUserDividends, controlsData] = await Promise.all([
         d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
         d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
         d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
     ]);
 
-    // 步驟 2: 根據群組內的股票代碼，過濾拆股和股利事件。
-    const splitsInGroup = allSplits.filter(s => symbolsInGroup.has(s.symbol.toUpperCase()));
-    const dividendsInGroup = allUserDividends.filter(d => symbolsInGroup.has(d.symbol.toUpperCase()));
-
-    console.log(`[XIRR_FIX] 群組內交易: ${txsInGroup.length} 筆, 拆股: ${splitsInGroup.length} 筆, 股利: ${dividendsInGroup.length} 筆`);
-
     const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-    // 步驟 3: 將過濾後的、乾淨的數據傳遞給計算引擎。
+    // 步驟 3: 【簡化】直接將所有原始數據傳遞給引擎，由引擎內部處理過濾
     const result = await runCalculationEngine(
         txsInGroup,
-        splitsInGroup,      // <-- 使用過濾後的拆股
-        dividendsInGroup,   // <-- 使用過濾後的股利
+        allUserSplits,      // <-- 傳入所有拆股
+        allUserDividends,   // <-- 傳入所有股利
         benchmarkSymbol
     );
     
