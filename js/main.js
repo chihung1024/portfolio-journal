@@ -254,8 +254,9 @@ async function loadChartDataInBackground() {
 
 async function loadSecondaryDataInBackground() {
     const results = await Promise.allSettled([
-        apiRequest('get_transactions_with_staging', {}), // 【修改】改為呼叫新的 API
-        apiRequest('get_dividends_for_management', {})
+        apiRequest('get_transactions_with_staging', {}),
+        apiRequest('get_dividends_for_management', {}),
+        apiRequest('get_transactions_and_splits', {}) // 為了取得 splits
     ]);
 
     if (results[0].status === 'fulfilled' && results[0].value.success) {
@@ -263,8 +264,10 @@ async function loadSecondaryDataInBackground() {
         setState({
             transactions: transactions || [],
             hasStagedChanges: hasStagedChanges,
-            stagedChanges: transactions.filter(t => t.status && t.status !== 'COMMITTED') // 預先填充
+            stagedChanges: transactions.filter(t => t.status && t.status !== 'COMMITTED')
         });
+        // 【新增】在這裡呼叫 render
+        renderTransactionsTable();
         updateStagingBanner();
     } else {
         console.error("預載交易紀錄失敗:", results[0].reason || results[0].value.message);
@@ -275,8 +278,21 @@ async function loadSecondaryDataInBackground() {
             pendingDividends: results[1].value.data.pendingDividends,
             confirmedDividends: results[1].value.data.confirmedDividends,
         });
+        // 【新增】在這裡呼叫 render
+        renderDividendsManagementTab(results[1].value.data.pendingDividends, results[1].value.data.confirmedDividends);
     } else {
         console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
+    }
+    
+    // 【新增】處理拆股資料
+    if (results[2].status === 'fulfilled' && results[2].value.success) {
+        setState({
+            userSplits: results[2].value.data.splits || []
+        });
+        // 【新增】在這裡呼叫 render
+        renderSplitsTable();
+    } else {
+        console.error("預載拆股資料失敗:", results[2].reason || results[2].value.message);
     }
 }
 
