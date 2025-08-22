@@ -33,7 +33,7 @@ exports.stageChange = async (uid, data, res) => {
     }
     const changeId = uuidv4();
     await d1Client.query( `INSERT INTO staged_changes (id, uid, entity_type, operation_type, entity_id, payload) VALUES (?, ?, ?, ?, ?, ?)`, [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]);
-    return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId });
+    return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId }); // changeId was already here, but let's ensure the frontend uses it.
 };
 
 exports.getTransactionsWithStaging = async (uid, data, res) => {
