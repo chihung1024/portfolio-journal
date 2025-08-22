@@ -73,7 +73,7 @@ exports.getHoldings = async (uid, res) => {
 
 
 /**
- * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據 (此函式現在可被拆分的 API 取代，但暫時保留以防萬一)
+ * 【舊版 API - 修改】輕量級 API，現在是盤中刷新的核心
  */
 exports.getDashboardAndHoldings = async (uid, res) => {
     // ========================= 【核心修改 - 開始】 =========================
@@ -121,7 +121,7 @@ exports.getTransactionsAndSplits = async (uid, res) => {
  */
 exports.getChartData = async (uid, res) => {
     const summaryResult = await d1Client.query('SELECT history, twrHistory, benchmarkHistory, netProfitHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
-
+    
     const summaryRow = summaryResult[0] || {};
     const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
     const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
