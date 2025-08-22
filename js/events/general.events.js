@@ -1,45 +1,59 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.3 - (修正) 補全詳情彈窗的還原事件
+// == 通用事件處理模組 (general.events.js) v3.2 - 支援漸進式載入
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
+// 【修改】導入 apiRequest
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
-// 【新增】導入還原函式
-import { handleRevertChange } from './transaction.events.js';
 
 // --- Private Functions ---
 
+// 【新增】處理開啟詳情彈窗的核心邏輯
 async function handleShowDetails(symbol) {
     const { transactions } = getState();
+
+    // 檢查 state 中是否已存在此股票的交易紀錄
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+    
     const { openModal } = await import('../ui/modals.js');
+
     if (hasDataLocally) {
+        // 如果本地已有數據，直接開啟彈窗
         openModal('details-modal', false, { symbol });
     } else {
+        // 如果沒有，顯示讀取畫面，並向後端請求該個股的數據
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
         loadingText.textContent = `正在讀取 ${symbol} 的詳細資料...`;
         loadingOverlay.style.display = 'flex';
+        
         try {
             const result = await apiRequest('get_symbol_details', { symbol });
             if (result.success) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
+
+                // 合併新的數據到全域 state，並過濾掉可能重複的項目
                 const txIds = new Set(currentState.transactions.map(t => t.id));
                 const uniqueNewTxs = newTransactions.filter(t => !txIds.has(t.id));
+                
                 const divIds = new Set(currentState.confirmedDividends.map(d => d.id));
                 const uniqueNewDivs = newDividends.filter(d => !divIds.has(d.id));
+
                 setState({
                     transactions: [...currentState.transactions, ...uniqueNewTxs],
                     confirmedDividends: [...currentState.confirmedDividends, ...uniqueNewDivs]
                 });
+                
+                // 數據準備好後，打開彈窗
                 openModal('details-modal', false, { symbol });
             } else {
                 throw new Error(result.message);
@@ -47,11 +61,12 @@ async function handleShowDetails(symbol) {
         } catch (error) {
             showNotification('error', `讀取 ${symbol} 資料失敗: ${error.message}`);
         } finally {
-            loadingText.textContent = '正在從雲端同步資料...';
+            loadingText.textContent = '正在從雲端同步資料...'; // 恢復預設文字
             loadingOverlay.style.display = 'none';
         }
     }
 }
+
 
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
@@ -70,6 +85,7 @@ async function handleUpdateBenchmark() {
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     const { closeModal } = await import('../ui/modals.js');
     closeModal(modalToClose);
+
     executeApiAction('save_stock_note', noteData, {
         loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
         successMessage: `${noteData.symbol} 的筆記已儲存！`,
@@ -105,16 +121,21 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     const controlsId = chartType === 'twr' ? 'twr-chart-controls'
         : chartType === 'asset' ? 'asset-chart-controls'
             : 'net-profit-chart-controls';
+
     const finalStateKey = chartType === 'net-profit' ? 'netProfitDateRange' : stateKey;
     const finalHistoryKey = chartType === 'net-profit' ? 'netProfitHistory' : historyKey;
+
     const newRange = { type: rangeType, start: startDate, end: endDate };
     setState({ [finalStateKey]: newRange });
+
     document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
         btn.classList.remove('active');
         if (btn.dataset.range === rangeType) btn.classList.add('active');
     });
+
     const fullHistory = getState()[finalHistoryKey];
     const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
+
     if (rangeType !== 'custom') {
         const startDateInput = document.getElementById(`${chartType}-start-date`);
         const endDateInput = document.getElementById(`${chartType}-end-date`);
@@ -123,6 +144,7 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
             endDateInput.value = finalEndDate;
         }
     }
+
     if (chartType === 'twr') {
         const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY';
         updateTwrChart(benchmarkSymbol);
@@ -145,14 +167,18 @@ export function initializeGeneralEventListeners() {
 
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
+
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
+            // 此處的 openModal 會在 async 函式中被呼叫，但因事件監聽器本身不是 async,
+            // 我們可以這樣處理：
             (async () => {
                 const { openModal } = await import('../ui/modals.js');
                 openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
             })();
             return;
         }
+
         const viewSwitchBtn = e.target.closest('#holdings-view-switcher button');
         if (viewSwitchBtn) {
             const newView = viewSwitchBtn.dataset.view;
@@ -160,6 +186,7 @@ export function initializeGeneralEventListeners() {
             renderHoldingsTable(holdings);
             return;
         }
+
         const listItem = e.target.closest('.list-view-item');
         if (listItem) {
             const symbol = listItem.dataset.symbol;
@@ -168,11 +195,14 @@ export function initializeGeneralEventListeners() {
             renderHoldingsTable(holdings);
             return;
         }
+        
+        // 【修改】呼叫新的處理函式
         const mobileDetailsBtn = e.target.closest('.open-details-btn');
         if (mobileDetailsBtn) {
              handleShowDetails(mobileDetailsBtn.dataset.symbol);
              return;
         }
+
         const sortHeader = e.target.closest('[data-sort-key]');
         if (sortHeader) {
             const newSortKey = sortHeader.dataset.sortKey;
@@ -185,6 +215,8 @@ export function initializeGeneralEventListeners() {
             renderHoldingsTable(holdings);
             return;
         }
+        
+        // 【修改】呼叫新的處理函式
         const holdingRow = e.target.closest('.holding-row');
         if (holdingRow) {
             handleShowDetails(holdingRow.dataset.symbol);
@@ -192,7 +224,6 @@ export function initializeGeneralEventListeners() {
         }
     });
     
-    // ========================= 【核心修改 - 開始】 =========================
     document.getElementById('details-modal').addEventListener('click', async (e) => {
         if (e.target.closest('#close-details-modal-btn')) {
             const { closeModal } = await import('../ui/modals.js');
@@ -206,6 +237,7 @@ export function initializeGeneralEventListeners() {
             switchDetailsTab(tabItem.dataset.tab, symbol);
             return;
         }
+        
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
@@ -218,23 +250,13 @@ export function initializeGeneralEventListeners() {
             }
             return;
         }
+
         const deleteBtn = e.target.closest('.details-delete-tx-btn');
         if (deleteBtn) {
-            // 這裡的刪除也需要遵循樂觀更新，但邏輯已在 transaction.events.js 中，此處僅需觸發
-            // 我們可以模擬一個點擊事件，或者直接調用刪除函式
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
-            const { handleDelete } = await import('./transaction.events.js'); // 動態導入
-            // 由於 handleDelete 內部有自己的 showConfirm，這裡直接調用即可
-            // 為了讓 handleDelete 能找到按鈕，我們需要創建一個臨時按鈕
-            const tempBtn = document.createElement('button');
-            tempBtn.dataset.id = txId;
-            // 這裡直接調用會很奇怪，我們應該重構 handleDelete
-            // 暫時使用 executeApiAction 來保持一致
             showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-                 // 注意：這個刪除將是舊的同步模式，但可以解決暫時問題
-                 // 正確的做法是將 handleDelete 重構成可重用函式
-                 executeApiAction('delete_transaction', { txId }, {
+                executeApiAction('delete_transaction', { txId }, {
                     loadingText: '正在刪除交易...',
                     successMessage: '交易已成功刪除！'
                 }).then(() => {
@@ -244,24 +266,7 @@ export function initializeGeneralEventListeners() {
             });
             return;
         }
-        
-        // 【新增】處理還原按鈕的點擊事件
-        const revertButton = e.target.closest('.revert-change-btn');
-        if (revertButton) {
-            e.preventDefault();
-            const symbol = document.querySelector('#details-modal-content h2').textContent;
-
-            // 呼叫從 transaction.events.js 導入的函式
-            await handleRevertChange(revertButton);
-            
-            // 還原成功後，handleRevertChange 會更新全局 state
-            // 我們只需要用新的 state 重新渲染當前的彈窗即可
-            renderDetailsModal(symbol);
-            switchDetailsTab('transactions', symbol);
-            return;
-        }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 
     document.addEventListener('submit', (e) => {
         if (e.target.id === 'details-notes-form') {
@@ -289,7 +294,7 @@ export function initializeGeneralEventListeners() {
         }
     });
 
-    // Chart controls listeners
+    // Chart controls listeners (unchanged)
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
