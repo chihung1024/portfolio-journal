@@ -69,10 +69,14 @@ async function handleTransactionFormSubmit() {
         entity: 'transaction',
         payload
     };
+    
+    // 從 stagedChanges 中移除對同一個項目的舊變更（如果有的話）
+    const otherChanges = currentState.stagedChanges.filter(c => c.id !== entityId);
+
 
     setState({
         transactions: updatedTransactions,
-        stagedChanges: [...currentState.stagedChanges, change],
+        stagedChanges: [...otherChanges, change],
         hasStagedChanges: true
     });
 
@@ -109,12 +113,16 @@ async function handleDelete(button) {
     showConfirm('確定要刪除這筆交易紀錄嗎？此操作將加入待辦清單。', () => {
         // 步驟 1: 樂觀更新 UI
         const currentState = getState();
-        const updatedTransactions = currentState.transactions.map(t => {
+        
+        let updatedTransactions = currentState.transactions.map(t => {
             if (t.id === txId) {
+                if (t.status === 'STAGED_CREATE') {
+                    return null;
+                }
                 return { ...t, status: 'STAGED_DELETE' };
             }
             return t;
-        });
+        }).filter(Boolean);
         
         const change = {
             id: txId,
@@ -123,9 +131,11 @@ async function handleDelete(button) {
             payload: { id: txId }
         };
 
+        const otherChanges = currentState.stagedChanges.filter(c => c.id !== txId);
+
         setState({
             transactions: updatedTransactions,
-            stagedChanges: [...currentState.stagedChanges, change],
+            stagedChanges: [...otherChanges, change],
             hasStagedChanges: true
         });
 
@@ -157,16 +167,10 @@ async function handleDelete(button) {
 async function handleRevertChange(button) {
     const changeId = button.dataset.changeId;
     
-    // 步驟 1: 樂觀更新 UI
+    // 步驟 1: 樂觀更新 UI (此處的簡化邏輯是直接觸發後端重新獲取)
     const currentState = getState();
     
-    // 從 stagedChanges 中移除此變更
     const updatedStagedChanges = currentState.stagedChanges.filter(c => c.id !== changeId);
-    
-    // 根據原始狀態還原 transactions 陣列
-    // 這裡的邏輯需要後端重新發送合併後的數據來保證100%正確，
-    // 作為簡化，我們先重新觸發一次數據獲取
-    // TODO: 更精細化的前端還原邏輯
     
     setState({
         stagedChanges: updatedStagedChanges,
@@ -180,7 +184,14 @@ async function handleRevertChange(button) {
         
         // 為了確保 UI 正確性，從後端重新獲取一次合併後的交易列表
         const result = await apiRequest('get_transactions_with_staging', {});
-        setState({ transactions: result.data.transactions });
+        
+        const otherStagedChanges = getState().stagedChanges;
+        const finalChanges = otherStagedChanges.filter(c => c.entity !== 'transaction');
+        
+        setState({ 
+            transactions: result.data.transactions,
+            hasStagedChanges: finalChanges.length > 0 || result.data.hasStagedChanges
+        });
 
         renderTransactionsTable();
         updateStagingBanner();
@@ -204,46 +215,8 @@ export function initializeTransactionEventListeners() {
         openModal('transaction-modal');
     });
 
-    // Modal 中的 "下一步" 按鈕現在觸發新的提交流程
-    document.getElementById('confirm-transaction-btn').addEventListener('click', async () => {
-        // 從 modals.js 引入需要的函式
-        const { openGroupAttributionModal, closeModal } = await import('../ui/modals.js');
-        const { setState } = await import('../state.js');
-    
-        const txId = document.getElementById('transaction-id').value;
-        const isEditing = !!txId;
-    
-        // 收集第一頁的表單資料
-        const transactionData = {
-            date: document.getElementById('transaction-date').value,
-            symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
-            type: document.querySelector('input[name="transaction-type"]:checked').value,
-            quantity: parseFloat(document.getElementById('quantity').value),
-            price: parseFloat(document.getElementById('price').value),
-            currency: document.getElementById('currency').value,
-            totalCost: parseFloat(document.getElementById('total-cost').value) || null,
-            exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
-        };
-    
-        // 驗證資料
-        if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-            showNotification('error', '請填寫所有必填欄位。');
-            return;
-        }
-        
-        // 將資料暫存在 state 中，供第二步使用
-        setState({
-            tempTransactionData: {
-                isEditing: isEditing,
-                txId: txId,
-                data: transactionData
-            }
-        });
-    
-        // 關閉第一步的視窗，並打開第二步的視窗
-        closeModal('transaction-modal');
-        openGroupAttributionModal();
-    });
+    // Modal 中的 "下一步" 按鈕現在觸發新的提交邏輯
+    document.getElementById('confirm-transaction-btn').addEventListener('click', handleTransactionFormSubmit);
     
     // "取消" 按鈕行為不變
     document.getElementById('cancel-transaction-btn').addEventListener('click', () => {
@@ -292,7 +265,6 @@ export function initializeTransactionEventListeners() {
             const newPage = parseInt(pageButton.dataset.page, 10);
             if (!isNaN(newPage) && newPage > 0) {
                 setState({ transactionsCurrentPage: newPage });
-                // TODO: 將來這裡應該呼叫 get_transactions_with_staging API 來獲取新一頁數據
                 renderTransactionsTable(); 
             }
             return;
