@@ -166,7 +166,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     try {
         const result = await apiRequest(action, payload);
         
-        // 如果操作需要刷新數據，則直接使用 hydrateAppState
         if (shouldRefreshData && result.data) {
             hydrateAppState(result.data);
         }
@@ -184,14 +183,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
-
-/**
- * 【移除】舊的 `updateAppWithData` 和 `loadPortfolioData` 函式。
- * 它們的功能已被 `hydrateAppState` 和 `main.js` 中的新式漸進式載入流程所取代。
- */
-// function updateAppWithData(portfolioData) { ... } // REMOVED
-// export async function loadPortfolioData() { ... } // REMOVED
-
 
 /**
  * 按需計算特定群組的數據，並更新畫面 (此函式邏輯不變，但其內部會呼叫 hydrateAppState)
