@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.1 - 支援非同步微觀編輯
+// == 交易事件處理模組 (transaction.events.js) v2.2 - 支援鍵盤操作
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -154,6 +154,16 @@ export function initializeTransactionEventListeners() {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('transaction-modal');
     });
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為交易表單增加 Enter 鍵監聽
+    document.getElementById('transaction-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('confirm-transaction-btn').click();
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 
     document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
         const editButton = e.target.closest('.edit-btn');
