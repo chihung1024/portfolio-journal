@@ -138,65 +138,44 @@ export async function handleRevertChange(button) {
     const currentState = getState();
 
     // --- 開始：原子化的樂觀更新 ---
-
-    // 1. 找到要還原的變更紀錄
     const changeToRevert = currentState.stagedChanges.find(c => c.id === changeId);
     if (!changeToRevert) {
         console.warn(`找不到要還原的變更: ${changeId}`);
         return;
     }
 
-    // 2. 根據變更類型，計算出還原後的交易列表
     let updatedTransactions;
     if (changeToRevert.op === 'CREATE') {
-        // 如果是還原一個「新增」操作，那這筆交易應該從列表中消失
         updatedTransactions = currentState.transactions.filter(t => t.id !== changeId);
     } else {
-        // 如果是還原「更新」或「刪除」，我們將交易恢復為沒有暫存狀態的樣子
-        // 這會讓它在 UI 上變回一筆普通的、已提交的交易
         updatedTransactions = currentState.transactions.map(t => {
             if (t.id === changeId) {
-                const { status, ...rest } = t; // 移除 status 屬性
+                const { status, ...rest } = t;
                 return rest;
             }
             return t;
         });
     }
 
-    // 3. 從暫存變更列表中移除該筆紀錄
     const updatedStagedChanges = currentState.stagedChanges.filter(c => c.id !== changeId);
 
-    // 4. **一次性**更新所有相關的 state
     setState({
         transactions: updatedTransactions,
         stagedChanges: updatedStagedChanges,
         hasStagedChanges: updatedStagedChanges.length > 0
     });
 
-    // 5. **立即**根據新的 state 重繪 UI，確保畫面與計數同步
     renderTransactionsTable();
     updateStagingBanner();
-
     // --- 結束：原子化的樂觀更新 ---
 
-
-    // 6. 在背景與伺服器同步，如果失敗則還原 UI
+    // 在背景與伺服器同步，如果失敗則還原 UI
     try {
         await apiRequest('revert_staged_change', { changeId });
-        showNotification('success', '變更已成功還原。');
-        
-        // 為了確保與伺服器最終一致，可以再獲取一次權威數據（可選但推薦）
-        const result = await apiRequest('get_transactions_with_staging', {});
-        setState({ 
-            transactions: result.data.transactions || [],
-            hasStagedChanges: result.data.hasStagedChanges,
-        });
-        renderTransactionsTable();
-        updateStagingBanner();
-
+        // 【移除】成功後不再需要重新獲取數據，因為樂觀更新已經完成
+        // showNotification('success', '變更已成功還原。');
     } catch (error) {
         showNotification('error', `還原操作同步失敗: ${error.message}. 正在回滾UI.`);
-        // 如果 API 呼叫失敗，則將前端狀態回滾到操作前的樣子
         setState({
             transactions: currentState.transactions,
             stagedChanges: currentState.stagedChanges,
