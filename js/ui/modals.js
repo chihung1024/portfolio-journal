@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v4.0.0 - (核心重構) 支援 ATLAS-COMMIT 新增流程
+// == 彈出視窗模組 (modals.js) v4.1.0 - (核心重構) 修正 ATLAS-COMMIT 新增流程
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -7,7 +7,7 @@ import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
 import { apiRequest } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
-// 【新增】從 transaction.events.js 導入 stageTransactionChange 函式
+// 【修改】從 transaction.events.js 導入 stageTransactionChange 函式
 import { stageTransactionChange } from '../events/transaction.events.js';
 import { updateStagingBanner } from './components/stagingBanner.ui.js';
 
@@ -19,37 +19,40 @@ import { updateStagingBanner } from './components/stagingBanner.ui.js';
  */
 async function submitAttributionAndSaveTransaction() {
     const { tempTransactionData } = getState();
-    if (!tempTransactionData || tempTransactionData.isEditing) return;
+    if (!tempTransactionData) return;
 
     // 步驟 1: 暫存「新增交易」本身的操作
-    stageTransactionChange('CREATE', tempTransactionData.data, tempTransactionData.txId);
+    // 檢查是否為編輯模式，雖然此流程主要是為新增設計，但加上防呆
+    if (!tempTransactionData.isEditing) {
+        stageTransactionChange('CREATE', tempTransactionData.data, tempTransactionData.txId);
+    }
 
-    // 步驟 2: 檢查是否有群組歸屬變更，如果有，也將其加入暫存區
+    // 步驟 2: 檢查是否有群組歸屬變更，如果有，也將其作為一個獨立的變更加入暫存區
     const selectedGroupIds = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked'))
                                   .map(cb => cb.value);
-    
-    // 注意：在新架構下，我們不再處理 "newGroups" 的臨時創建，這應該是一個獨立的群組管理操作。
-    // 這簡化了流程，確保單次交易的原子性。
 
     if (selectedGroupIds.length > 0) {
         const payload = {
             transactionId: tempTransactionData.txId,
-            groupIds: selectedGroupIds.filter(id => !id.startsWith('temp_')) // 過濾掉臨時ID
+            groupIds: selectedGroupIds
         };
         const op = 'UPDATE';
         const entity = 'group_membership';
         
-        // 樂觀更新
+        // 樂觀更新 state
         const currentState = getState();
         const change = { id: payload.transactionId, op, entity, payload };
-        const otherChanges = currentState.stagedChanges.filter(c => !(c.entity === 'group_membership' && c.payload.transactionId === payload.transactionId));
+        // 智能合併：如果已存在對此交易的群組變更，則覆蓋
+        const otherChanges = currentState.stagedChanges.filter(c => 
+            !(c.entity === 'group_membership' && c.payload.transactionId === payload.transactionId)
+        );
         setState({
             stagedChanges: [...otherChanges, change],
             hasStagedChanges: true
         });
         updateStagingBanner();
         
-        // 背景暫存
+        // 背景發送暫存請求
         apiRequest('stage_change', { op, entity, payload })
             .catch(error => showNotification('error', `暫存群組歸屬失敗: ${error.message}`));
     }
@@ -60,7 +63,7 @@ async function submitAttributionAndSaveTransaction() {
 
 
 /**
- * 處理微觀編輯視窗中的儲存按鈕 (邏輯不變)
+ * 處理微觀編輯視窗中的儲存按鈕
  */
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -70,18 +73,24 @@ async function handleMembershipSave() {
     
     closeModal('membership-editor-modal');
     
-    // ... (此處邏輯已在 group.events.js 中實現，維持不變)
     const payload = { transactionId: tempMembershipEdit.txId, groupIds: selectedGroupIds };
     const op = 'UPDATE';
     const entity = 'group_membership';
     const currentState = getState();
     const change = { id: payload.transactionId, op, entity, payload };
     const otherChanges = currentState.stagedChanges.filter(c => !(c.entity === 'group_membership' && c.payload.transactionId === payload.transactionId));
+    
     setState({ stagedChanges: [...otherChanges, change], hasStagedChanges: true });
     updateStagingBanner();
+
     apiRequest('stage_change', { op, entity, payload })
         .then(() => showNotification('info', '一筆群組歸屬變更已加入待辦。'))
-        .catch(error => showNotification('error', `暫存歸屬變更失敗: ${error.message}`));
+        .catch(error => {
+             showNotification('error', `暫存歸屬變更失敗: ${error.message}`);
+             // 簡單還原
+             setState({ stagedChanges: currentState.stagedChanges, hasStagedChanges: currentState.hasStagedChanges });
+             updateStagingBanner();
+        });
 }
 
 
@@ -130,8 +139,6 @@ export async function openModal(modalId, isEdit = false, data = null) {
         container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取歸屬狀態...</p>';
         
         try {
-            // 注意：這裡應該讀取樂觀更新後的狀態，或直接從後端獲取最新狀態
-            // 暫時維持直接API請求，以確保準確性
             const result = await apiRequest('get_transaction_memberships', { transactionId: txId });
             const includedGroupIds = new Set(result.data.groupIds);
 
@@ -148,7 +155,6 @@ export async function openModal(modalId, isEdit = false, data = null) {
             container.innerHTML = '<p class="text-center text-sm text-red-500 py-4">讀取歸屬狀態失敗。</p>';
         }
     } 
-    // ... 其他 modal 的 open 邏輯維持不變 ...
     else if (modalId === 'split-modal') { document.getElementById('split-date').value = new Date().toISOString().split('T')[0]; }
     else if (modalId === 'notes-modal') { const note = stockNotes[data.symbol] || {}; document.getElementById('notes-modal-title').textContent = `編輯 ${data.symbol} 的筆記與目標`; document.getElementById('notes-symbol').value = data.symbol; document.getElementById('target-price').value = note.target_price || ''; document.getElementById('stop-loss-price').value = note.stop_loss_price || ''; document.getElementById('notes-content').value = note.notes || ''; }
     else if (modalId === 'dividend-modal') { const record = isEdit ? confirmedDividends.find(d => d.id === data.id) : pendingDividends[data.index]; if (!record) return; document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`; document.getElementById('dividend-id').value = record.id || ''; /* ... and so on */ }
@@ -168,6 +174,7 @@ export function openGroupAttributionModal() {
     const { tempTransactionData, groups } = getState();
     if (!tempTransactionData) return;
 
+    document.getElementById('attribution-modal-title').textContent = `新增交易紀錄 (步驟 2/2)`;
     document.getElementById('attribution-symbol-placeholder').textContent = tempTransactionData.data.symbol;
 
     const container = document.getElementById('attribution-groups-container');
@@ -180,7 +187,6 @@ export function openGroupAttributionModal() {
         `).join('')
         : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
     
-    // 移除 "建立新群組" 的UI，簡化流程
     document.getElementById('attribution-new-group-container').innerHTML = '';
 
     const modalElement = document.getElementById('group-attribution-modal');
@@ -189,7 +195,6 @@ export function openGroupAttributionModal() {
     document.getElementById('cancel-attribution-btn').onclick = () => {
         // 如果取消第二步，依然要將第一步的交易加入暫存區
         submitAttributionAndSaveTransaction();
-        closeModal('group-attribution-modal');
     };
 }
 
