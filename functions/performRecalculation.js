@@ -8,6 +8,9 @@ const dataProvider = require('./calculation/data.provider');
 const { toDate, isTwStock } = require('./calculation/helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
+// 【修改】導入新的計算引擎
+const { runCalculationEngine } = require('./calculation/engine');
+
 
 const sanitizeNumber = (value) => {
     const num = Number(value);
@@ -110,21 +113,23 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
     try {
         const ALL_GROUP_ID = 'all';
 
-        // [核心修正] 如果是週末腳本觸發的強制重算，先清除所有快照
         if (createSnapshot === true) {
             console.log(`[${uid}] 收到強制完整重算指令 (createSnapshot=true)，正在清除所有舊快照...`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        const [txs, splits, controlsData, userDividends, summaryResult] = await Promise.all([
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】一次性抓取所有需要的原始數據
+        const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
-            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
+            d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
-        await calculateAndCachePendingDividends(uid, txs, userDividends);
+        await calculateAndCachePendingDividends(uid, txs, allUserDividends);
+        // ========================= 【核心修正 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
@@ -138,16 +143,13 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-        await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
-        const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
-        const { evts, firstBuyDate } = prepareEvents(txs, splits, market, userDividends);
-        if (!firstBuyDate) { return; }
-
-        let calculationStartDate = firstBuyDate;
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
+        // ========================= 【核心修正 - 結束】 =========================
+        
         let oldHistory = {};
         let baseSnapshot = null;
         
-        // [核心修正] 只有在非強制重算的情況下，才去尋找快照
         if (createSnapshot === false) {
             const LATEST_SNAPSHOT_SQL = modifiedTxDate
                 ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
@@ -160,45 +162,44 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         if (baseSnapshot) {
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshot.snapshot_date]);
-            const snapshotDate = toDate(baseSnapshot.snapshot_date);
             if (summaryResult[0] && summaryResult[0].history) {
                 oldHistory = JSON.parse(summaryResult[0].history);
-                Object.keys(oldHistory).forEach(date => { if (toDate(date) > snapshotDate) delete oldHistory[date]; });
+                Object.keys(oldHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldHistory[date]; });
             }
-            const nextDay = new Date(snapshotDate); nextDay.setDate(nextDay.getDate() + 1);
-            calculationStartDate = nextDay;
         } else {
             console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
-            // 因為可能已被上面的邏輯刪除，這裡確保清理乾淨
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
+        
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
+        const result = await runCalculationEngine(
+            txs,
+            allUserSplits,
+            allUserDividends,
+            benchmarkSymbol,
+            baseSnapshot,
+            oldHistory
+        );
+        // ========================= 【核心修正 - 結束】 =========================
 
-        const partialHistory = {};
-        let curDate = new Date(calculationStartDate);
-        const today = new Date(); today.setUTCHours(0, 0, 0, 0);
-        while (curDate <= today) {
-            const dateStr = curDate.toISOString().split('T')[0];
-            partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
-            curDate.setDate(curDate.getDate() + 1);
-        }
-        const newFullHistory = { ...oldHistory, ...partialHistory };
 
-        const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
-        const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(newFullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
-        const portfolioResult = metrics.calculateCoreMetrics(evts, market);
-        const netProfitHistory = {};
-        let cumulativeCashflow = 0;
-        Object.keys(newFullHistory).sort().forEach(dateStr => {
-            cumulativeCashflow += (dailyCashflows[dateStr] || 0);
-            netProfitHistory[dateStr] = newFullHistory[dateStr] - cumulativeCashflow;
-        });
+        // 【修改】從引擎的回傳結果中獲取計算好的數據
+        const {
+            summaryData,
+            holdingsToUpdate,
+            fullHistory: newFullHistory,
+            twrHistory,
+            benchmarkHistory,
+            netProfitHistory,
+            evts,
+            market
+        } = result;
 
         await maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
-
-        const { holdingsToUpdate } = portfolioResult.holdings;
         
         const holdingsOps = Object.values(holdingsToUpdate).map(h => ({
             sql: `INSERT INTO holdings (uid, group_id, symbol, quantity, currency, avgCostOriginal, totalCostTWD, currentPriceOriginal, marketValueTWD, unrealizedPLTWD, realizedPLTWD, returnRate, daily_change_percent, daily_pl_twd) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -211,12 +212,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
                 sanitizeNumber(h.daily_pl_twd)
             ]
         }));
-        const summaryData = {
-            totalRealizedPL: portfolioResult.totalRealizedPL,
-            xirr: portfolioResult.xirr,
-            overallReturnRate: portfolioResult.overallReturnRate,
-            benchmarkSymbol: benchmarkSymbol
-        };
+        
         const summaryOps = [{
             sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
