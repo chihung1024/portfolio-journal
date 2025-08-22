@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v2.2 - 修正編輯邏輯)
+// == 檔案：js/events/group.events.js (v2.3 - 支援鍵盤操作)
+// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -163,6 +164,20 @@ export function initializeGroupEventListeners() {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('group-modal');
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為群組編輯表單增加 Enter 鍵監聽
+    document.getElementById('group-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.target.matches('textarea')) { // 避免在描述欄位按 Enter 就送出
+            e.preventDefault();
+            // 在樹狀視圖中按 Enter 可能有其他用途，此處不觸發送出
+            // 僅當焦點在群組名稱輸入框時觸發
+            if (document.activeElement === document.getElementById('group-name')) {
+                document.getElementById('save-group-btn').click();
+            }
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
     
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {
