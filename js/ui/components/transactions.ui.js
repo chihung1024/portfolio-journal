@@ -68,15 +68,15 @@ export function renderTransactionsTable() {
         switch (t.status) {
             case 'STAGED_CREATE':
                 rowClass = 'bg-green-50 hover:bg-green-100';
-                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
+                buttonsHtml = `<button data-change-id="${t.changeId}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
                 break;
             case 'STAGED_UPDATE':
                 rowClass = 'bg-yellow-50 hover:bg-yellow-100';
-                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
+                buttonsHtml = `<button data-change-id="${t.changeId}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
                 break;
             case 'STAGED_DELETE':
                 rowClass = 'bg-red-50 opacity-60 line-through';
-                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
+                buttonsHtml = `<button data-change-id="${t.changeId}" class="revert-change-btn text-orange-600 hover:text-orange-900">還原</button>`;
                 break;
             case 'FAILED':
                 rowClass = 'bg-red-100 ring-2 ring-red-500';
