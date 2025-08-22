@@ -1,15 +1,17 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v2.2 - 修正編輯邏輯)
+// == 檔案：js/events/group.events.js (v3.0.0 - (核心重構) 支援 ATLAS-COMMIT)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { apiRequest } from '../api.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
+import { openModal, closeModal, showConfirm } from '../ui/modals.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
+import { updateStagingBanner } from '../ui/components/stagingBanner.ui.js';
+import { v4 as uuidv4 } from 'https://jspm.dev/uuid';
 
 /**
- * 載入所有群組並更新 UI
+ * 載入所有群組並更新 UI (此函式邏輯不變)
  */
 async function loadGroups() {
     try {
@@ -17,7 +19,7 @@ async function loadGroups() {
         if (result.success) {
             setState({ groups: result.data });
             renderGroupsTab();
-            updateGroupSelector(); // 更新頂部的全局選擇器
+            updateGroupSelector();
         }
     } catch (error) {
         showNotification('error', `讀取群組失敗: ${error.message}`);
@@ -25,7 +27,7 @@ async function loadGroups() {
 }
 
 /**
- * 更新頂部的全局群組篩選器下拉選單
+ * 更新頂部的全局群組篩選器下拉選單 (此函式邏輯不變)
  */
 function updateGroupSelector() {
     const { groups } = getState();
@@ -33,7 +35,6 @@ function updateGroupSelector() {
     if (!selector) return;
 
     const currentValue = selector.value;
-
     selector.innerHTML = '<option value="all">全部股票</option>';
     groups.forEach(group => {
         const option = document.createElement('option');
@@ -41,18 +42,17 @@ function updateGroupSelector() {
         option.textContent = group.name;
         selector.appendChild(option);
     });
-
-    // 確保在群組被刪除或變更後，選擇器能正確地反映當前狀態
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
-    
-    // 【核心修改】移除對 #recalculate-group-btn 的操作，因為該按鈕已被刪除
 }
 
 /**
- * 處理群組表單提交（新增或編輯）
+ * 【重構】處理群組表單提交（新增或編輯），現在只處理群組元數據，不處理成員歸屬。
+ * 成員歸屬將通過微觀編輯 (`membership-editor-modal`) 另行處理。
  */
 async function handleGroupFormSubmit(e) {
     e.preventDefault();
+    // ... 此處邏輯可以簡化，或維持現狀，因為群組的創建/編輯頻率不高
+    // 暫時維持原有的直接提交模式，以簡化首次重構的複雜度。
     const saveBtn = document.getElementById('save-group-btn');
     saveBtn.disabled = true;
     saveBtn.textContent = '儲存中...';
@@ -76,7 +76,6 @@ async function handleGroupFormSubmit(e) {
 
     try {
         await apiRequest('save_group', groupData);
-        const { closeModal } = await import('../ui/modals.js');
         closeModal('group-modal');
         showNotification('success', '群組已成功儲存！');
         await loadGroups();
@@ -89,7 +88,59 @@ async function handleGroupFormSubmit(e) {
 }
 
 /**
- * 處理刪除群組按鈕點擊
+ * 【重構】處理微觀編輯視窗中的儲存按鈕，將群組歸屬變更納入暫存區
+ */
+async function handleMembershipSave() {
+    const { tempMembershipEdit } = getState();
+    if (!tempMembershipEdit) return;
+
+    const selectedGroupIds = Array.from(document.querySelectorAll('input[name="membership_group"]:checked')).map(cb => cb.value);
+    
+    closeModal('membership-editor-modal');
+    
+    const payload = {
+        transactionId: tempMembershipEdit.txId,
+        groupIds: selectedGroupIds
+    };
+    const entityId = tempMembershipEdit.txId; // 以 transactionId 作為此變更的唯一標識
+    const op = 'UPDATE';
+    const entity = 'group_membership';
+    
+    // 步驟 1: 樂觀更新 (此操作沒有直接的視覺回饋，主要是在 state 中記錄)
+    const currentState = getState();
+    const change = { id: entityId, op, entity, payload };
+
+    // 為了避免重複，先從 stagedChanges 移除同一個 transaction 的舊歸屬變更
+    const otherChanges = currentState.stagedChanges.filter(c => 
+        !(c.entity === 'group_membership' && c.payload.transactionId === entityId)
+    );
+
+    setState({
+        stagedChanges: [...otherChanges, change],
+        hasStagedChanges: true
+    });
+
+    updateStagingBanner();
+
+    // 步驟 2: 背景發送暫存請求
+    apiRequest('stage_change', { op, entity, payload })
+        .then(() => {
+            showNotification('info', '一筆群組歸屬變更已加入待辦。');
+        })
+        .catch(error => {
+            showNotification('error', `暫存歸屬變更失敗: ${error.message}`);
+            // 由於沒有直接UI變化，這裡可以只報錯，不還原UI
+            setState({
+                stagedChanges: currentState.stagedChanges,
+                hasStagedChanges: currentState.stagedChanges.length > 0
+            });
+            updateStagingBanner();
+        });
+}
+
+
+/**
+ * 處理刪除群組按鈕點擊 (維持原有直接刪除模式，因為這是破壞性操作，需要立即反饋)
  */
 async function handleDeleteGroup(button) {
     const groupId = button.dataset.groupId;
@@ -97,7 +148,6 @@ async function handleDeleteGroup(button) {
     const group = groups.find(g => g.id === groupId);
     if (!group) return;
 
-    const { showConfirm } = await import('../ui/modals.js');
     showConfirm(`您確定要刪除群組 "${group.name}" 嗎？此操作無法復原。`, async () => {
         try {
             await apiRequest('delete_group', { groupId });
@@ -116,7 +166,6 @@ export function initializeGroupEventListeners() {
     document.getElementById('groups-tab').addEventListener('click', async (e) => {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
-            const { openModal } = await import('../ui/modals.js');
             openModal('group-modal');
             renderGroupModal(null);
             return;
@@ -132,11 +181,9 @@ export function initializeGroupEventListeners() {
             loadingOverlay.style.display = 'flex';
 
             try {
-                // 【核心修改】呼叫新的 API 來獲取完整的群組詳情
                 const result = await apiRequest('get_group_details', { groupId });
                 if (result.success) {
                     const groupToEdit = result.data;
-                    const { openModal } = await import('../ui/modals.js');
                     openModal('group-modal');
                     renderGroupModal(groupToEdit);
                 } else {
@@ -159,10 +206,13 @@ export function initializeGroupEventListeners() {
     });
 
     document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
-    document.getElementById('cancel-group-btn').addEventListener('click', async () => {
-        const { closeModal } = await import('../ui/modals.js');
+    
+    document.getElementById('cancel-group-btn').addEventListener('click', () => {
         closeModal('group-modal');
     });
+    
+    // 【新增】為微觀編輯 modal 的保存按鈕綁定新的處理函式
+    document.getElementById('save-membership-btn').addEventListener('click', handleMembershipSave);
     
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {
