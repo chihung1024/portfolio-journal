@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - v1.1 (支援交易編輯)
+// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - v1.2 (同步暫存狀態)
 // =========================================================================================
 
 import { getState } from '../../state.js';
@@ -29,27 +29,55 @@ function renderDetailsTransactions(symbol) {
             </tr>
         </thead>`;
     
+    // ========================= 【核心修改 - 開始】 =========================
     const tableBody = symbolTransactions.map(t => {
         const typeClass = t.type === 'buy' ? 'text-red-500' : 'text-green-500';
         const typeText = t.type === 'buy' ? '買入' : '賣出';
-        // 【新增】編輯與刪除按鈕
+
+        // 新增：根據 status 決定行樣式和按鈕
+        let rowClass = 'border-b border-gray-200';
+        let buttonsHtml = '';
+        
+        switch (t.status) {
+            case 'STAGED_CREATE':
+                rowClass += ' bg-green-50';
+                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900 text-sm font-medium">還原</button>`;
+                break;
+            case 'STAGED_UPDATE':
+                rowClass += ' bg-yellow-50';
+                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900 text-sm font-medium">還原</button>`;
+                break;
+            case 'STAGED_DELETE':
+                rowClass += ' bg-red-50 opacity-60 line-through';
+                buttonsHtml = `<button data-change-id="${t.id}" class="revert-change-btn text-orange-600 hover:text-orange-900 text-sm font-medium">還原</button>`;
+                break;
+            case 'FAILED':
+                rowClass += ' bg-red-100 ring-1 ring-red-500';
+                buttonsHtml = `<span class="text-red-600 font-bold text-sm">失敗</span>`;
+                break;
+            default: // COMMITTED
+                buttonsHtml = `
+                    <button data-id="${t.id}" class="details-edit-tx-btn text-indigo-600 hover:text-indigo-900 text-sm font-medium">編輯</button>
+                    <button data-id="${t.id}" class="details-delete-tx-btn text-red-600 hover:text-red-900 text-sm font-medium ml-3">刪除</button>
+                `;
+                break;
+        }
+
         return `
-            <tr class="border-b border-gray-200">
+            <tr class="${rowClass}" title="${t.status || 'COMMITTED'}">
                 <td class="px-4 py-2 whitespace-nowrap">${t.date.split('T')[0]}</td>
                 <td class="px-4 py-2 font-semibold ${typeClass}">${typeText}</td>
                 <td class="px-4 py-2 text-right">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
                 <td class="px-4 py-2 text-right">${formatNumber(t.price, 2)} <span class="text-xs text-gray-400">${t.currency}</span></td>
                 <td class="px-4 py-2 text-center whitespace-nowrap">
-                    <button data-id="${t.id}" class="details-edit-tx-btn text-indigo-600 hover:text-indigo-900 text-sm font-medium">編輯</button>
-                    <button data-id="${t.id}" class="details-delete-tx-btn text-red-600 hover:text-red-900 text-sm font-medium ml-3">刪除</button>
+                    ${buttonsHtml}
                 </td>
             </tr>`;
     }).join('');
+    // ========================= 【核心修改 - 結束】 =========================
 
     return `<div class="overflow-y-auto max-h-64"><table class="min-w-full">${tableHeader}<tbody class="bg-white">${tableBody}</tbody></table></div>`;
 }
-
-// ... (檔案中其他函式維持不變) ...
 
 /**
  * 渲染投資筆記分頁的內容
@@ -59,7 +87,6 @@ function renderDetailsTransactions(symbol) {
 function renderDetailsNotes(symbol) {
     const { stockNotes } = getState();
     const note = stockNotes[symbol] || {};
-    // 直接重用現有的 notes-modal 表單結構，但將其嵌入到分頁中
     return `
         <div class="p-4">
             <form id="details-notes-form">
@@ -175,9 +202,8 @@ export function renderDetailsModal(symbol) {
     `;
     
     container.innerHTML = modalHtml;
-    lucide.createIcons(); // Re-render icons
+    lucide.createIcons();
 
-    // Load content for the default tab
     const tabContentContainer = document.getElementById('details-modal-tab-content');
     tabContentContainer.innerHTML = renderDetailsTransactions(symbol);
 }
@@ -190,7 +216,6 @@ export function renderDetailsModal(symbol) {
 export function switchDetailsTab(tabName, symbol) {
     const tabContentContainer = document.getElementById('details-modal-tab-content');
     
-    // Switch content
     if (tabName === 'transactions') {
         tabContentContainer.innerHTML = renderDetailsTransactions(symbol);
     } else if (tabName === 'notes') {
@@ -199,7 +224,6 @@ export function switchDetailsTab(tabName, symbol) {
         tabContentContainer.innerHTML = renderDetailsDividends(symbol);
     }
 
-    // Update active tab style
     document.querySelectorAll('.details-tab-item').forEach(el => {
         el.classList.remove('border-indigo-500', 'text-indigo-600');
         el.classList.add('border-transparent', 'text-gray-500');
