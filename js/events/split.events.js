@@ -30,10 +30,12 @@ async function handleDeleteSplit(button) {
             entity: 'split', 
             payload: { id: splitId } 
         };
+        
+        const otherChanges = currentState.stagedChanges.filter(c => c.id !== splitId);
 
         setState({
             userSplits: updatedSplits,
-            stagedChanges: [...currentState.stagedChanges, change],
+            stagedChanges: [...otherChanges, change],
             hasStagedChanges: true,
         });
 
