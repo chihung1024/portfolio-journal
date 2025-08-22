@@ -135,11 +135,11 @@ function calculateFinalHoldings(pf, market, allEvts) {
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
-            // ================== 【核心修正 - 開始】 ==================
-            // 這裡的邏輯是計算「當前」的市值，所以匯率應該用最新的，而不是跟著股價日期
-            const latestFx = findFxRate(market, h.currency, new Date());
+            // ================== 【核心修正 v3 - 開始】 ==================
+            // 準確抓取「今天」和「昨天」各自對應的匯率
+            const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
             const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
-            // ================== 【核心修正 - 結束】 ==================
+            // ================== 【核心修正 v3 - 結束】 ==================
 
             const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
