@@ -6,15 +6,15 @@ const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
 const { transactionSchema } = require('../schemas');
-// 【新增】導入輔助函式，用於備援方案
-const { findFxRate } = require('../calculation/helpers');
+// 【移除】不再需要 yahoo-finance2
+// const yahooFinance = require("yahoo-finance2").default; 
 const dataProvider = require('../calculation/data.provider');
 
 
 // ========================= 【核心修改 - 開始】 =========================
 
 /**
- * 尋找最接近結算日的未來匯率
+ * 尋找最接近結算日的未來匯率，並在找不到時 fallback 至資料庫中最新的匯率
  * @param {string} currency - 貨幣代碼 (例如 'USD')
  * @param {string} txDateStr - 交易日期字串 (YYYY-MM-DD)
  * @param {number} settlementDays - T+幾日結算 (例如 1 或 2)
@@ -25,33 +25,39 @@ async function findSettlementFxRate(currency, txDateStr, settlementDays) {
 
     const currencyToFx = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
     const fxSymbol = currencyToFx[currency];
-    if (!fxSymbol) return null; // 如果是不支援的貨幣，返回 null
+    if (!fxSymbol) return null;
 
     const transactionDate = new Date(txDateStr);
-    // 計算目標結算日
     const targetSettlementDate = new Date(transactionDate);
     targetSettlementDate.setDate(transactionDate.getDate() + settlementDays);
     const targetSettlementDateStr = targetSettlementDate.toISOString().split('T')[0];
 
-    // 查詢資料庫，尋找大於等於目標結算日的第一筆匯率紀錄
-    // 這能自然地跳過週末和假日
-    const result = await d1Client.query(
+    // 步驟 1: 嘗試從資料庫尋找未來的交割日匯率
+    const futureRateResult = await d1Client.query(
         'SELECT price FROM exchange_rates WHERE symbol = ? AND date >= ? ORDER BY date ASC LIMIT 1',
         [fxSymbol, targetSettlementDateStr]
     );
 
-    if (result && result.length > 0) {
-        console.log(`[FX Logic] For ${currency} on ${txDateStr} (T+${settlementDays}), found settlement rate ${result[0].price} on a future date.`);
-        return result[0].price;
+    if (futureRateResult && futureRateResult.length > 0) {
+        console.log(`[FX Logic] For ${currency} on ${txDateStr} (T+${settlementDays}), found future settlement rate ${futureRateResult[0].price} from DB.`);
+        return futureRateResult[0].price;
     }
 
-    // 如果在未來找不到匯率（可能是數據尚未更新），則觸發備援機制
-    console.warn(`[FX Logic] For ${currency} on ${txDateStr} (T+${settlementDays}), could not find a future settlement rate. Falling back to transaction date rate.`);
+    // 步驟 2: 【智慧 Fallback】若找不到，則從資料庫中抓取最新的匯率紀錄
+    console.warn(`[FX Logic] For ${currency} on ${txDateStr}, could not find a future settlement rate. Fallback: fetching latest rate from DB.`);
     
-    // 備援方案：抓取交易日當天的匯率
-    // 為了使用 findFxRate，我們需要一個迷你的 market 物件
-    const fallbackMarketData = await dataProvider.getMarketDataFromDb([], ''); // 傳入空陣列，只為了獲取匯率
-    return findFxRate(fallbackMarketData, currency, new Date(txDateStr));
+    const latestRateResult = await d1Client.query(
+        'SELECT price FROM exchange_rates WHERE symbol = ? ORDER BY date DESC LIMIT 1',
+        [fxSymbol]
+    );
+
+    if (latestRateResult && latestRateResult.length > 0) {
+        console.log(`[FX Logic] Fallback successful. Using latest available rate for ${fxSymbol}: ${latestRateResult[0].price}`);
+        return latestRateResult[0].price;
+    }
+
+    console.error(`[FX Logic] Fallback failed: Could not find any historical rate for ${fxSymbol} in the database.`);
+    return null; // 如果資料庫中完全沒有該貨幣的匯率，則返回 null
 }
 
 /**
