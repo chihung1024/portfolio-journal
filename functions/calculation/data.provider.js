@@ -74,15 +74,16 @@ async function ensureDataCoverage(symbol, requiredStartDate) {
 }
 
 /**
- * 確保所有需要的金融商品數據都是最新的（更新到昨天）
+ * 確保所有需要的金融商品數據都是最新的
  */
 async function ensureDataFreshness(symbols) {
     if (!symbols || symbols.length === 0) return;
 
+    // ========================= 【核心修正 - 開始】 =========================
+    // Bug Fix: 將目標日期從「昨天」改為「今天」，以確保在盤中時段能強制檢查並獲取即時數據
     const today = new Date();
-    const targetDate = new Date(today);
-    targetDate.setDate(today.getDate() - 1);
-    const targetDateStr = targetDate.toISOString().split('T')[0];
+    const targetDateStr = today.toISOString().split('T')[0];
+    // ========================= 【核心修正 - 結束】 =========================
 
     const fetchPromises = symbols.map(async (symbol) => {
         const isFx = symbol.includes("=");
@@ -94,7 +95,7 @@ async function ensureDataFreshness(symbols) {
             const startDate = new Date(latestDateStr || '2000-01-01');
             startDate.setDate(startDate.getDate() + 1);
             const startDateStr = startDate.toISOString().split('T')[0];
-            console.log(`[Data Provider] ${symbol} 的數據不是最新的，將從 ${startDateStr} 開始抓取增量數據...`);
+            console.log(`[Data Provider] ${symbol} 的數據不是最新的 (DB: ${latestDateStr} vs Target: ${targetDateStr})，將從 ${startDateStr} 開始抓取增量數據...`);
             return fetchAndSaveMarketDataRange(symbol, startDateStr, today.toISOString().split('T')[0]);
         }
     });
