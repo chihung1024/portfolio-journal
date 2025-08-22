@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢 (優化後)
+// == 主程式進入點 (main.js) v4.4.0 - Live Refresh Enhancement
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -32,22 +32,34 @@ let liveRefreshInterval = null;
 
 async function refreshDashboardAndHoldings() {
     try {
+        // API 呼叫維持不變，但現在它會回傳更豐富的數據
         const result = await apiRequest('get_dashboard_and_holdings', {});
         if (!result.success) return;
 
-        const { summary, holdings } = result.data;
+        // ========================= 【核心修改 - 開始】 =========================
+        const { summary, holdings, twrHistory, benchmarkHistory } = result.data;
         const holdingsObject = (holdings || []).reduce((obj, item) => {
             obj[item.symbol] = item; return obj;
         }, {});
 
+        // 更新 state，現在包含圖表歷史數據
         setState({
             holdings: holdingsObject,
-            summary: summary
+            summary: summary,
+            twrHistory: twrHistory || {},
+            benchmarkHistory: benchmarkHistory || {}
         });
 
+        // 重新渲染儀表板和持股表格
         updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable(holdingsObject);
-        console.log("Live refresh complete.");
+        
+        // 【新增】額外呼叫 TWR 圖表的更新函式
+        const currentBenchmark = document.getElementById('benchmark-symbol-input').value || 'SPY';
+        updateTwrChart(currentBenchmark);
+        
+        console.log("Live refresh with chart data complete.");
+        // ========================= 【核心修改 - 結束】 =========================
 
     } catch (error) {
         console.error("Live refresh failed:", error);
