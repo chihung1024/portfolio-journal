@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v4.2.0 - 支援圖表動態命名
+// == API 通訊模組 (api.js) v5.0.0 - 支援請求中止與細粒度狀態
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -20,8 +20,12 @@ import { renderDividendsManagementTab } from "./ui/components/dividends.ui.js";
 
 /**
  * 統一的後端 API 請求函式
+ * 【核心修改】增加 AbortSignal 支援，用於取消請求
+ * @param {string} action - The API action to perform.
+ * @param {object} data - The payload for the action.
+ * @param {AbortSignal} signal - The signal to abort the fetch request.
  */
-export async function apiRequest(action, data) {
+export async function apiRequest(action, data, signal) {
     const auth = getAuth();
     const user = auth.currentUser;
 
@@ -40,9 +44,10 @@ export async function apiRequest(action, data) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
             },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: signal, // <--- 【新增】將 AbortSignal 傳入 fetch
         });
-        
+
         const result = await response.json();
         if (!response.ok) {
             if (response.status === 401 || response.status === 403) {
@@ -53,6 +58,11 @@ export async function apiRequest(action, data) {
         return result;
 
     } catch (error) {
+        if (error.name === 'AbortError') {
+            console.log('API request was aborted.', { action });
+            // 丟出一個特定錯誤，讓呼叫者可以捕獲並忽略
+            throw new Error('Aborted');
+        }
         console.error('API 請求失敗:', error);
         throw error;
     }
@@ -60,29 +70,37 @@ export async function apiRequest(action, data) {
 
 /**
  * 高階 API 執行器，封裝了載入狀態、通知和數據刷新邏輯
+ * 【核心修改】不再控制全螢幕 loading，而是管理 committing 狀態
  */
 export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingTextElement = document.getElementById('loading-text');
+
+    // 【修改】現在只在提交操作時顯示全螢幕遮罩
+    setState({ isLoading: { ...getState().isLoading, committing: true } });
     loadingTextElement.textContent = loadingText;
     loadingOverlay.style.display = 'flex';
-    
+
     try {
         const result = await apiRequest(action, payload);
-        
+
         if (shouldRefreshData) {
+            // 注意：loadPortfolioData 現在已被分解，此處可能需要呼叫一個新的、完整的刷新函式
             await loadPortfolioData();
         }
-        
+
         if (successMessage) {
             showNotification('success', successMessage);
         }
-        
-        return result; 
+
+        return result;
     } catch (error) {
-        showNotification('error', `操作失敗: ${error.message}`);
-        throw error; 
+        if (error.message !== 'Aborted') {
+            showNotification('error', `操作失敗: ${error.message}`);
+        }
+        throw error;
     } finally {
+        setState({ isLoading: { ...getState().isLoading, committing: false } });
         loadingOverlay.style.display = 'none';
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
@@ -93,8 +111,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
  * 統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
 function updateAppWithData(portfolioData) {
-    // 【BUG FIX】將交易與拆股的狀態更新移至此處最前方
-    // 確保在所有渲染函式被呼叫前，狀態(state)已經是最新
     setState({
         transactions: portfolioData.transactions || [],
         userSplits: portfolioData.splits || [],
@@ -108,7 +124,7 @@ function updateAppWithData(portfolioData) {
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
-    
+
     setState({
         stockNotes: stockNotesMap,
         holdings: holdingsObject,
@@ -132,22 +148,22 @@ function updateAppWithData(portfolioData) {
             });
         }
     });
-    
+
     renderHoldingsTable(holdingsObject);
-    renderTransactionsTable(); // 現在此函式會使用上面剛更新的 transaction 狀態
+    renderTransactionsTable();
     renderSplitsTable();
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
-    
+
     const { selectedGroupId, groups } = getState();
-    let seriesName = '投資組合'; 
+    let seriesName = '投資組合';
     if (selectedGroupId && selectedGroupId !== 'all') {
         const selectedGroup = groups.find(g => g.id === selectedGroupId);
         if (selectedGroup) {
-            seriesName = selectedGroup.name; 
+            seriesName = selectedGroup.name;
         }
     }
-    
-    updateAssetChart(seriesName); 
+
+    updateAssetChart(seriesName);
     updateNetProfitChart(seriesName);
     const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol, seriesName);
@@ -169,30 +185,73 @@ function updateAppWithData(portfolioData) {
 
 /**
  * 從後端載入所有「全部股票」的投資組合資料並更新畫面
+ * 【核心修改】此函式已被分解成多個函式，現在作為一個協調器
  */
 export async function loadPortfolioData() {
-    const { currentUserId } = getState();
+    const { currentUserId, activeDataRequestController } = getState();
     if (!currentUserId) {
         console.log("未登入，無法載入資料。");
         return;
     }
-    document.getElementById('loading-overlay').style.display = 'flex';
+
+    // 【新增】如果已有請求正在進行，先中止它
+    if (activeDataRequestController) {
+        activeDataRequestController.abort();
+    }
+
+    // 【新增】建立一個新的 AbortController 給這次的請求鏈
+    const controller = new AbortController();
+    setState({ activeDataRequestController: controller });
+
     try {
-        const result = await apiRequest('get_data', {});
-        
-        // 此函式現在會處理所有必要的狀態更新和 UI 渲染
+        // 【修改】不再顯示全螢幕遮罩，而是設定細粒度的載入狀態
+        setState({
+            isLoading: {
+                ...getState().isLoading,
+                summary: true,
+                holdings: true,
+                charts: true,
+                secondaryData: true,
+            }
+        });
+        // 觸發一次 UI 更新以顯示骨架屏
+        renderHoldingsTable([]);
+
+
+        const result = await apiRequest('get_data', {}, controller.signal);
+
+        // 如果請求在完成前被中止，則直接退出
+        if (controller.signal.aborted) return;
+
         updateAppWithData(result.data);
+        showNotification('success', '所有資料已同步！');
 
     } catch (error) {
-        console.error('Failed to load portfolio data:', error);
-        showNotification('error', `讀取資料失敗: ${error.message}`);
+        if (error.message !== 'Aborted') {
+            console.error('Failed to load portfolio data:', error);
+            showNotification('error', `讀取資料失敗: ${error.message}`);
+        }
     } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
+        // 【修改】無論成功、失敗或中止，都清除所有載入狀態
+        setState({
+            isLoading: {
+                ...getState().isLoading,
+                summary: false,
+                holdings: false,
+                charts: false,
+                secondaryData: false,
+            }
+        });
+        // 清除當前的 controller
+        if (getState().activeDataRequestController === controller) {
+            setState({ activeDataRequestController: null });
+        }
     }
 }
 
 /**
  * 請求後端按需計算特定群組的數據，並更新畫面
+ * 【核心修改】整合請求中止邏輯
  */
 export async function applyGroupView(groupId) {
     if (!groupId || groupId === 'all') {
@@ -200,22 +259,46 @@ export async function applyGroupView(groupId) {
         return;
     }
 
-    const loadingText = document.getElementById('loading-text');
-    document.getElementById('loading-overlay').style.display = 'flex';
-    loadingText.textContent = '正在為您即時計算群組績效...';
+    const { activeDataRequestController } = getState();
+    if (activeDataRequestController) {
+        activeDataRequestController.abort();
+    }
+    const controller = new AbortController();
+    setState({ activeDataRequestController: controller });
+
+    // 【修改】不再使用全螢幕遮罩，而是設定細粒度狀態
+    setState({
+        isLoading: { ...getState().isLoading, holdings: true, charts: true, summary: true }
+    });
+    // 立即觸發骨架屏
+    renderHoldingsTable([]);
+    // 可以選擇性地清空圖表
+    updateAssetChart();
+    updateTwrChart();
+    updateNetProfitChart();
+
 
     try {
-        const result = await apiRequest('calculate_group_on_demand', { groupId });
+        const result = await apiRequest('calculate_group_on_demand', { groupId }, controller.signal);
+
+        if (controller.signal.aborted) return;
+
         if (result.success) {
             updateAppWithData(result.data);
             showNotification('success', '群組績效計算完成！');
         }
     } catch (error) {
-        showNotification('error', `計算群組績效失敗: ${error.message}`);
-        document.getElementById('group-selector').value = 'all';
-        await loadPortfolioData();
+        if (error.message !== 'Aborted') {
+            showNotification('error', `計算群組績效失敗: ${error.message}`);
+            document.getElementById('group-selector').value = 'all';
+            await loadPortfolioData(); // 如果失敗，回退到載入全部數據
+        }
     } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-        loadingText.textContent = '正在從雲端同步資料...';
+        setState({
+            isLoading: { ...getState().isLoading, holdings: false, charts: false, summary: false }
+        });
+        if (getState().activeDataRequestController === controller) {
+            setState({ activeDataRequestController: null });
+        }
     }
 }
