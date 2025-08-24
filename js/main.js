@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.1.0 - 修正背景載入狀態
+// == 主程式進入點 (main.js) v5.1.1 - 修正模組匯出錯誤
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -152,7 +152,7 @@ export async function loadInitialDashboard() {
         // 請求結束後，清除摘要的載入狀態
         setState({ isLoading: { ...getState().isLoading, summary: false } });
         document.getElementById('loading-overlay').style.display = 'none';
-        
+
         // 立即在背景啟動後續數據的載入
         setTimeout(() => {
             loadHoldingsInBackground();
@@ -161,9 +161,6 @@ export async function loadInitialDashboard() {
     }
 }
 
-/**
- * 【核心修正】為此函式加上完整的 try/finally 區塊來管理載入狀態
- */
 async function loadHoldingsInBackground() {
     try {
         console.log("正在背景載入持股數據...");
@@ -171,7 +168,7 @@ async function loadHoldingsInBackground() {
         setState({ isLoading: { ...getState().isLoading, holdings: true } });
         // 觸發一次骨架屏的渲染
         renderHoldingsTable([]);
-        
+
         const result = await apiRequest('get_holdings', {});
         if (result.success) {
             const { holdings } = result.data;
@@ -299,6 +296,34 @@ async function loadSecondaryDataIfNeeded() {
     renderDividendsManagementTab(pendingDividends, confirmedDividends);
 }
 
+//【核心修正】在函式定義前加上 export 關鍵字
+export async function loadAndShowDividends() {
+    const { pendingDividends, confirmedDividends } = getState();
+    if (pendingDividends && confirmedDividends) {
+         renderDividendsManagementTab(pendingDividends, confirmedDividends);
+         return;
+    }
+
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.display = 'flex';
+    try {
+        const result = await apiRequest('get_dividends_for_management', {});
+        if (result.success) {
+            setState({
+                pendingDividends: result.data.pendingDividends,
+                confirmedDividends: result.data.confirmedDividends,
+            });
+            renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (error) {
+        showNotification('error', `讀取配息資料失敗: ${error.message}`);
+    } finally {
+        overlay.style.display = 'none';
+    }
+}
+
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
@@ -351,9 +376,6 @@ function setupMainAppEventListeners() {
 }
 
 
-/**
- * 【核心修正】將此函式也匯出，以便 auth.js 呼叫
- */
 export function initializeAppUI() {
     if (getState().isAppInitialized) {
         return;
