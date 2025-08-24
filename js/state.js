@@ -20,16 +20,6 @@ let state = {
 
     isSyncing: false,
 
-
-
-
-
-
-
-
-
-
-
     // 【新增】用於引導式流程的暫存數據
     tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
     tempMembershipEdit: null, // 儲存 { txId }
