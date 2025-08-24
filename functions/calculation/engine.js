@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.0 - Purity Refined)
+// == 檔案：functions/calculation/engine.js (新增檔案)
 // == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
@@ -11,8 +11,8 @@ const dataProvider = require('./data.provider');
 /**
  * 核心計算函式
  * @param {Array} txs - 用於計算的交易紀錄
- * @param {Array} allUserSplits - 【修改】傳入使用者所有的拆股事件
- * @param {Array} allUserDividends - 【修改】傳入使用者所有的股利事件
+ * @param {Array} allUserSplits - **【修改】** 傳入使用者所有的拆股事件
+ * @param {Array} allUserDividends - **【修改】** 傳入使用者所有的股利事件
  * @param {string} benchmarkSymbol - 比較基準
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
  * @param {Object} [existingHistory=null] - (可選) 已有的歷史數據
