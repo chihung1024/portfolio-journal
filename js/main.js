@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.1.1 - 修正模組匯出錯誤
+// == 主程式進入點 (main.js) v5.2.0 - 修正模組匯出與背景載入狀態
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -122,9 +122,12 @@ export function stopLiveRefresh() {
 
 
 export async function loadInitialDashboard() {
+    const loadingOverlay = document.getElementById('loading-overlay');
     try {
-        // 在請求開始前，明確設定摘要的載入狀態
-        setState({ isLoading: { ...getState().isLoading, summary: true } });
+        loadingOverlay.style.display = 'flex';
+        setState({ isLoading: { ...getState().isLoading, summary: true, holdings: true } });
+        renderHoldingsTable([]); // Show skeleton screen immediately
+
         const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
@@ -141,7 +144,6 @@ export async function loadInitialDashboard() {
         });
 
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable({});
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
     } catch (error) {
@@ -149,11 +151,9 @@ export async function loadInitialDashboard() {
             showNotification('error', `讀取核心數據失敗: ${error.message}`);
         }
     } finally {
-        // 請求結束後，清除摘要的載入狀態
         setState({ isLoading: { ...getState().isLoading, summary: false } });
-        document.getElementById('loading-overlay').style.display = 'none';
+        loadingOverlay.style.display = 'none';
 
-        // 立即在背景啟動後續數據的載入
         setTimeout(() => {
             loadHoldingsInBackground();
             loadChartDataInBackground();
@@ -164,9 +164,7 @@ export async function loadInitialDashboard() {
 async function loadHoldingsInBackground() {
     try {
         console.log("正在背景載入持股數據...");
-        // 請求開始前，明確設定持股的載入狀態
         setState({ isLoading: { ...getState().isLoading, holdings: true } });
-        // 觸發一次骨架屏的渲染
         renderHoldingsTable([]);
 
         const result = await apiRequest('get_holdings', {});
@@ -180,7 +178,7 @@ async function loadHoldingsInBackground() {
 
             const { summary } = getState();
             updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-            renderHoldingsTable(holdingsObject); // 用真實數據再次渲染
+            renderHoldingsTable(holdingsObject);
             console.log("持股數據載入完成。");
         }
     } catch (error) {
@@ -189,9 +187,7 @@ async function loadHoldingsInBackground() {
             showNotification('error', '持股列表載入失敗。');
         }
     } finally {
-        // 無論成功或失敗，最後都必須清除持股的載入狀態
         setState({ isLoading: { ...getState().isLoading, holdings: false } });
-        // 如果此時 holdings 仍然為空，需要再次渲染以顯示 "沒有持股紀錄" 的訊息
         const { holdings } = getState();
         if(Object.keys(holdings).length === 0){
             renderHoldingsTable({});
@@ -287,7 +283,7 @@ async function loadSecondaryDataIfNeeded() {
         renderTransactionsTable();
         return;
     }
-    if (isLoading.secondaryData) return; // 如果正在載入，則不重複觸發
+    if (isLoading.secondaryData) return;
 
     await loadSecondaryDataInBackground();
     renderTransactionsTable();
@@ -296,32 +292,17 @@ async function loadSecondaryDataIfNeeded() {
     renderDividendsManagementTab(pendingDividends, confirmedDividends);
 }
 
-//【核心修正】在函式定義前加上 export 關鍵字
 export async function loadAndShowDividends() {
-    const { pendingDividends, confirmedDividends } = getState();
-    if (pendingDividends && confirmedDividends) {
+    const { pendingDividends, confirmedDividends, isLoading } = getState();
+    if ((pendingDividends && confirmedDividends) && (pendingDividends.length > 0 || confirmedDividends.length > 0)) {
          renderDividendsManagementTab(pendingDividends, confirmedDividends);
          return;
     }
+    if (isLoading.secondaryData) return;
 
-    const overlay = document.getElementById('loading-overlay');
-    overlay.style.display = 'flex';
-    try {
-        const result = await apiRequest('get_dividends_for_management', {});
-        if (result.success) {
-            setState({
-                pendingDividends: result.data.pendingDividends,
-                confirmedDividends: result.data.confirmedDividends,
-            });
-            renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
-        } else {
-            throw new Error(result.message);
-        }
-    } catch (error) {
-        showNotification('error', `讀取配息資料失敗: ${error.message}`);
-    } finally {
-        overlay.style.display = 'none';
-    }
+    await loadSecondaryDataInBackground();
+    const { pendingDividends: finalPending, confirmedDividends: finalConfirmed } = getState();
+    renderDividendsManagementTab(finalPending, finalConfirmed);
 }
 
 function setupCommonEventListeners() {
@@ -374,7 +355,6 @@ function setupMainAppEventListeners() {
         }
     });
 }
-
 
 export function initializeAppUI() {
     if (getState().isAppInitialized) {
