@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.1 - Atomic Swap & Retries)
+# == Python 週末完整校驗腳本 (v3.2 - Global Cache Invalidation)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -123,7 +123,7 @@ def get_full_refresh_targets():
 def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date, batch_size=10):
     if not targets:
         print("沒有需要刷新的標的。")
-        return
+        return False # 【修正】回傳狀態
 
     print("步驟 1/3: 正在一次性查詢所有股票的交易狀態...")
     all_symbols_info_sql = """
@@ -154,7 +154,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     ]
     if not d1_batch(init_statements):
         print("FATAL: 初始化臨時數據表失敗，腳本終止。")
-        return
+        return False # 【修正】回傳狀態
     print("臨時表初始化成功。")
 
 
@@ -269,7 +269,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print(f"正在為批次 {batch} 準備 {len(db_ops_to_temp)} 筆數據寫入臨時表...")
             if not d1_batch(db_ops_to_temp):
                 print(f"FATAL: 將批次 {batch} 數據寫入臨時表失敗！腳本終止。")
-                return # 如果任何批次失敗，則終止整個過程，避免數據不一致
+                return False # 【修正】回傳狀態
     
     print("\n所有批次數據已成功寫入臨時表。")
     print("準備執行原子性替換操作...")
@@ -291,7 +291,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         unique_processed_symbols = list(set(all_symbols_successfully_processed))
         placeholders = ','.join('?' for _ in unique_processed_symbols)
         
-        # 為了獲取最準確的 start_date，再次查詢一次交易記錄
         all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders}) GROUP BY symbol"
         first_tx_dates_results = d1_query(all_first_tx_sql, unique_processed_symbols)
         first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
@@ -315,10 +314,11 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             {"sql": "DROP TABLE IF EXISTS dividend_history_old;"},
             {"sql": "DROP TABLE IF EXISTS exchange_rates_old;"}
         ]
-        d1_batch(cleanup_statements) # 清理失敗不是致命錯誤，可以忽略
-
+        d1_batch(cleanup_statements)
+        return True # 【修正】回傳狀態
     else:
         print(f"FATAL: 原子性替換數據失敗！資料庫可能處於不一致狀態，請手動檢查。")
+        return False # 【修正】回傳狀態
 
 # ========================= 【核心優化 B - 結束】 =========================
 
@@ -354,12 +354,25 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.1 - Atomic Swap & Retries) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.2 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
-        fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
-        if all_uids:
-            trigger_recalculations(all_uids)
+        # 【核心修正】檢查數據刷新是否成功
+        success = fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
+        
+        if success:
+            print("\n--- 【全局快取失效階段】偵測到價格數據已成功刷新，正在將所有群組標記為 dirty... ---")
+            invalidate_sql = "UPDATE groups SET is_dirty = 1"
+            if d1_batch([{"sql": invalidate_sql, "params": []}]):
+                print("成功！所有自訂群組的快取都已被標記為需要重新計算。")
+            else:
+                print("FATAL: 全局快取失效操作失敗！")
+            
+            if all_uids:
+                trigger_recalculations(all_uids)
+        else:
+            print("\n--- 【終止】由於市場數據刷新失敗，已跳過後續的快取失效與重算步驟，以確保數據一致性。 ---")
+
     else:
         print("資料庫中沒有找到任何需要刷新的標的 (無持股、無Benchmark)。")
     print(f"--- 週末市場數據完整校驗腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
