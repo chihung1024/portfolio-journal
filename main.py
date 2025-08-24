@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v5.9 - Fix History Fetch Logic)
+# == Python 每日增量更新腳本 (v6.0 - Global Cache Invalidation)
 # =========================================================================================
 
 import os
@@ -187,6 +187,11 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
     
     today_str = datetime.now().strftime('%Y-%m-%d')
     symbol_batches = [all_symbols[i:i + batch_size] for i in range(0, len(all_symbols), batch_size)]
+    
+    # ========================= 【核心修正 - 開始】 =========================
+    # 在所有價格更新前，先設定一個旗標，追蹤是否有任何價格數據被成功寫入
+    any_price_data_updated = False
+    # ========================= 【核心修正 - 結束】 =========================
 
     for i, batch in enumerate(symbol_batches):
         print(f"\n--- 正在處理歷史數據批次 {i+1}/{len(symbol_batches)}: {batch} ---")
@@ -206,13 +211,11 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
             symbol_upper = symbol.upper()
             latest_date_str = latest_dates.get(symbol_upper)
 
-            # ========================= 【核心修正 - 開始】 =========================
             if not latest_date_str or latest_date_str < today_str:
                 start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol_upper, "2000-01-01")
                 
                 start_dates[symbol] = start_date
                 symbols_to_fetch.append(symbol)
-            # ========================= 【核心修正 - 結束】 =========================
 
         if not symbols_to_fetch:
             print("此批次所有標的歷史數據都已是最新，跳過抓取。")
@@ -262,6 +265,7 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
         
         if db_ops_upsert and d1_batch(db_ops_upsert, api_key=D1_API_KEY):
             print(f"成功！ 批次 {batch} 的歷史數據已安全地更新/寫入。")
+            any_price_data_updated = True # 【核心修正】標記有數據更新
             coverage_updates = []
             for symbol in symbols_successfully_processed:
                 if first_tx_dates.get(symbol):
@@ -293,10 +297,26 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
                     intraday_db_ops.append({"sql": sql, "params": params})
                 
                 if intraday_db_ops:
-                    if d1_batch(intraday_db_ops, api_key=D1_API_KEY): print("資料庫批次寫入請求已成功發送！")
-                    else: print("FATAL: 資料庫批次寫入請求失敗！")
+                    if d1_batch(intraday_db_ops, api_key=D1_API_KEY):
+                        print("資料庫批次寫入請求已成功發送！")
+                        any_price_data_updated = True # 【核心修正】標記有數據更新
+                    else:
+                        print("FATAL: 資料庫批次寫入請求失敗！")
     else:
         print("\n--- 【即時更新階段】跳過：市場休市中。 ---")
+        
+    # ========================= 【核心修正 - 開始】 =========================
+    # 只有在確定有任何價格數據（歷史或即時）被成功寫入資料庫後，才執行全局快取失效
+    if any_price_data_updated:
+        print("\n--- 【全局快取失效階段】偵測到價格數據更新，正在將所有群組標記為 dirty... ---")
+        invalidate_sql = "UPDATE groups SET is_dirty = 1"
+        if d1_batch([{"sql": invalidate_sql, "params": []}], api_key=D1_API_KEY):
+            print("成功！所有自訂群組的快取都已被標記為需要重新計算。")
+        else:
+            print("FATAL: 全局快取失效操作失敗！")
+    else:
+        print("\n--- 【全局快取失效階段】跳過：未偵測到任何價格數據更新。 ---")
+    # ========================= 【核心修正 - 結束】 =========================
 
 
 def trigger_recalculations(uids):
@@ -318,7 +338,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v5.9 - Fix History Fetch Logic) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v6.0 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
