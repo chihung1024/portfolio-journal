@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
+// == 狀態管理模組 (state.js) v5.0.0 - 支援細粒度載入狀態
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -15,14 +15,24 @@ let state = {
     isAppInitialized: false,
     chart: null,
     twrChart: null,
-    netProfitChart: null, 
+    netProfitChart: null,
     confirmCallback: null,
 
-    isSyncing: false,
+    // 【核心修改】引入細粒度的載入狀態管理
+    isLoading: {
+        summary: true, // 初始摘要
+        holdings: true, // 持股列表
+        charts: true,   // 圖表數據
+        secondaryData: true, // 交易、股利等次要數據
+        committing: false, // 是否正在提交變更 (例如：儲存交易)
+    },
 
-    // 【新增】用於引導式流程的暫存數據
-    tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
-    tempMembershipEdit: null, // 儲存 { txId }
+    // 用於請求中止，確保數據一致性
+    activeDataRequestController: null,
+
+    // 用於引導式流程的暫存數據
+    tempTransactionData: null,
+    tempMembershipEdit: null,
 
     // 群組相關狀態
     groups: [],
@@ -34,8 +44,8 @@ let state = {
 
     // 篩選與排序狀態
     transactionFilter: 'all',
-    transactionsPerPage: 15, 
-    transactionsCurrentPage: 1, 
+    transactionsPerPage: 15,
+    transactionsCurrentPage: 1,
     dividendFilter: 'all',
     holdingsSort: {
         key: 'marketValueTWD',
@@ -46,10 +56,10 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
-    netProfitHistory: {}, 
+    netProfitHistory: {},
     assetDateRange: { type: 'all', start: null, end: null },
     twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null } 
+    netProfitDateRange: { type: 'all', start: null, end: null }
 };
 
 // 提供外部讀取狀態的方法
