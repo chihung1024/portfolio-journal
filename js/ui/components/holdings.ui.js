@@ -1,9 +1,58 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_simplified (手機列表視圖簡化)
+// == 持股表格 UI 模組 (holdings.ui.js) - v_skeleton_loading (支援骨架屏載入)
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
 import { isTwStock, formatNumber } from '../utils.js';
+
+/**
+ * 【新增】渲染骨架屏的 HTML
+ * @returns {string} HTML string
+ */
+function renderHoldingsSkeleton() {
+    const skeletonRow = `
+        <tr class="animate-pulse">
+            <td class="px-6 py-4"><div class="h-4 bg-gray-200 rounded w-3/4"></div></td>
+            <td class="px-6 py-4 text-right"><div class="h-4 bg-gray-200 rounded w-1/2 ml-auto"></div></td>
+            <td class="px-6 py-4 text-right">
+                <div class="h-4 bg-gray-200 rounded w-1/3 ml-auto mb-1"></div>
+                <div class="h-3 bg-gray-200 rounded w-1/4 ml-auto"></div>
+            </td>
+            <td class="px-6 py-4 text-right"><div class="h-4 bg-gray-200 rounded w-3/5 ml-auto"></div></td>
+            <td class="px-6 py-4 text-right">
+                <div class="h-4 bg-gray-200 rounded w-1/2 ml-auto mb-1"></div>
+                <div class="h-3 bg-gray-200 rounded w-1/3 ml-auto"></div>
+            </td>
+            <td class="px-6 py-4 text-right">
+                <div class="h-4 bg-gray-200 rounded w-1/2 ml-auto mb-1"></div>
+                <div class="h-3 bg-gray-200 rounded w-1/3 ml-auto"></div>
+            </td>
+            <td class="px-6 py-4 text-right"><div class="h-4 bg-gray-200 rounded w-1/4 ml-auto"></div></td>
+        </tr>
+    `;
+    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">市值(TWD)</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">當日損益</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">未實現損益</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase">持股佔比</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${Array(5).fill(skeletonRow).join('')}</tbody></table></div>`;
+
+    const skeletonCard = `
+        <div class="bg-white rounded-lg shadow animate-pulse">
+            <div class="p-4 space-y-3">
+                <div class="flex justify-between items-center">
+                    <div class="h-6 bg-gray-200 rounded w-1/3"></div>
+                    <div class="h-6 bg-gray-200 rounded w-1/4"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-3 pt-3">
+                    <div><div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div><div class="h-4 bg-gray-200 rounded w-3/4"></div></div>
+                    <div><div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div><div class="h-4 bg-gray-200 rounded w-3/4"></div></div>
+                    <div><div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div><div class="h-4 bg-gray-200 rounded w-3/4"></div></div>
+                    <div><div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div><div class="h-4 bg-gray-200 rounded w-3/4"></div></div>
+                </div>
+            </div>
+        </div>
+    `;
+    const mobileHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${Array(3).fill(skeletonCard).join('')}</div>`;
+
+    return tableHtml + mobileHtml;
+}
+
 
 /**
  * 渲染單一持股的詳細卡片內容 (供列表模式展開使用)
@@ -38,11 +87,19 @@ function renderHoldingDetailCardContent(h) {
 
 
 export function renderHoldingsTable(currentHoldings) {
-    const { stockNotes, holdingsSort, mobileViewMode, activeMobileHolding } = getState();
+    // 【核心修改】從 state 讀取 isLoading 狀態
+    const { stockNotes, holdingsSort, mobileViewMode, activeMobileHolding, isLoading } = getState();
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
+
+    // 【新增】如果正在載入持股，則顯示骨架屏
+    if (isLoading.holdings) {
+        container.innerHTML = renderHoldingsSkeleton();
+        return;
+    }
+
     let holdingsArray = Object.values(currentHoldings);
-    
+
     const viewSwitcherHtml = `
         <div id="holdings-view-switcher" class="mb-4 sm:hidden flex justify-end items-center space-x-2">
             <span class="text-sm font-medium text-gray-600">檢視模式:</span>
@@ -76,18 +133,18 @@ export function renderHoldingsTable(currentHoldings) {
     const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
     const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
 
-    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
+    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
-        const note = stockNotes[h.symbol] || {}; 
-        const decimals = isTwStock(h.symbol) ? 0 : 2; 
+        const note = stockNotes[h.symbol] || {};
+        const decimals = isTwStock(h.symbol) ? 0 : 2;
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
-        let priceClass = ''; 
+        let priceClass = '';
         if (isShort) {
-             if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
+             if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800';
              else if (note.stop_loss_price && h.currentPriceOriginal >= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
         } else {
-             if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
+             if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800';
              else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
         }
         return `
@@ -116,7 +173,7 @@ export function renderHoldingsTable(currentHoldings) {
                 <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
             </tr>`; }).join('')}</tbody></table></div>`;
 
-    const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => { 
+    const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
         return `
@@ -139,12 +196,11 @@ export function renderHoldingsTable(currentHoldings) {
                 </div>
             </div>`; }).join('')}</div>`;
 
-    // ========================= 【核心修改 - 開始】 =========================
     const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
         const isExpanded = activeMobileHolding === h.symbol;
-        
+
         const detailsButtonHtml = `
             <div class="border-t border-gray-200 px-4 py-2">
                 <button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">
@@ -173,7 +229,6 @@ export function renderHoldingsTable(currentHoldings) {
             </div>
         `;
     }).join('')}</div>`;
-    // ========================= 【核心修改 - 結束】 =========================
 
     const mobileContent = `
         <div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div>
