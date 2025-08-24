@@ -1,20 +1,19 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v3.0.0 (整合生命週期管理)
+// == 身份驗證模組 (auth.js) v2.9.0 (支援鍵盤操作)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
-import {
-    getAuth,
-    createUserWithEmailAndPassword,
-    signInWithEmailAndPassword,
-    signOut,
-    onAuthStateChanged
+import { 
+    getAuth, 
+    createUserWithEmailAndPassword, 
+    signInWithEmailAndPassword, 
+    signOut, 
+    onAuthStateChanged 
 } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-// 【核心修正】從 main.js 導入所有需要的生命週期函式
 import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
@@ -34,7 +33,7 @@ export function initializeAuth() {
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // --- 【核心流程修正】---
+            // --- 【核心修改】---
             // 1. 立即顯示 App 主 UI 介面
             document.getElementById('auth-container').style.display = 'none';
             document.querySelector('main').classList.remove('hidden');
@@ -42,15 +41,14 @@ export function initializeAuth() {
             document.getElementById('user-info').classList.remove('hidden');
             document.getElementById('user-id').textContent = user.email;
             document.getElementById('auth-status').textContent = '已連線';
-
+            
             // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
             initializeAppUI();
-
+            
             // 3. 執行新的、更輕量的初始資料載入函式
             loadingText.textContent = '正在讀取核心資產數據...';
-            // 【修改】不再由這裡控制 loadingOverlay 的顯示，交給 loadInitialDashboard 內部管理
-            // loadingOverlay.style.display = 'flex';
-
+            loadingOverlay.style.display = 'flex';
+            
             loadInitialDashboard(); // <--- 呼叫新的、超輕量級的載入函式
 
             // 【新增】在初始資料載入後，啟動自動刷新
@@ -60,27 +58,28 @@ export function initializeAuth() {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
             // 登出時，重設 App 狀態
-            setState({
+            setState({ 
                 currentUserId: null,
                 isAppInitialized: false // 允許下次登入時重新初始化
             });
-
+        
             // 更新 UI
-            document.getElementById('auth-container').classList.remove('hidden');
+            document.getElementById('auth-container').classList.remove('hidden'); 
             document.querySelector('main').classList.add('hidden');
             document.getElementById('logout-btn').style.display = 'none';
             document.getElementById('user-info').classList.add('hidden');
-
+        
             // 確保登出時隱藏讀取畫面
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
             }
-
+            
             // 【新增】使用者登出時，停止自動刷新
             stopLiveRefresh();
         }
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
     // 為登入表單增加 Enter 鍵監聽
     document.getElementById('auth-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -88,6 +87,7 @@ export function initializeAuth() {
             document.getElementById('login-btn').click(); // 觸發登入按鈕
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
