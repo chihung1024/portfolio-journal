@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.1.0 - Fix Circular Dependency
+// == 主程式進入點 (main.js) v5.2.0 - Refactor & Fix Circular Dependency
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -238,32 +238,9 @@ async function loadTransactionsData() {
     await loadInitialData();
 }
 
-export async function loadAndShowDividends() {
-    const { pendingDividends, confirmedDividends } = getState();
-    if (pendingDividends && confirmedDividends) {
-         renderDividendsManagementTab(pendingDividends, confirmedDividends);
-         return;
-    }
-
-    const overlay = document.getElementById('loading-overlay');
-    overlay.style.display = 'flex';
-    try {
-        const result = await apiRequest('get_dividends_for_management', {});
-        if (result.success) {
-            setState({
-                pendingDividends: result.data.pendingDividends,
-                confirmedDividends: result.data.confirmedDividends,
-            });
-            renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
-        } else {
-            throw new Error(result.message);
-        }
-    } catch (error) {
-        showNotification('error', `讀取配息資料失敗: ${error.message}`);
-    } finally {
-        overlay.style.display = 'none';
-    }
-}
+// ========================= 【核心修改 - 開始】 =========================
+// 移除 loadAndShowDividends 函式，它已被移至 dividend.events.js
+// ========================= 【核心修改 - 結束】 =========================
 
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
@@ -290,15 +267,18 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            const { pendingDividends, confirmedDividends, userSplits } = getState();
-
+            // ========================= 【核心修改 - 開始】 =========================
             if (tabName === 'dividends') {
-                await loadAndShowDividends();
+                // 從 dividend.events.js 動態導入並執行刷新函式
+                const dividendEvents = await import('./events/dividend.events.js');
+                await dividendEvents.loadAndShowDividends();
+            // ========================= 【核心修改 - 結束】 =========================
             } else if (tabName === 'transactions') {
                 await loadTransactionsData();
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
+                const { userSplits } = getState();
                 if(userSplits) {
                     renderSplitsTable();
                 }
@@ -313,20 +293,16 @@ function setupMainAppEventListeners() {
 
     const groupSelector = document.getElementById('group-selector');
 
-    // ========================= 【核心修改 - 開始】 =========================
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
 
         if (selectedGroupId === 'all') {
-            // 切換回「全部股票」時，呼叫初始載入函式
             loadInitialDashboard();
         } else {
-            // 切換到特定群組時，呼叫群組計算函式
             applyGroupView(selectedGroupId);
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 }
 
 export function initializeAppUI() {
