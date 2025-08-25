@@ -1,5 +1,5 @@
 // =========================================================================================
-// == [修正檔案] 暫存區橫幅 UI 模組 (stagingBanner.ui.js) v1.1 - 修正提交後刷新邏輯
+// == [修正檔案] 暫存區橫幅 UI 模組 (stagingBanner.ui.js) v1.2 - 全局鎖定
 // == 職責：處理全局提示橫幅的顯示、隱藏與互動邏輯。
 // =========================================================================================
 
@@ -7,13 +7,11 @@ import { getState, setState } from '../../state.js';
 import { apiRequest } from '../../api.js';
 import { showNotification } from '../notifications.js';
 import { renderTransactionsTable } from './transactions.ui.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { renderHoldingsTable } from './holdings.ui.js';
 import { updateDashboard } from '../dashboard.js';
 import { updateAssetChart } from '../charts/assetChart.js';
 import { updateTwrChart } from '../charts/twrChart.js';
 import { updateNetProfitChart } from '../charts/netProfitChart.js';
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -66,12 +64,18 @@ export function initializeStagingEventListeners() {
             setState({ isCommitting: true });
             updateStagingBanner(); 
 
+            // ========================= 【核心修改 - 開始】 =========================
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            loadingText.textContent = '正在提交變更並重算績效...';
+            loadingOverlay.style.display = 'flex';
+            // ========================= 【核心修改 - 結束】 =========================
+
             try {
                 const result = await apiRequest('commit_all_changes');
                 if (result.success) {
                     showNotification('success', result.message);
                     
-                    // ========================= 【核心修改 - 開始】 =========================
                     const newHoldings = (result.data.holdings || []).reduce((obj, item) => {
                         obj[item.symbol] = item; return obj;
                     }, {});
@@ -108,19 +112,20 @@ export function initializeStagingEventListeners() {
                     updateNetProfitChart(seriesName);
                     const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
                     updateTwrChart(benchmarkSymbol, seriesName);
-                    // ========================= 【核心修改 - 結束】 =========================
-
                 } else {
                     throw new Error(result.message);
                 }
             } catch (error) {
                 showNotification('error', `提交失敗: ${error.message}`);
-                 // 如果提交失敗，重新從後端同步一次狀態
                 const { reloadTransactionsAndUpdateUI } = await import('../../events/transaction.events.js');
                 reloadTransactionsAndUpdateUI();
             } finally {
                 setState({ isCommitting: false });
                 updateStagingBanner();
+                // ========================= 【核心修改 - 開始】 =========================
+                loadingOverlay.style.display = 'none';
+                loadingText.textContent = '正在處理您的請求...'; // 恢復預設文字
+                // ========================= 【核心修改 - 結束】 =========================
             }
         });
     }
@@ -137,7 +142,6 @@ export function initializeStagingEventListeners() {
                     if (result.success) {
                         showNotification('info', '所有變更已捨棄。');
                         
-                        // 【修正】捨棄後，直接從後端重新獲取乾淨的列表，確保狀態正確
                         const { reloadTransactionsAndUpdateUI } = await import('../../events/transaction.events.js');
                         await reloadTransactionsAndUpdateUI();
                     } else {
