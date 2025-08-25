@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.1 - Fix Staging UX Flow
+// == 交易事件處理模組 (transaction.events.js) v3.2 - Export Helper Function
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -8,10 +8,11 @@ import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { updateStagingBanner } from '../ui/components/stagingBanner.ui.js';
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 重新載入包含暫存狀態的交易列表並更新UI
+ * 【設為導出】重新載入包含暫存狀態的交易列表並更新UI
  */
-async function reloadTransactionsAndUpdateUI() {
+export async function reloadTransactionsAndUpdateUI() {
     try {
         const result = await apiRequest('get_transactions_with_staging');
         if (result.success) {
@@ -26,6 +27,7 @@ async function reloadTransactionsAndUpdateUI() {
         showNotification('error', `刷新交易列表失敗: ${error.message}`);
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -58,15 +60,16 @@ async function handleDelete(button) {
 async function handleRevertDelete(button) {
     const changeId = button.dataset.changeId;
     try {
-        await apiRequest('revert_staged_change', { changeId });
-        showNotification('success', '刪除操作已成功復原。');
-        await reloadTransactionsAndUpdateUI();
+        const result = await apiRequest('revert_staged_change', { changeId });
+        if(result.success) {
+            showNotification('success', '刪除操作已成功復原。');
+            await reloadTransactionsAndUpdateUI();
+        }
     } catch (error) {
         showNotification('error', `復原失敗: ${error.message}`);
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 處理交易表單的第一步提交/下一步
  */
@@ -94,7 +97,6 @@ async function handleNextStep() {
     closeModal('transaction-modal');
 
     if (isEditing) {
-        // 【編輯模式】：直接將 UPDATE 操作加入暫存區
         transactionData.id = txId;
         const change = {
             op: 'UPDATE',
@@ -109,10 +111,9 @@ async function handleNextStep() {
             showNotification('error', `操作失敗: ${error.message}`);
         }
     } else {
-        // 【新增模式】：將資料暫存，並開啟第二步的群組歸屬視窗
         setState({ tempTransactionData: {
             isEditing: false,
-            txId: null, // 新增時沒有 txId
+            txId: null,
             data: transactionData
         }});
 
@@ -121,18 +122,15 @@ async function handleNextStep() {
         }, 150);
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
-        // 清除上一次的暫存資料
         setState({ tempTransactionData: null });
         const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
 
-    // 【修改】將事件處理器綁定到新的 handleNextStep 函式
     document.getElementById('confirm-transaction-btn').addEventListener('click', handleNextStep);
     
     document.getElementById('cancel-transaction-btn').addEventListener('click', async () => {
@@ -156,7 +154,6 @@ export function initializeTransactionEventListeners() {
             const transaction = transactions.find(t => t.id === txId);
             if (!transaction) return;
             const { openModal } = await import('../ui/modals.js');
-            // 傳入的 transaction 物件可能包含 status，modal 會忽略它，是安全的
             openModal('transaction-modal', true, transaction);
             return;
         }
