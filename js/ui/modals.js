@@ -1,19 +1,18 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v3.3 - 支援鍵盤操作
+// == 彈出視窗模組 (modals.js) v3.4 - Staging Area UX Flow Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
-import { apiRequest, executeApiAction } from '../api.js';
-import { loadGroups } from '../events/group.events.js';
+import { apiRequest } from '../api.js';
+import { showNotification } from './notifications.js';
 
 
 // --- Helper Functions ---
 
 /**
- * 【核心修改】渲染群組歸屬嚮導視窗的內容，並根據傳入的 ID 預先勾選
- * @param {Set<string>} includedGroupIds - 一個包含該交易已有所屬的群組 ID 的 Set
+ * 渲染群組歸屬嚮導視窗的內容
  */
 function renderGroupAttributionContent(includedGroupIds = new Set()) {
     const { tempTransactionData, groups } = getState();
@@ -57,8 +56,9 @@ function renderGroupAttributionContent(includedGroupIds = new Set()) {
     });
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 提交歸因選擇並儲存交易
+ * 提交歸因選擇並將交易【送入暫存區】
  */
 async function submitAttributionAndSaveTransaction() {
     const { tempTransactionData } = getState();
@@ -70,37 +70,42 @@ async function submitAttributionAndSaveTransaction() {
     const newGroups = Array.from(document.querySelectorAll('input[name="attribution_group"][data-new-name]:checked'))
                            .map(cb => ({ tempId: cb.value, name: cb.dataset.newName }));
 
+    // 將交易數據與群組歸屬資訊打包在一起
     const finalPayload = {
-        txData: tempTransactionData.data, // 【核心修正】將 'transactionData' 改為 'txData'
+        ...tempTransactionData.data,
         groupInclusions: selectedGroupIds,
         newGroups: newGroups,
     };
     
     closeModal('group-attribution-modal');
+    
+    const change = {
+        op: 'CREATE',
+        entity: 'transaction',
+        payload: finalPayload
+    };
 
-    const action = tempTransactionData.isEditing ? 'edit_transaction' : 'add_transaction';
-    const payloadForApi = tempTransactionData.isEditing 
-        ? { txId: tempTransactionData.txId, txData: finalPayload.txData, groupInclusions: finalPayload.groupInclusions, newGroups: finalPayload.newGroups }
-        : finalPayload;
-    const successMessage = tempTransactionData.isEditing ? '交易已成功更新！' : '交易已成功新增！';
-
-    executeApiAction(action, payloadForApi, {
-        loadingText: '正在儲存交易與群組設定...',
-        successMessage: successMessage,
-        shouldRefreshData: true
-    }).then(() => {
-        // 【BUG FIX】在核心數據刷新後，手動觸發一次群組列表的刷新
-        // 這樣可以確保新增的群組能夠立刻顯示在UI上
-        if (action === 'add_transaction' && (newGroups.length > 0 || selectedGroupIds.length > 0)) {
-            loadGroups();
+    try {
+        const result = await apiRequest('stage_change', change);
+        if (result.success) {
+            showNotification('info', `交易已加入暫存區。`);
+            // 動態導入並執行刷新，避免循環依賴
+            const { reloadTransactionsAndUpdateUI } = await import('../events/transaction.events.js');
+            await reloadTransactionsAndUpdateUI();
+        } else {
+            throw new Error(result.message);
         }
-    }).catch(error => {
-        console.error("儲存交易最終失敗:", error);
-    });
+    } catch (error) {
+        showNotification('error', `操作失敗: ${error.message}`);
+    } finally {
+        // 清除臨時數據
+        setState({ tempTransactionData: null });
+    }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 /**
- * 為微觀編輯視窗儲存變更，並在成功後刷新
+ * 為微觀編輯視窗儲存變更 (此處邏輯改為送入暫存區)
  */
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -110,19 +115,27 @@ async function handleMembershipSave() {
 
     closeModal('membership-editor-modal');
     
-    executeApiAction('update_transaction_group_membership', {
-        transactionId: tempMembershipEdit.txId,
-        groupIds: selectedGroupIds
-    }, {
-        loadingText: '正在更新群組歸屬...',
-        successMessage: '群組歸屬已更新！',
-        shouldRefreshData: false
-    }).then(() => {
-        loadGroups();
-    }).catch(err => console.error("更新群組歸屬失敗:", err));
+    const change = {
+        op: 'UPDATE',
+        entity: 'group_membership', // 新的 entity 類型
+        payload: {
+            transactionId: tempMembershipEdit.txId,
+            groupIds: selectedGroupIds
+        }
+    };
+    
+    try {
+        await apiRequest('stage_change', change);
+        showNotification('info', `群組歸屬變更已加入暫存區。`);
+        const { reloadTransactionsAndUpdateUI } = await import('../events/transaction.events.js');
+        await reloadTransactionsAndUpdateUI();
+    } catch (error) {
+        showNotification('error', `更新群組歸屬失敗: ${error.message}`);
+    } finally {
+        setState({ tempMembershipEdit: null });
+    }
 }
 
-// --- Exported Functions ---
 
 export async function openModal(modalId, isEdit = false, data = null) {
     const { stockNotes, pendingDividends, confirmedDividends, transactions, groups } = getState();
@@ -133,10 +146,11 @@ export async function openModal(modalId, isEdit = false, data = null) {
     if (modalId === 'transaction-modal') {
         document.getElementById('transaction-id').value = '';
         const confirmBtn = document.getElementById('confirm-transaction-btn');
+        const modalTitle = document.getElementById('modal-title');
         
         if (isEdit && data) {
-            document.getElementById('modal-title').textContent = '編輯交易紀錄';
-            if(confirmBtn) confirmBtn.textContent = '儲存變更';
+            modalTitle.textContent = '編輯交易紀錄';
+            confirmBtn.textContent = '儲存至暫存區'; // 修改按鈕文字
             
             document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
@@ -148,8 +162,8 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
-            document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
-            if(confirmBtn) confirmBtn.textContent = '下一步';
+            modalTitle.textContent = '新增交易紀錄 (步驟 1/2)';
+            confirmBtn.textContent = '下一步';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
@@ -238,14 +252,10 @@ export async function openModal(modalId, isEdit = false, data = null) {
     }
 }
 
-/**
- * 【核心修改】重寫此函式，使其能夠處理編輯模式
- */
 export async function openGroupAttributionModal() {
     const { tempTransactionData } = getState();
     if (!tempTransactionData) return;
 
-    // 步驟 1: 動態設定標題
     const modalTitle = document.getElementById('attribution-modal-title');
     modalTitle.textContent = tempTransactionData.isEditing 
         ? '編輯交易紀錄 (步驟 2/2)' 
@@ -255,7 +265,6 @@ export async function openGroupAttributionModal() {
     const container = document.getElementById('attribution-groups-container');
     container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取群組狀態...</p>';
 
-    // 步驟 2: 如果是編輯模式，異步獲取該交易的群組歸屬
     if (tempTransactionData.isEditing && tempTransactionData.txId) {
         try {
             const result = await apiRequest('get_transaction_memberships', { transactionId: tempTransactionData.txId });
@@ -268,7 +277,6 @@ export async function openGroupAttributionModal() {
         }
     }
 
-    // 步驟 3: 使用獲取到的 (或空的) 群組 ID 集合來渲染內容
     renderGroupAttributionContent(includedGroupIds);
     
     const modalElement = document.getElementById('group-attribution-modal');
@@ -304,17 +312,12 @@ export function toggleOptionalFields() {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
-// 為 document 增加一次性的全域 Enter 鍵監聽
-// 這樣可以處理那些沒有標準 form 標籤的彈窗
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
 
-    // 處理群組歸屬設定彈窗
     const attributionModal = document.getElementById('group-attribution-modal');
     if (!attributionModal.classList.contains('hidden')) {
         e.preventDefault();
-        // 如果焦點在新增群組的輸入框，則觸發新增按鈕，否則觸發確認按鈕
         if (document.activeElement === document.getElementById('new-group-name-input')) {
             document.getElementById('add-new-group-btn').click();
         } else {
@@ -323,7 +326,6 @@ document.addEventListener('keydown', (e) => {
         return;
     }
 
-    // 處理編輯群組歸屬彈窗
     const membershipModal = document.getElementById('membership-editor-modal');
     if (!membershipModal.classList.contains('hidden')) {
         e.preventDefault();
@@ -331,4 +333,3 @@ document.addEventListener('keydown', (e) => {
         return;
     }
 });
-// ========================= 【核心修改 - 結束】 =========================
