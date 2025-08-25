@@ -1,12 +1,10 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.3 - 支援鍵盤操作
+// == 通用事件處理模組 (general.events.js) v3.4 - Fix UI Refresh
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// 【修改】導入 apiRequest
 import { apiRequest, executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
@@ -14,22 +12,18 @@ import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
 
-// --- Private Functions ---
+// ========================= 【核心修改 - 開始】 =========================
+import { loadInitialDashboard } from '../app.js';
+// ========================= 【核心修改 - 結束】 =========================
 
-// 【新增】處理開啟詳情彈窗的核心邏輯
 async function handleShowDetails(symbol) {
     const { transactions } = getState();
-
-    // 檢查 state 中是否已存在此股票的交易紀錄
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
-    
     const { openModal } = await import('../ui/modals.js');
 
     if (hasDataLocally) {
-        // 如果本地已有數據，直接開啟彈窗
         openModal('details-modal', false, { symbol });
     } else {
-        // 如果沒有，顯示讀取畫面，並向後端請求該個股的數據
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
         loadingText.textContent = `正在讀取 ${symbol} 的詳細資料...`;
@@ -41,7 +35,6 @@ async function handleShowDetails(symbol) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
 
-                // 合併新的數據到全域 state，並過濾掉可能重複的項目
                 const txIds = new Set(currentState.transactions.map(t => t.id));
                 const uniqueNewTxs = newTransactions.filter(t => !txIds.has(t.id));
                 
@@ -53,7 +46,6 @@ async function handleShowDetails(symbol) {
                     confirmedDividends: [...currentState.confirmedDividends, ...uniqueNewDivs]
                 });
                 
-                // 數據準備好後，打開彈窗
                 openModal('details-modal', false, { symbol });
             } else {
                 throw new Error(result.message);
@@ -61,7 +53,7 @@ async function handleShowDetails(symbol) {
         } catch (error) {
             showNotification('error', `讀取 ${symbol} 資料失敗: ${error.message}`);
         } finally {
-            loadingText.textContent = '正在從雲端同步資料...'; // 恢復預設文字
+            loadingText.textContent = '正在從雲端同步資料...';
             loadingOverlay.style.display = 'none';
         }
     }
@@ -74,30 +66,36 @@ async function handleUpdateBenchmark() {
         showNotification('error', '請輸入 Benchmark 的股票代碼。');
         return;
     }
-    executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-        loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-        successMessage: 'Benchmark 已成功更新！'
-    }).catch(error => {
+    // ========================= 【核心修改 - 開始】 =========================
+    try {
+        await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
+            loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
+            successMessage: 'Benchmark 已成功更新！'
+        });
+        // 更新 Benchmark 會影響 TWR 圖表和全局摘要，需完整刷新
+        await loadInitialDashboard();
+    } catch (error) {
         console.error("更新 Benchmark 最終失敗:", error);
-    });
+    }
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     const { closeModal } = await import('../ui/modals.js');
     closeModal(modalToClose);
 
-    executeApiAction('save_stock_note', noteData, {
-        loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
-        successMessage: `${noteData.symbol} 的筆記已儲存！`,
-        shouldRefreshData: false
-    }).then(() => {
-        const { holdings, stockNotes } = getState();
-        stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
-        setState({ stockNotes });
-        renderHoldingsTable(holdings); 
-    }).catch(error => {
+    // ========================= 【核心修改 - 開始】 =========================
+    try {
+        await executeApiAction('save_stock_note', noteData, {
+            loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
+            successMessage: `${noteData.symbol} 的筆記已儲存！`
+        });
+        // 筆記內容可能會影響儀表板顯示（例如目標價），因此統一刷新
+        await loadInitialDashboard();
+    } catch (error) {
         console.error("儲存筆記最終失敗:", error);
-    });
+    }
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 async function handleNotesFormSubmit(e) {
@@ -155,8 +153,6 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
     }
 }
 
-// --- Public Function ---
-
 export function initializeGeneralEventListeners() {
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
@@ -165,24 +161,18 @@ export function initializeGeneralEventListeners() {
         closeModal('notes-modal');
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
-    // 為主筆記表單增加 Enter 鍵監聽
     document.getElementById('notes-form').addEventListener('keydown', (e) => {
-        // 使用 Ctrl+Enter 或 Command+Enter 送出，避免在輸入筆記時誤觸
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             document.getElementById('save-notes-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
-            // 此處的 openModal 會在 async 函式中被呼叫，但因事件監聽器本身不是 async,
-            // 我們可以這樣處理：
             (async () => {
                 const { openModal } = await import('../ui/modals.js');
                 openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
@@ -207,7 +197,6 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
-        // 【修改】呼叫新的處理函式
         const mobileDetailsBtn = e.target.closest('.open-details-btn');
         if (mobileDetailsBtn) {
              handleShowDetails(mobileDetailsBtn.dataset.symbol);
@@ -227,7 +216,6 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
-        // 【修改】呼叫新的處理函式
         const holdingRow = e.target.closest('.holding-row');
         if (holdingRow) {
             handleShowDetails(holdingRow.dataset.symbol);
@@ -236,8 +224,8 @@ export function initializeGeneralEventListeners() {
     });
     
     document.getElementById('details-modal').addEventListener('click', async (e) => {
+        const { closeModal } = await import('../ui/modals.js');
         if (e.target.closest('#close-details-modal-btn')) {
-            const { closeModal } = await import('../ui/modals.js');
             closeModal('details-modal');
             return;
         }
@@ -255,7 +243,7 @@ export function initializeGeneralEventListeners() {
             const { transactions } = getState();
             const txToEdit = transactions.find(t => t.id === txId);
             if (txToEdit) {
-                const { closeModal, openModal } = await import('../ui/modals.js');
+                const { openModal } = await import('../ui/modals.js');
                 closeModal('details-modal');
                 openModal('transaction-modal', true, txToEdit);
             }
@@ -266,14 +254,19 @@ export function initializeGeneralEventListeners() {
         if (deleteBtn) {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
-            showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-                executeApiAction('delete_transaction', { txId }, {
-                    loadingText: '正在刪除交易...',
-                    successMessage: '交易已成功刪除！'
-                }).then(() => {
-                    const symbol = document.querySelector('#details-modal-content h2').textContent;
-                    setTimeout(() => renderDetailsModal(symbol), 200);
-                }).catch(err => console.error("刪除交易失敗:", err));
+            showConfirm('您確定要刪除這筆交易紀錄嗎？此為舊版刪除功能，將直接生效並重算績效。', async () => {
+                // ========================= 【核心修改 - 開始】 =========================
+                closeModal('details-modal');
+                try {
+                    await executeApiAction('delete_transaction', { txId }, {
+                        loadingText: '正在刪除交易並重算績效...',
+                        successMessage: '交易已成功刪除！'
+                    });
+                    await loadInitialDashboard();
+                } catch (err) {
+                    console.error("刪除交易失敗:", err);
+                }
+                // ========================= 【核心修改 - 結束】 =========================
             });
             return;
         }
@@ -288,34 +281,18 @@ export function initializeGeneralEventListeners() {
                 stop_loss_price: parseFloat(document.getElementById('details-stop-loss-price').value) || null,
                 notes: document.getElementById('details-notes-content').value.trim()
             };
-             executeApiAction('save_stock_note', noteData, {
-                loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
-                successMessage: `${noteData.symbol} 的筆記已儲存！`,
-                shouldRefreshData: false
-            }).then(() => {
-                const { holdings, stockNotes } = getState();
-                stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
-                setState({ stockNotes });
-                renderHoldingsTable(holdings);
-                renderDetailsModal(noteData.symbol);
-                switchDetailsTab('notes', noteData.symbol);
-            }).catch(error => {
-                console.error("儲存筆記最終失敗:", error);
-            });
+            saveNoteAction(noteData, 'details-modal');
         }
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
-    // 使用事件委派，為詳情彈窗內的筆記表單增加 Enter 鍵監聽
     document.getElementById('details-modal').addEventListener('keydown', (e) => {
         if (e.target.closest('#details-notes-form') && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             document.getElementById('details-save-notes-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 
-    // Chart controls listeners (unchanged)
+    // Chart controls listeners
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {

@@ -1,17 +1,13 @@
 // =========================================================================================
-// == 配息事件處理模組 (dividend.events.js) v2.0 - Refactored
+// == 配息事件處理模組 (dividend.events.js) v2.1 - Fix UI Refresh
 // == 職責：處理所有與配息管理分頁相關的用戶互動事件。
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction } from '../api.js';
+import { executeApiAction } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
-
-// ========================= 【核心修改 - 開始】 =========================
-// 將依賴從 main.js 切換到 app.js，打破循環依賴
-import { loadAndShowDividends } from '../app.js';
-// ========================= 【核心修改 - 結束】 =========================
+import { loadAndShowDividends, loadInitialDashboard } from '../app.js';
 
 // --- Private Functions ---
 
@@ -22,16 +18,17 @@ async function handleBulkConfirm() {
         return;
     }
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, () => {
-        executeApiAction('bulk_confirm_all_dividends', { pendingDividends }, {
-            loadingText: '正在批次確認配息...',
-            successMessage: '所有待確認配息已處理完畢！'
-        }).then(() => {
-            // 成功後，額外刷新配息管理分頁的內容
-            return loadAndShowDividends();
-        }).catch(error => {
+    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, async () => {
+        try {
+            await executeApiAction('bulk_confirm_all_dividends', { pendingDividends }, {
+                loadingText: '正在批次確認配息...',
+                successMessage: '所有待確認配息已處理完畢！'
+            });
+            // 成功後，刷新配息管理分頁的內容
+            await loadAndShowDividends();
+        } catch (error) {
             console.error("批次確認配息最終失敗:", error);
-        });
+        }
     });
 }
 
@@ -55,30 +52,36 @@ async function handleDividendFormSubmit(e) {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('dividend-modal');
 
-    executeApiAction('save_user_dividend', dividendData, {
-        loadingText: '正在儲存配息紀錄...',
-        successMessage: '配息紀錄已成功儲存！'
-    }).then(() => {
-        // 成功後，額外刷新配息管理分頁的內容
-        return loadAndShowDividends();
-    }).catch(error => {
+    // ========================= 【核心修改 - 開始】 =========================
+    try {
+        await executeApiAction('save_user_dividend', dividendData, {
+            loadingText: '正在儲存配息紀錄並重算績效...',
+            successMessage: '配息紀錄已成功儲存！'
+        });
+        // 操作會觸發後端重算，因此需完整刷新儀表板
+        await loadInitialDashboard();
+    } catch (error) {
         console.error("儲存配息紀錄最終失敗:", error);
-    });
+    }
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', () => {
-        executeApiAction('delete_user_dividend', { dividendId }, {
-            loadingText: '正在刪除配息紀錄...',
-            successMessage: '配息紀錄已成功刪除！'
-        }).then(() => {
-            // 成功後，額外刷新配息管理分頁的內容
-            return loadAndShowDividends();
-        }).catch(error => {
+    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', async () => {
+        // ========================= 【核心修改 - 開始】 =========================
+        try {
+            await executeApiAction('delete_user_dividend', { dividendId }, {
+                loadingText: '正在刪除配息紀錄並重算績效...',
+                successMessage: '配息紀錄已成功刪除！'
+            });
+            // 操作會觸發後端重算，因此需完整刷新儀表板
+            await loadInitialDashboard();
+        } catch (error) {
             console.error("刪除配息紀錄最終失敗:", error);
-        });
+        }
+        // ========================= 【核心修改 - 結束】 =========================
     });
 }
 
