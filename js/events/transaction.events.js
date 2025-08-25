@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.0 - Staging Area Refactor
+// == 交易事件處理模組 (transaction.events.js) v3.1 - Fix Staging UX Flow
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -7,8 +7,6 @@ import { apiRequest } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { updateStagingBanner } from '../ui/components/stagingBanner.ui.js';
-
-// ========================= 【核心修改 - 開始】 =========================
 
 /**
  * 重新載入包含暫存狀態的交易列表並更新UI
@@ -31,55 +29,6 @@ async function reloadTransactionsAndUpdateUI() {
 
 
 /**
- * 處理新增/編輯交易表單的提交，將其轉為暫存操作
- */
-async function handleTransactionFormSubmit() {
-    const txId = document.getElementById('transaction-id').value;
-    const isEditing = !!txId;
-
-    const transactionData = {
-        date: document.getElementById('transaction-date').value,
-        symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
-        type: document.querySelector('input[name="transaction-type"]:checked').value,
-        quantity: parseFloat(document.getElementById('quantity').value),
-        price: parseFloat(document.getElementById('price').value),
-        currency: document.getElementById('currency').value,
-        totalCost: parseFloat(document.getElementById('total-cost').value) || null,
-        exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
-    };
-    if (isEditing) {
-        transactionData.id = txId;
-    }
-
-    if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-        showNotification('error', '請填寫所有必填欄位。');
-        return;
-    }
-    
-    const { closeModal } = await import('../ui/modals.js');
-    closeModal('transaction-modal');
-
-    const op = isEditing ? 'UPDATE' : 'CREATE';
-    const change = {
-        op: op,
-        entity: 'transaction',
-        payload: transactionData
-    };
-
-    try {
-        const result = await apiRequest('stage_change', change);
-        if (result.success) {
-            showNotification('info', `交易已加入暫存區。`);
-            await reloadTransactionsAndUpdateUI();
-        } else {
-            throw new Error(result.message);
-        }
-    } catch (error) {
-        showNotification('error', `操作失敗: ${error.message}`);
-    }
-}
-
-/**
  * 處理刪除按鈕點擊，將其轉為暫存操作
  */
 async function handleDelete(button) {
@@ -92,9 +41,11 @@ async function handleDelete(button) {
             payload: { id: txId }
         };
         try {
-            await apiRequest('stage_change', change);
-            showNotification('info', `刪除操作已加入暫存區。`);
-            await reloadTransactionsAndUpdateUI();
+            const result = await apiRequest('stage_change', change);
+            if (result.success) {
+                showNotification('info', `刪除操作已加入暫存區。`);
+                await reloadTransactionsAndUpdateUI();
+            }
         } catch (error) {
             showNotification('error', `刪除失敗: ${error.message}`);
         }
@@ -115,15 +66,74 @@ async function handleRevertDelete(button) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 處理交易表單的第一步提交/下一步
+ */
+async function handleNextStep() {
+    const txId = document.getElementById('transaction-id').value;
+    const isEditing = !!txId;
+
+    const transactionData = {
+        date: document.getElementById('transaction-date').value,
+        symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
+        type: document.querySelector('input[name="transaction-type"]:checked').value,
+        quantity: parseFloat(document.getElementById('quantity').value),
+        price: parseFloat(document.getElementById('price').value),
+        currency: document.getElementById('currency').value,
+        totalCost: parseFloat(document.getElementById('total-cost').value) || null,
+        exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
+    };
+
+    if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
+        showNotification('error', '請填寫所有必填欄位。');
+        return;
+    }
+    
+    const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
+    closeModal('transaction-modal');
+
+    if (isEditing) {
+        // 【編輯模式】：直接將 UPDATE 操作加入暫存區
+        transactionData.id = txId;
+        const change = {
+            op: 'UPDATE',
+            entity: 'transaction',
+            payload: transactionData
+        };
+        try {
+            await apiRequest('stage_change', change);
+            showNotification('info', `交易修改已加入暫存區。`);
+            await reloadTransactionsAndUpdateUI();
+        } catch (error) {
+            showNotification('error', `操作失敗: ${error.message}`);
+        }
+    } else {
+        // 【新增模式】：將資料暫存，並開啟第二步的群組歸屬視窗
+        setState({ tempTransactionData: {
+            isEditing: false,
+            txId: null, // 新增時沒有 txId
+            data: transactionData
+        }});
+
+        setTimeout(() => {
+            openGroupAttributionModal();
+        }, 150);
+    }
+}
+// ========================= 【核心修改 - 結束】 =========================
+
 
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
+        // 清除上一次的暫存資料
+        setState({ tempTransactionData: null });
         const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
 
-    // 【修改】交易表單的確認按鈕，現在直接觸發暫存邏輯
-    document.getElementById('confirm-transaction-btn').addEventListener('click', handleTransactionFormSubmit);
+    // 【修改】將事件處理器綁定到新的 handleNextStep 函式
+    document.getElementById('confirm-transaction-btn').addEventListener('click', handleNextStep);
     
     document.getElementById('cancel-transaction-btn').addEventListener('click', async () => {
         const { closeModal } = await import('../ui/modals.js');
@@ -146,6 +156,7 @@ export function initializeTransactionEventListeners() {
             const transaction = transactions.find(t => t.id === txId);
             if (!transaction) return;
             const { openModal } = await import('../ui/modals.js');
+            // 傳入的 transaction 物件可能包含 status，modal 會忽略它，是安全的
             openModal('transaction-modal', true, transaction);
             return;
         }
@@ -157,7 +168,6 @@ export function initializeTransactionEventListeners() {
             return;
         }
 
-        // 【新增】處理復原按鈕
         const revertButton = e.target.closest('.revert-delete-btn');
         if (revertButton) {
             e.preventDefault();
@@ -196,4 +206,3 @@ export function initializeTransactionEventListeners() {
         }
     });
 }
-// ========================= 【核心修改 - 結束】 =========================

@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 暫存區 API 處理模組 (staging.handler.js) v2.0 - 完整實作
+// == 暫存區 API 處理模組 (staging.handler.js) v2.1 - 整合交割匯率
 // == 職責：處理所有與暫存區相關的 API Action，實現非同步提交的核心邏輯
 // =========================================================================================
 
@@ -8,6 +8,9 @@ const { z } = require("zod");
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
 const schemas = require('../schemas');
+// ========================= 【核心修改 - 開始】 =========================
+const { populateSettlementFxRate } = require('./transaction.handler');
+// ========================= 【核心修改 - 結束】 =========================
 
 /**
  * 將一筆變更操作加入到後端暫存區資料庫
@@ -30,7 +33,6 @@ exports.stageChange = async (uid, data, res) => {
         case 'transaction:DELETE':
             validatedPayload = z.object({ id: z.string().uuid() }).parse(payload);
             break;
-        // 未來可擴充至 split, dividend 等
         default:
             return res.status(400).send({ success: false, message: `不支援的操作: ${entity}:${op}` });
     }
@@ -41,7 +43,6 @@ exports.stageChange = async (uid, data, res) => {
         [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]
     );
 
-    // 回傳 changeId 和 entityId，讓前端可以追蹤這個操作
     return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId, entityId });
 };
 
@@ -55,38 +56,32 @@ exports.getTransactionsWithStaging = async (uid, res) => {
             d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])
         ]);
 
-        // 1. 先將所有已提交的交易放入 Map，方便快速查找
         const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
 
-        // 2. 處理暫存區的變更
         for (const change of stagedChanges) {
             const payload = JSON.parse(change.payload);
             const entityId = change.entity_id;
 
             if (change.operation_type === 'CREATE') {
-                // 新增：直接放入 Map
-                txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' });
+                txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE', changeId: change.id });
             } else if (change.operation_type === 'UPDATE') {
-                // 更新：修改 Map 中已有的項目
                 const existingTx = txMap.get(entityId);
                 if (existingTx) {
-                    Object.assign(existingTx, payload, { status: 'STAGED_UPDATE' });
+                    Object.assign(existingTx, payload, { status: 'STAGED_UPDATE', changeId: change.id });
                 }
             } else if (change.operation_type === 'DELETE') {
-                // 刪除：修改 Map 中項目的狀態
                 const existingTx = txMap.get(entityId);
                 if (existingTx) {
-                    // 如果刪除的是一個還在暫存區的新增項目，直接從 Map 中移除即可
                     if (existingTx.status === 'STAGED_CREATE') {
                         txMap.delete(entityId);
                     } else {
                         existingTx.status = 'STAGED_DELETE';
+                        existingTx.changeId = change.id;
                     }
                 }
             }
         }
         
-        // 3. 將 Map 轉換為陣列並排序
         const mergedTxs = Array.from(txMap.values()).sort((a, b) => new Date(b.date) - new Date(a.date));
 
         return res.status(200).send({
@@ -114,12 +109,21 @@ exports.commitAllChanges = async (uid, res) => {
     const dbOperations = [];
     let earliestChangeDate = new Date().toISOString();
 
-    // 步驟 1: 構建資料庫批次操作
-    for (const change of pendingChanges) {
-        const payload = JSON.parse(change.payload);
-        const { entity_type: entity, operation_type: op, entity_id: entityId } = change;
+    // ========================= 【核心修改 - 開始】 =========================
+    // 步驟 1: 預處理 payload，填充預設匯率
+    const processedChanges = await Promise.all(pendingChanges.map(async (change) => {
+        let payload = JSON.parse(change.payload);
+        if (change.entity_type === 'transaction' && (change.operation_type === 'CREATE' || change.operation_type === 'UPDATE')) {
+            payload = await populateSettlementFxRate(payload);
+        }
+        return { ...change, payload }; // 返回包含豐富化 payload 的變更物件
+    }));
+    // ========================= 【核心修改 - 結束】 =========================
+
+    // 步驟 2: 構建資料庫批次操作
+    for (const change of processedChanges) { // 使用處理過的 changes
+        const { payload, entity_type: entity, operation_type: op, entity_id: entityId } = change;
         
-        // 找出最早的交易日期，用於觸發重算
         const date = payload.date || new Date().toISOString();
         if (date < earliestChangeDate) {
             earliestChangeDate = date;
@@ -139,29 +143,30 @@ exports.commitAllChanges = async (uid, res) => {
         }
     }
     
-    // 步驟 2: 執行批次操作
+    // 步驟 3: 執行批次操作
     try {
-        await d1Client.batch(dbOperations);
+        if(dbOperations.length > 0) await d1Client.batch(dbOperations);
     } catch (dbError) {
         console.error(`[Commit Error] UID ${uid}: D1 Batch failed.`, dbError);
         return res.status(500).send({ success: false, message: '資料庫寫入失敗，您的變更已還原。', error: dbError.message });
     }
 
-    // 步驟 3: 執行重算
+    // 步驟 4: 執行重算
     try {
         await performRecalculation(uid, earliestChangeDate, false);
     } catch (recalcError) {
         console.error(`[CRITICAL] UID ${uid}: DB commit OK, but recalc failed!`, recalcError);
-        // 注意：此時資料庫已更新，但計算結果是舊的，需要管理員介入
         return res.status(500).send({ success: false, message: `資料庫已更新，但績效計算過程中發生錯誤。請聯繫管理員。` });
     }
     
-    // 步驟 4: 清除已處理的暫存變更
+    // 步驟 5: 清除已處理的暫存變更
     const pendingIds = pendingChanges.map(c => c.id);
-    const placeholders = pendingIds.map(() => '?').join(',');
-    await d1Client.query(`DELETE FROM staged_changes WHERE id IN (${placeholders})`, pendingIds);
+    if(pendingIds.length > 0) {
+        const placeholders = pendingIds.map(() => '?').join(',');
+        await d1Client.query(`DELETE FROM staged_changes WHERE id IN (${placeholders})`, pendingIds);
+    }
 
-    // 步驟 5: 獲取並回傳全新的、完整的投資組合數據
+    // 步驟 6: 獲取並回傳全新的、完整的投資組合數據
     const [holdings, summaryResult, transactions, splits, stockNotes] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
         d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
