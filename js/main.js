@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.0.0 - Vite 整合版
+// == 主程式進入點 (main.js) v5.1.0 - CDN ESM 整合版
 // =========================================================================================
 
-// 【核心修改】引入 CSS 主檔案與 NPM 函式庫
-import '../css/style.css';
-import ApexCharts from 'apexcharts';
-import lucide from 'lucide/dist/umd/lucide';
+// 【核心修改】從 ESM-CDN 引入函式庫，不再需要本地安裝
+import ApexCharts from 'https://cdn.jsdelivr.net/npm/apexcharts@3.49.1/+esm';
+import lucide from 'https://cdn.jsdelivr.net/npm/lucide@0.378.0/+esm';
 
 // 【核心修改】將函式庫掛載到 window，以向下相容其他模組的調用
 window.ApexCharts = ApexCharts;
