@@ -1,93 +1,42 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.2 - 支援鍵盤操作
+// == 交易事件處理模組 (transaction.events.js) v3.0 - Staging Area Refactor
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction } from '../api.js';
+import { apiRequest } from '../api.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-// import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
-import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-import { updateDashboard } from '../ui/dashboard.js';
-import { updateAssetChart } from '../ui/charts/assetChart.js';
-import { updateTwrChart } from '../ui/charts/twrChart.js';
-import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
-import { loadGroups } from './group.events.js'; // 【BUG FIX】導入 loadGroups 函式
+import { updateStagingBanner } from '../ui/components/stagingBanner.ui.js';
 
+// ========================= 【核心修改 - 開始】 =========================
 
-// --- Private Functions (內部函式) ---
-
-async function handleEdit(button) {
-    const { transactions } = getState();
-    const txId = button.dataset.id;
-    const transaction = transactions.find(t => t.id === txId);
-    if (!transaction) return;
-    
-    // 確保標題正確
-    const titleEl = document.getElementById('modal-title');
-    if(titleEl) titleEl.textContent = '編輯交易紀錄';
-    
-    const { openModal } = await import('../ui/modals.js');
-    openModal('transaction-modal', true, transaction);
-}
-
-function handleSuccessfulUpdate(result) {
-    if (!result || !result.data) {
-        console.error("handleSuccessfulUpdate 收到的結果無效:", result);
-        return;
+/**
+ * 重新載入包含暫存狀態的交易列表並更新UI
+ */
+async function reloadTransactionsAndUpdateUI() {
+    try {
+        const result = await apiRequest('get_transactions_with_staging');
+        if (result.success) {
+            setState({
+                transactions: result.data.transactions || [],
+                hasStagedChanges: result.data.hasStagedChanges
+            });
+            renderTransactionsTable();
+            updateStagingBanner();
+        }
+    } catch (error) {
+        showNotification('error', `刷新交易列表失敗: ${error.message}`);
     }
-    
-    const { holdings, summary, history, twrHistory, netProfitHistory, benchmarkHistory } = result.data;
-
-    const holdingsObject = (holdings || []).reduce((obj, item) => {
-        obj[item.symbol] = item; return obj;
-    }, {});
-
-    setState({
-        holdings: holdingsObject,
-        portfolioHistory: history || {},
-        twrHistory: twrHistory || {},
-        netProfitHistory: netProfitHistory || {},
-        benchmarkHistory: benchmarkHistory || {}
-    });
-
-    renderHoldingsTable(holdingsObject);
-    updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-
-    updateAssetChart();
-    updateNetProfitChart();
-    const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
-    updateTwrChart(benchmarkSymbol);
-    
-    renderTransactionsTable();
 }
 
 
-async function handleDelete(button) {
-    const txId = button.dataset.id;
-    
-    const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這筆交易紀錄嗎？此操作將同時移除此交易在所有群組中的紀錄。', () => {
-        executeApiAction('delete_transaction', { txId }, {
-            loadingText: '正在刪除交易紀錄...',
-            successMessage: '交易紀錄已成功刪除！',
-            shouldRefreshData: false 
-        }).then(result => {
-            const { transactions } = getState();
-            const updatedTransactions = transactions.filter(t => t.id !== txId);
-            setState({ transactions: updatedTransactions });
-            
-            handleSuccessfulUpdate(result);
-            loadGroups(); // 【BUG FIX】在刪除成功後，手動刷新群組列表
-        }).catch(error => {
-            console.error("刪除交易最終失敗:", error);
-        });
-    });
-}
-
-async function handleNextStep() {
+/**
+ * 處理新增/編輯交易表單的提交，將其轉為暫存操作
+ */
+async function handleTransactionFormSubmit() {
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
+
     const transactionData = {
         date: document.getElementById('transaction-date').value,
         symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
@@ -98,78 +47,106 @@ async function handleNextStep() {
         totalCost: parseFloat(document.getElementById('total-cost').value) || null,
         exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
     };
+    if (isEditing) {
+        transactionData.id = txId;
+    }
 
     if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
         showNotification('error', '請填寫所有必填欄位。');
         return;
     }
     
-    const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
+    const { closeModal } = await import('../ui/modals.js');
     closeModal('transaction-modal');
 
-    if (isEditing) {
-        // 【核心修改】如果是編輯模式，直接儲存，不再進入第二步
-        const payloadForApi = { txId: txId, txData: transactionData };
-        executeApiAction('edit_transaction', payloadForApi, {
-            loadingText: '正在儲存變更...',
-            successMessage: '交易已成功更新！',
-            shouldRefreshData: false
-        }).then(result => {
-             // 編輯成功後，需要手動更新 state 中的 transactions 陣列
-            const { transactions } = getState();
-            const updatedTransactions = transactions.map(t => t.id === txId ? { ...t, ...transactionData } : t);
-            setState({ transactions: updatedTransactions });
-            handleSuccessfulUpdate(result);
-            loadGroups(); // 【BUG FIX】手動刷新群組列表
-        }).catch(error => {
-            console.error("編輯交易最終失敗:", error);
-        });
-    } else {
-        // 【維持不變】如果是新增模式，則進入第二步的群組歸屬流程
-        setState({ tempTransactionData: {
-            isEditing,
-            txId,
-            data: transactionData
-        }});
+    const op = isEditing ? 'UPDATE' : 'CREATE';
+    const change = {
+        op: op,
+        entity: 'transaction',
+        payload: transactionData
+    };
 
-        setTimeout(() => {
-            openGroupAttributionModal();
-        }, 150);
+    try {
+        const result = await apiRequest('stage_change', change);
+        if (result.success) {
+            showNotification('info', `交易已加入暫存區。`);
+            await reloadTransactionsAndUpdateUI();
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (error) {
+        showNotification('error', `操作失敗: ${error.message}`);
     }
 }
 
-// --- Public Function (公開函式，由 main.js 呼叫) ---
+/**
+ * 處理刪除按鈕點擊，將其轉為暫存操作
+ */
+async function handleDelete(button) {
+    const txId = button.dataset.id;
+    const { showConfirm } = await import('../ui/modals.js');
+    showConfirm('這筆交易將被標記為待刪除，在您點擊「全部提交」後才會真正刪除。確定嗎？', async () => {
+        const change = {
+            op: 'DELETE',
+            entity: 'transaction',
+            payload: { id: txId }
+        };
+        try {
+            await apiRequest('stage_change', change);
+            showNotification('info', `刪除操作已加入暫存區。`);
+            await reloadTransactionsAndUpdateUI();
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        }
+    });
+}
+
+/**
+ * 處理復原刪除按鈕點擊
+ */
+async function handleRevertDelete(button) {
+    const changeId = button.dataset.changeId;
+    try {
+        await apiRequest('revert_staged_change', { changeId });
+        showNotification('success', '刪除操作已成功復原。');
+        await reloadTransactionsAndUpdateUI();
+    } catch (error) {
+        showNotification('error', `復原失敗: ${error.message}`);
+    }
+}
+
 
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
-        setState({ tempTransactionData: null });
-        
         const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
 
-    document.getElementById('confirm-transaction-btn').addEventListener('click', handleNextStep);
+    // 【修改】交易表單的確認按鈕，現在直接觸發暫存邏輯
+    document.getElementById('confirm-transaction-btn').addEventListener('click', handleTransactionFormSubmit);
     
     document.getElementById('cancel-transaction-btn').addEventListener('click', async () => {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('transaction-modal');
     });
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 為交易表單增加 Enter 鍵監聽
     document.getElementById('transaction-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             document.getElementById('confirm-transaction-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 
-    document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
+    document.getElementById('transactions-tab').addEventListener('click', async (e) => {
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
             e.preventDefault();
-            handleEdit(editButton);
+            const { transactions } = getState();
+            const txId = editButton.dataset.id;
+            const transaction = transactions.find(t => t.id === txId);
+            if (!transaction) return;
+            const { openModal } = await import('../ui/modals.js');
+            openModal('transaction-modal', true, transaction);
             return;
         }
 
@@ -177,6 +154,14 @@ export function initializeTransactionEventListeners() {
         if (deleteButton) {
             e.preventDefault();
             handleDelete(deleteButton);
+            return;
+        }
+
+        // 【新增】處理復原按鈕
+        const revertButton = e.target.closest('.revert-delete-btn');
+        if (revertButton) {
+            e.preventDefault();
+            handleRevertDelete(revertButton);
             return;
         }
         
@@ -211,3 +196,4 @@ export function initializeTransactionEventListeners() {
         }
     });
 }
+// ========================= 【核心修改 - 結束】 =========================
