@@ -1,5 +1,5 @@
 // =========================================================================================
-// == Cloud Function 主入口 (v6.2 - Staging-Complete)
+// == Cloud Function 主入口 (v6.3 - Fix API Route)
 // =========================================================================================
 
 const admin = require('firebase-admin');
@@ -14,7 +14,8 @@ const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
 const stagingHandlers = require('./api_handlers/staging.handler');
-const noteHandlers = require('./api_handlers/note.handler'); // 重新引入 note handler
+const noteHandlers = require('./api_handlers/note.handler');
+const dividendHandlers = require('./api_handlers/dividend.handler'); // 重新引入
 
 try { admin.initializeApp(); } catch (e) { /* Already initialized */ }
 
@@ -84,12 +85,15 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                     return await stagingHandlers.getDividendsWithStaging(uid, res);
                 case 'get_groups_with_staging':
                     return await groupHandlers.getGroupsWithStaging(uid, res);
-                // ========================= 【核心修改 - 開始】 =========================
                 case 'get_notes_with_staging':
                     return await noteHandlers.getNotesWithStaging(uid, res);
-                // ========================= 【核心修改 - 結束】 =========================
                 
-                // --- Legacy Actions (to be deprecated or refactored) ---
+                // ========================= 【核心修改 - 開始】 =========================
+                // --- Legacy Read Actions (Still in use by UI) ---
+                case 'get_dividends_for_management':
+                    return await dividendHandlers.getDividendsForManagement(uid, res);
+                // ========================= 【核心修改 - 結束】 =========================
+
                 case 'update_benchmark': // This one doesn't use staging yet
                     return await portfolioHandlers.updateBenchmark(uid, data, res);
 
