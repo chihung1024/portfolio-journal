@@ -1,23 +1,26 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v6.0 - Refactored
-// == 職責：提供統一的後端 API 請求介面，作為純粹的資料層。
+// == API 通訊模組 (api.js) v5.1.0 - Fix Circular Dependency
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
+
+// --- UI Module Imports ---
+import { getDateRangeForPreset } from './ui/utils.js';
+import { updateAssetChart } from './ui/charts/assetChart.js';
+import { updateTwrChart } from './ui/charts/twrChart.js';
+import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
+import { renderHoldingsTable } from './ui/components/holdings.ui.js';
+import { renderTransactionsTable } from './ui/components/transactions.ui.js';
+import { renderSplitsTable } from './ui/components/splits.ui.js';
+import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 import { updateStagingBanner } from "./ui/components/stagingBanner.ui.js";
-import { renderTransactionsTable } from "./ui/components/transactions.ui.js";
-
-// ========================= 【核心修改 - 開始】 =========================
-// 導入 app.js 中的 UI 更新函式
-import { updateAppWithData } from './app.js';
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
- * 統一的後端 API 請求函式
+ * 統一的後端 API 請求函式 (維持不變)
  */
 export async function apiRequest(action, data) {
     const auth = getAuth();
@@ -57,9 +60,9 @@ export async function apiRequest(action, data) {
 }
 
 /**
- * 高階 API 執行器，專注於顯示全局讀取畫面，不再負責資料刷新
+ * 高階 API 執行器，用於處理【非交易相關】的立即執行操作
  */
-export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage }) {
+export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingTextElement = document.getElementById('loading-text');
     loadingTextElement.textContent = loadingText;
@@ -68,10 +71,10 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     try {
         const result = await apiRequest(action, payload);
         
-        // ========================= 【核心修改 - 開始】 =========================
-        // 移除 shouldRefreshData 和對 main.js 的動態導入
-        // 資料刷新邏輯已移至呼叫端 (caller) 處理
-        // ========================= 【核心修改 - 結束】 =========================
+        if (shouldRefreshData) {
+            const main = await import('../main.js');
+            await main.loadInitialDashboard();
+        }
         
         if (successMessage) {
             showNotification('success', successMessage);
@@ -87,8 +90,68 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     }
 }
 
+
 /**
- * 從後端載入包含暫存狀態的初始交易資料
+ * 統一的函式，用來接收【完整】計算結果並更新整個 App 的 UI
+ */
+function updateAppWithData(portfolioData) {
+    const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+        obj[item.symbol] = item; return obj;
+    }, {});
+
+    const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
+        map[note.symbol] = note; return map;
+    }, {});
+    
+    setState({
+        transactions: portfolioData.transactions || getState().transactions,
+        userSplits: portfolioData.splits || [],
+        stockNotes: stockNotesMap,
+        holdings: holdingsObject,
+        portfolioHistory: portfolioData.history || {},
+        twrHistory: portfolioData.twrHistory || {},
+        benchmarkHistory: portfolioData.benchmarkHistory || {},
+        netProfitHistory: portfolioData.netProfitHistory || {},
+        assetDateRange: { type: 'all', start: null, end: null },
+        twrDateRange: { type: 'all', start: null, end: null },
+        netProfitDateRange: { type: 'all', start: null, end: null }
+    });
+    
+    renderHoldingsTable(holdingsObject);
+    renderTransactionsTable();
+    renderSplitsTable();
+    updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+    
+    const { selectedGroupId, groups } = getState();
+    let seriesName = '投資組合'; 
+    if (selectedGroupId && selectedGroupId !== 'all') {
+        const selectedGroup = groups.find(g => g.id === selectedGroupId);
+        if (selectedGroup) seriesName = selectedGroup.name; 
+    }
+    updateAssetChart(seriesName); 
+    updateNetProfitChart(seriesName);
+    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+    updateTwrChart(benchmarkSymbol, seriesName);
+
+    document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+    ['asset', 'twr', 'net-profit'].forEach(chartType => {
+        const controls = document.getElementById(`${chartType}-chart-controls`);
+        if(controls) {
+            controls.querySelectorAll('.chart-range-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.range === 'all') btn.classList.add('active');
+            });
+            const history = getState()[`${chartType === 'asset' ? 'portfolio' : chartType}History`];
+            const dates = getDateRangeForPreset(history, { type: 'all' });
+            document.getElementById(`${chartType}-start-date`).value = dates.startDate;
+            document.getElementById(`${chartType}-end-date`).value = dates.endDate;
+        }
+    });
+}
+
+
+/**
+ * 從後端載入包含暫存狀態的初始資料
  */
 export async function loadInitialData() {
     const { currentUserId } = getState();
@@ -113,14 +176,19 @@ export async function loadInitialData() {
         console.error('Failed to load initial data:', error);
         showNotification('error', `讀取初始資料失敗: ${error.message}`);
     } finally {
-        // 注意：此處不再隱藏 loading-overlay，由主流程控制
+        document.getElementById('loading-overlay').style.display = 'none';
     }
 }
 
 /**
- * 請求後端按需計算特定群組的數據，並使用 app.js 中的函式更新 UI
+ * 【重構】請求後端按需計算特定群組的數據
  */
 export async function applyGroupView(groupId) {
+    // ========================= 【核心修改 - 開始】 =========================
+    // 移除 if (groupId === 'all') 的判斷，打破循環依賴
+    // 此函式現在只處理特定群組的計算請求
+    // ========================= 【核心修改 - 結束】 =========================
+
     const loadingText = document.getElementById('loading-text');
     document.getElementById('loading-overlay').style.display = 'flex';
     loadingText.textContent = '正在為您即時計算群組績效...';
@@ -128,59 +196,15 @@ export async function applyGroupView(groupId) {
     try {
         const result = await apiRequest('calculate_group_on_demand', { groupId });
         if (result.success) {
-            const { groups } = getState();
-            const selectedGroup = groups.find(g => g.id === groupId);
-            const seriesName = selectedGroup ? selectedGroup.name : '群組';
-
-            // ========================= 【核心修改 - 開始】 =========================
-            // 使用從 app.js 導入的函式來更新整個 App 的 UI
-            updateAppWithData({ ...result.data, transactions: getState().transactions }, seriesName);
-            // ========================= 【核心修改 - 結束】 =========================
-            
+            const currentTransactions = getState().transactions;
+            updateAppWithData({ ...result.data, transactions: currentTransactions });
             showNotification('success', '群組績效計算完成！');
         }
     } catch (error) {
         showNotification('error', `計算群組績效失敗: ${error.message}`);
-        // 失敗時，將下拉選單重設回「全部股票」，但不主動刷新，給予使用者控制權
         document.getElementById('group-selector').value = 'all';
-        setState({ selectedGroupId: 'all' });
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-        loadingText.textContent = '正在從雲端同步資料...';
-    }
-}
-
-/**
- * 更新用戶選擇的 benchmark
- */
-export async function updateBenchmark(symbol) {
-    const loadingText = document.getElementById('loading-text');
-    document.getElementById('loading-overlay').style.display = 'flex';
-    loadingText.textContent = `正在更新比較基準為 ${symbol}...`;
-
-    try {
-        const { selectedGroupId } = getState();
-        const result = await apiRequest('update_benchmark', { symbol, groupId: selectedGroupId });
-        if (result.success) {
-            setState({
-                benchmarkHistory: result.data.benchmarkHistory
-            });
-            const { summary } = getState();
-            const newSummary = { ...summary, benchmarkSymbol: symbol };
-            setState({ summary: newSummary });
-
-            const { twrHistory, selectedGroupId, groups } = getState();
-            let seriesName = '投資組合';
-            if (selectedGroupId && selectedGroupId !== 'all') {
-                const selectedGroup = groups.find(g => g.id === selectedGroupId);
-                if (selectedGroup) seriesName = selectedGroup.name;
-            }
-            const { updateTwrChart } = await import('./ui/charts/twrChart.js');
-            updateTwrChart(symbol, seriesName);
-            showNotification('success', `比較基準已更新為 ${symbol}`)
-        }
-    } catch (error) {
-        showNotification('error', `更新比較基準失敗: ${error.message}`);
+        const main = await import('../main.js');
+        main.loadInitialDashboard();
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
         loadingText.textContent = '正在從雲端同步資料...';
