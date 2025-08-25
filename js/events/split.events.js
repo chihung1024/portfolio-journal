@@ -1,32 +1,31 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v2.2 - Fix UI Refresh
+// == 拆股事件處理模組 (split.events.js) v3.1 - Centralized Refresh
 // =========================================================================================
 
-import { executeApiAction } from '../api.js';
+import { apiRequest } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 
 // ========================= 【核心修改 - 開始】 =========================
-// 導入全局刷新函式
-import { loadInitialDashboard } from '../app.js';
+// 導入全局的、統一的刷新函式
+import { refreshAllStagedViews } from '../app.js';
 // ========================= 【核心修改 - 結束】 =========================
-
-// --- Private Functions ---
 
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這個拆股事件嗎？此操作會觸發全局重算。 ', async () => {
-        // ========================= 【核心修改 - 開始】 =========================
+    showConfirm('這筆拆股紀錄將被標記為待刪除，在您點擊「全部提交」後才會真正刪除。確定嗎？', async () => {
+        const change = {
+            op: 'DELETE',
+            entity: 'split',
+            payload: { id: splitId }
+        };
         try {
-            await executeApiAction('delete_split', { splitId }, {
-                loadingText: '正在刪除拆股事件並重算績效...',
-                successMessage: '拆股事件已成功刪除！'
-            });
-            await loadInitialDashboard();
+            await apiRequest('stage_change', change);
+            showNotification('info', `刪除操作已加入暫存區。`);
+            await refreshAllStagedViews(); // <--- 使用全局刷新
         } catch (error) {
-            console.error("刪除拆股事件最終失敗:", error);
+            showNotification('error', `刪除失敗: ${error.message}`);
         }
-        // ========================= 【核心修改 - 結束】 =========================
     });
 }
 
@@ -46,20 +45,31 @@ async function handleSplitFormSubmit(e) {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('split-modal');
     
-    // ========================= 【核心修改 - 開始】 =========================
+    const change = {
+        op: 'CREATE',
+        entity: 'split',
+        payload: splitData
+    };
+
     try {
-        await executeApiAction('add_split', splitData, {
-            loadingText: '正在新增拆股事件並重算績效...',
-            successMessage: '拆股事件已成功新增！'
-        });
-        await loadInitialDashboard();
+        await apiRequest('stage_change', change);
+        showNotification('info', `拆股事件已加入暫存區。`);
+        await refreshAllStagedViews(); // <--- 使用全局刷新
     } catch (error) {
-        console.error("新增拆股事件最終失敗:", error);
+        showNotification('error', `操作失敗: ${error.message}`);
     }
-    // ========================= 【核心修改 - 結束】 =========================
 }
 
-// --- Public Function ---
+async function handleRevertChange(button) {
+    const changeId = button.dataset.changeId;
+    try {
+        await apiRequest('revert_staged_change', { changeId });
+        showNotification('success', '操作已成功復原。');
+        await refreshAllStagedViews(); // <--- 使用全局刷新
+    } catch (error) {
+        showNotification('error', `復原失敗: ${error.message}`);
+    }
+}
 
 export function initializeSplitEventListeners() {
     const splitsTab = document.getElementById('splits-tab');
@@ -72,9 +82,10 @@ export function initializeSplitEventListeners() {
                 return;
             }
             const deleteBtn = e.target.closest('.delete-split-btn');
-            if(deleteBtn) {
-                handleDeleteSplit(deleteBtn);
-            }
+            if(deleteBtn) return handleDeleteSplit(deleteBtn);
+
+            const revertBtn = e.target.closest('.revert-change-btn');
+            if(revertBtn) return handleRevertChange(revertBtn);
         });
     }
     

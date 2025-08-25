@@ -1,39 +1,49 @@
 // =========================================================================================
-// == [修正檔案] 暫存區橫幅 UI 模組 (stagingBanner.ui.js) v1.2 - 全局鎖定
+// == 暫存區橫幅 UI 模組 (stagingBanner.ui.js) v2.0 - 全面暫存
 // == 職責：處理全局提示橫幅的顯示、隱藏與互動邏輯。
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
 import { apiRequest } from '../../api.js';
 import { showNotification } from '../notifications.js';
-import { renderTransactionsTable } from './transactions.ui.js';
-import { renderHoldingsTable } from './holdings.ui.js';
-import { updateDashboard } from '../dashboard.js';
-import { updateAssetChart } from '../charts/assetChart.js';
-import { updateTwrChart } from '../charts/twrChart.js';
-import { updateNetProfitChart } from '../charts/netProfitChart.js';
+
+// ========================= 【核心修改 - 開始】 =========================
+// 導入全局刷新函式
+import { refreshAllStagedViews, loadInitialDashboard } from '../../app.js';
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
  * 根據當前的暫存區狀態，更新橫幅的顯示或隱藏
  */
 export function updateStagingBanner() {
-    const { hasStagedChanges, isCommitting, transactions } = getState();
+    const { hasStagedChanges, isCommitting, transactions, confirmedDividends, userSplits, groups } = getState();
     const banner = document.getElementById('staging-banner');
     const countElement = document.getElementById('staged-changes-count');
     const commitButton = document.getElementById('commit-all-btn');
     const discardButton = document.getElementById('discard-all-btn');
 
-    if (!banner || !countElement || !commitButton || !discardButton) {
-        return;
-    }
+    if (!banner || !countElement || !commitButton || !discardButton) return;
     
-    if (hasStagedChanges) {
-        const stagedCount = transactions.filter(t => t.status && t.status !== 'COMMITTED').length;
-        countElement.textContent = stagedCount;
+    // ========================= 【核心修改 - 開始】 =========================
+    // 全面計算所有類型的暫存項目
+    const getStagedCount = (items) => (items || []).filter(i => i.status && i.status !== 'COMMITTED').length;
+    
+    const totalStagedCount = getStagedCount(transactions) 
+                             + getStagedCount(confirmedDividends) 
+                             + getStagedCount(userSplits) 
+                             + getStagedCount(groups);
+    // ========================= 【核心修改 - 結束】 =========================
+
+    if (totalStagedCount > 0) {
+        setState({ hasStagedChanges: true });
+        countElement.textContent = totalStagedCount;
         
         banner.classList.remove('hidden');
-        lucide.createIcons({ nodes: [banner.querySelector('i')] });
+        // The lucide icon might already be created, so we check before creating.
+        if (!banner.querySelector('i[data-lucide]')) {
+            lucide.createIcons({ nodes: [banner.querySelector('i')] });
+        }
         
         if (isCommitting) {
             commitButton.disabled = true;
@@ -47,6 +57,7 @@ export function updateStagingBanner() {
             commitButton.classList.remove('opacity-50');
         }
     } else {
+        setState({ hasStagedChanges: false });
         banner.classList.add('hidden');
     }
 }
@@ -64,68 +75,31 @@ export function initializeStagingEventListeners() {
             setState({ isCommitting: true });
             updateStagingBanner(); 
 
-            // ========================= 【核心修改 - 開始】 =========================
             const loadingOverlay = document.getElementById('loading-overlay');
             const loadingText = document.getElementById('loading-text');
-            loadingText.textContent = '正在提交變更並重算績效...';
+            loadingText.textContent = '正在提交所有變更並重算績效...';
             loadingOverlay.style.display = 'flex';
-            // ========================= 【核心修改 - 結束】 =========================
 
             try {
                 const result = await apiRequest('commit_all_changes');
                 if (result.success) {
                     showNotification('success', result.message);
-                    
-                    const newHoldings = (result.data.holdings || []).reduce((obj, item) => {
-                        obj[item.symbol] = item; return obj;
-                    }, {});
-                    const newStockNotes = (result.data.stockNotes || []).reduce((map, note) => {
-                        map[note.symbol] = note; return map;
-                    }, {});
-
-                    setState({
-                        transactions: result.data.transactions || [],
-                        holdings: newHoldings,
-                        summary: result.data.summary,
-                        portfolioHistory: result.data.history || {},
-                        twrHistory: result.data.twrHistory || {},
-                        benchmarkHistory: result.data.benchmarkHistory || {},
-                        netProfitHistory: result.data.netProfitHistory || {},
-                        userSplits: result.data.splits || [],
-                        stockNotes: newStockNotes,
-                        hasStagedChanges: false,
-                    });
-
-                    // 重新渲染所有相關的UI元件
-                    const { summary } = getState();
-                    updateDashboard(newHoldings, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-                    renderHoldingsTable(newHoldings);
-                    renderTransactionsTable();
-                    
-                    const { selectedGroupId, groups } = getState();
-                    let seriesName = '投資組合'; 
-                    if (selectedGroupId && selectedGroupId !== 'all') {
-                        const selectedGroup = groups.find(g => g.id === selectedGroupId);
-                        if (selectedGroup) seriesName = selectedGroup.name; 
-                    }
-                    updateAssetChart(seriesName);
-                    updateNetProfitChart(seriesName);
-                    const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
-                    updateTwrChart(benchmarkSymbol, seriesName);
+                    // ========================= 【核心修改 - 開始】 =========================
+                    // 提交成功後，代表後端數據已是全新，需執行最完整的儀表板重載流程
+                    await loadInitialDashboard();
+                    // ========================= 【核心修改 - 結束】 =========================
                 } else {
                     throw new Error(result.message);
                 }
             } catch (error) {
                 showNotification('error', `提交失敗: ${error.message}`);
-                const { reloadTransactionsAndUpdateUI } = await import('../../events/transaction.events.js');
-                reloadTransactionsAndUpdateUI();
+                // 如果提交失敗，也重新同步一次所有暫存視圖，以確保狀態正確
+                await refreshAllStagedViews();
             } finally {
                 setState({ isCommitting: false });
                 updateStagingBanner();
-                // ========================= 【核心修改 - 開始】 =========================
                 loadingOverlay.style.display = 'none';
-                loadingText.textContent = '正在處理您的請求...'; // 恢復預設文字
-                // ========================= 【核心修改 - 結束】 =========================
+                loadingText.textContent = '正在處理您的請求...';
             }
         });
     }
@@ -133,17 +107,19 @@ export function initializeStagingEventListeners() {
     if (discardButton) {
         discardButton.addEventListener('click', async () => {
             const { showConfirm } = await import('../modals.js');
-            const { transactions } = getState();
-            const stagedCount = transactions.filter(t => t.status && t.status !== 'COMMITTED').length;
+            const { transactions, confirmedDividends, userSplits, groups } = getState();
+            const getStagedCount = (items) => (items || []).filter(i => i.status && i.status !== 'COMMITTED').length;
+            const totalStagedCount = getStagedCount(transactions) + getStagedCount(confirmedDividends) + getStagedCount(userSplits) + getStagedCount(groups);
 
-            showConfirm(`您確定要捨棄 ${stagedCount} 筆未提交的變更嗎？此操作無法復原。`, async () => {
+            showConfirm(`您確定要捨棄 ${totalStagedCount} 筆未提交的變更嗎？此操作無法復原。`, async () => {
                 try {
                     const result = await apiRequest('discard_all_changes');
                     if (result.success) {
-                        showNotification('info', '所有變更已捨棄。');
-                        
-                        const { reloadTransactionsAndUpdateUI } = await import('../../events/transaction.events.js');
-                        await reloadTransactionsAndUpdateUI();
+                        showNotification('info', '所有暫存變更已捨棄。');
+                        // ========================= 【核心修改 - 開始】 =========================
+                        // 捨棄後，只需執行暫存視圖刷新，即可看到所有項目恢復原狀
+                        await refreshAllStagedViews();
+                        // ========================= 【核心修改 - 結束】 =========================
                     } else {
                         throw new Error(result.message);
                     }
