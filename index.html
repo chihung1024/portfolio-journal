@@ -1,16 +1,22 @@
-
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>股票交易紀錄與資產分析系統</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <script defer src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js"></script>
+    <script defer src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/lucide@0.378.0/dist/umd/lucide.min.js"></script>
+
+    <script defer src="./js/main.js"></script>
+
     <style>
         body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
         .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
@@ -307,7 +313,6 @@
         </div>
 
     </div>
-
-    <script type="module" src="./js/main.js"></script>
-</body>
+    
+    </body>
 </html>
