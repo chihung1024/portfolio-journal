@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.0.0 - Staging Area Refactor
+// == API 通訊模組 (api.js) v5.1.0 - Fix Circular Dependency
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -16,10 +16,7 @@ import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
-// ========================= 【核心修改 - 開始】 =========================
-// 引入橫幅更新函式
 import { updateStagingBanner } from "./ui/components/stagingBanner.ui.js";
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -74,9 +71,9 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     try {
         const result = await apiRequest(action, payload);
         
-        // 【修改】對於非交易操作，成功後應重新載入初始數據以反映變更
         if (shouldRefreshData) {
-            await loadInitialData();
+            const main = await import('../main.js');
+            await main.loadInitialDashboard();
         }
         
         if (successMessage) {
@@ -96,7 +93,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 
 /**
  * 統一的函式，用來接收【完整】計算結果並更新整個 App 的 UI
- * (主要用於群組計算或提交成功後)
  */
 function updateAppWithData(portfolioData) {
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
@@ -108,7 +104,6 @@ function updateAppWithData(portfolioData) {
     }, {});
     
     setState({
-        // 【修改】直接使用傳入的 transactions，不再從 portfolioData 中取
         transactions: portfolioData.transactions || getState().transactions,
         userSplits: portfolioData.splits || [],
         stockNotes: stockNotesMap,
@@ -122,13 +117,11 @@ function updateAppWithData(portfolioData) {
         netProfitDateRange: { type: 'all', start: null, end: null }
     });
     
-    // 渲染所有相關元件
     renderHoldingsTable(holdingsObject);
     renderTransactionsTable();
     renderSplitsTable();
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
-    // 更新圖表
     const { selectedGroupId, groups } = getState();
     let seriesName = '投資組合'; 
     if (selectedGroupId && selectedGroupId !== 'all') {
@@ -140,7 +133,6 @@ function updateAppWithData(portfolioData) {
     const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol, seriesName);
 
-    // 更新其他 UI 元素
     document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
     ['asset', 'twr', 'net-profit'].forEach(chartType => {
         const controls = document.getElementById(`${chartType}-chart-controls`);
@@ -159,7 +151,7 @@ function updateAppWithData(portfolioData) {
 
 
 /**
- * 【重構】從後端載入包含暫存狀態的初始資料
+ * 從後端載入包含暫存狀態的初始資料
  */
 export async function loadInitialData() {
     const { currentUserId } = getState();
@@ -167,7 +159,6 @@ export async function loadInitialData() {
 
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
-        // 【核心修改】呼叫新的後端 API
         const result = await apiRequest('get_transactions_with_staging', {});
         
         if (result.success) {
@@ -176,7 +167,6 @@ export async function loadInitialData() {
                 hasStagedChanges: result.data.hasStagedChanges
             });
 
-            // 初始載入時，只渲染交易列表和更新橫幅
             renderTransactionsTable();
             updateStagingBanner();
         } else {
@@ -191,15 +181,13 @@ export async function loadInitialData() {
 }
 
 /**
- * 請求後端按需計算特定群組的數據，並更新畫面 (邏輯微調)
+ * 【重構】請求後端按需計算特定群組的數據
  */
 export async function applyGroupView(groupId) {
-    if (!groupId || groupId === 'all') {
-        // 【修改】切回 'all' 時，應呼叫新的初始載入函式，並觸發後續的背景載入
-        const main = await import('../main.js');
-        main.loadInitialDashboard(); 
-        return;
-    }
+    // ========================= 【核心修改 - 開始】 =========================
+    // 移除 if (groupId === 'all') 的判斷，打破循環依賴
+    // 此函式現在只處理特定群組的計算請求
+    // ========================= 【核心修改 - 結束】 =========================
 
     const loadingText = document.getElementById('loading-text');
     document.getElementById('loading-overlay').style.display = 'flex';
@@ -208,7 +196,6 @@ export async function applyGroupView(groupId) {
     try {
         const result = await apiRequest('calculate_group_on_demand', { groupId });
         if (result.success) {
-            // 【修改】群組計算不影響全局交易列表，因此在更新 UI 時要傳入當前的交易狀態
             const currentTransactions = getState().transactions;
             updateAppWithData({ ...result.data, transactions: currentTransactions });
             showNotification('success', '群組績效計算完成！');
@@ -216,7 +203,6 @@ export async function applyGroupView(groupId) {
     } catch (error) {
         showNotification('error', `計算群組績效失敗: ${error.message}`);
         document.getElementById('group-selector').value = 'all';
-        // 【修改】失敗時同樣呼叫新的初始載入函式
         const main = await import('../main.js');
         main.loadInitialDashboard();
     } finally {
