@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v7.1 - Correct Listener Scope
+// == 主程式進入點 (main.js) v7.3 - Final Syntax Fix
 // == 職責：初始化身份驗證、綁定頂層事件監聽器、啟動應用程式。
 // =========================================================================================
 
@@ -32,23 +32,23 @@ function setupCommonEventListeners() {
         hideConfirm(); 
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
     // 為所有彈出視窗的取消按鈕和背景遮罩，統一綁定關閉事件
     document.querySelectorAll('[data-modal-id]').forEach(modal => {
         const modalId = modal.dataset.modalId;
         const cancelButton = modal.querySelector(`.cancel-btn[data-modal-cancel="${modalId}"]`);
         if (cancelButton) {
             cancelButton.onclick = () => {
-                const { closeModal } = require('./ui/modals.js');
-                closeModal(modalId);
+                import('./ui/modals.js').then(({ closeModal }) => closeModal(modalId));
             };
         }
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
-                const { closeModal } = require('./ui/modals.js');
-                closeModal(modalId);
+                import('./ui/modals.js').then(({ closeModal }) => closeModal(modalId));
             }
         });
     });
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
@@ -94,11 +94,10 @@ function setupMainAppEventListeners() {
         }
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
     // 通用事件（如圖表、持股列表互動）只應在登入後初始化
-    const { initializeGeneralEventListeners } = require('./events/general.events.js');
-    initializeGeneralEventListeners();
-    // ========================= 【核心修改 - 結束】 =========================
+    import('./events/general.events.js').then(({ initializeGeneralEventListeners }) => {
+        initializeGeneralEventListeners();
+    }).catch(err => console.error("Failed to load general event listeners:", err));
 }
 
 /**
