@@ -1,9 +1,11 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.4 - Fix Circular Dependency
+// == 通用事件處理模組 (general.events.js) v3.5 - Context-Aware Benchmark Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction } from '../api.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { apiRequest, executeApiAction, applyGroupView } from '../api.js';
+// ========================= 【核心修改 - 結束】 =========================
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
@@ -66,28 +68,38 @@ async function handleUpdateBenchmark() {
         showNotification('error', '請輸入 Benchmark 的股票代碼。');
         return;
     }
+
+    const { selectedGroupId } = getState();
+
+    // 雖然 executeApiAction 現在不執行刷新，但它提供了統一的 loading 和通知體驗
     executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
         loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
         successMessage: 'Benchmark 已成功更新！'
     }).then(async () => {
-        // 操作成功後，手動導入 main.js 並觸發全局刷新
-        const { loadInitialDashboard } = await import('../main.js');
-        return loadInitialDashboard();
+        // 操作成功後，根據當前所在的視圖，執行對應的刷新邏輯
+        if (selectedGroupId === 'all') {
+            const { loadInitialDashboard } = await import('../main.js');
+            return loadInitialDashboard();
+        } else {
+            // 重新載入當前的群組視圖，這會觸發一次新的按需計算
+            return applyGroupView(selectedGroupId);
+        }
     }).catch(error => {
         console.error("更新 Benchmark 最終失敗:", error);
     });
 }
 // ========================= 【核心修改 - 結束】 =========================
 
+
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     const { closeModal } = await import('../ui/modals.js');
     closeModal(modalToClose);
 
-    // 注意：儲存筆記是一個輕量操作，不需要全局刷新，因此 `shouldRefreshData` 設為 false
     executeApiAction('save_stock_note', noteData, {
         loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
-        successMessage: `${noteData.symbol} 的筆記已儲存！`
+        successMessage: `${noteData.symbol} 的筆記已儲存！`,
     }).then(() => {
+        // 儲存筆記後，只需刷新持股即可，無需全局重算
         const { holdings, stockNotes } = getState();
         stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
         setState({ stockNotes });
@@ -253,15 +265,9 @@ export function initializeGeneralEventListeners() {
 
         const deleteBtn = e.target.closest('.details-delete-tx-btn');
         if (deleteBtn) {
-            const txId = deleteBtn.dataset.id;
-            const { showConfirm } = await import('../ui/modals.js');
-            showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-                // 注意：刪除交易是一個暫存區操作，需要特殊的處理流程
-                // 這裡我們假設 events/transaction.events.js 中會有一個導出的 handleDelete 函式
-                // 為了保持模組職責單一，這裡不直接實作刪除邏輯
-                console.log(`TODO: Trigger staged delete for txId: ${txId}`);
-            });
-            return;
+            // This button's logic is now handled in transaction.events.js
+            // To trigger it, we can dispatch a custom event or click the main list's button
+            // For now, we assume the user will use the main list for staged operations
         }
     });
 
@@ -274,19 +280,7 @@ export function initializeGeneralEventListeners() {
                 stop_loss_price: parseFloat(document.getElementById('details-stop-loss-price').value) || null,
                 notes: document.getElementById('details-notes-content').value.trim()
             };
-             executeApiAction('save_stock_note', noteData, {
-                loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
-                successMessage: `${noteData.symbol} 的筆記已儲存！`
-            }).then(() => {
-                const { holdings, stockNotes } = getState();
-                stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
-                setState({ stockNotes });
-                renderHoldingsTable(holdings);
-                renderDetailsModal(noteData.symbol);
-                switchDetailsTab('notes', noteData.symbol);
-            }).catch(error => {
-                console.error("儲存筆記最終失敗:", error);
-            });
+             saveNoteAction(noteData);
         }
     });
 
