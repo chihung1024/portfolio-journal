@@ -1,9 +1,9 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.1.0 - Fix Circular Dependency
+// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢 (優化後)
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-import { apiRequest, applyGroupView, loadInitialData } from './api.js';
+import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 
 // --- UI Module Imports ---
@@ -15,12 +15,11 @@ import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
+// import { hideConfirm, toggleOptionalFields } from './ui/modals.js'; // 移除靜態導入
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
 import { getDateRangeForPreset } from './ui/utils.js';
-import { initializeStagingEventListeners, updateStagingBanner } from './ui/components/stagingBanner.ui.js';
-
 
 // --- Event Module Imports ---
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
@@ -59,12 +58,14 @@ export function startLiveRefresh() {
     stopLiveRefresh(); 
 
     const poll = async () => {
+        // 【核心修改】增加條件判斷，若正在檢視自訂群組，則不刷新
         const { selectedGroupId } = getState();
         if (selectedGroupId !== 'all') {
             console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
             return;
         }
         
+        // 動態導入 modals 模組來檢查是否有 modal 開啟
         const { openModal } = await import('./ui/modals.js');
         const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
                             document.querySelector('#split-modal:not(.hidden)') ||
@@ -107,13 +108,11 @@ export function stopLiveRefresh() {
 
 
 /**
- * 第一階段：載入儀表板摘要與包含暫存狀態的交易列表
+ * 【新函式】第一階段：僅載入儀表板摘要
  */
 export async function loadInitialDashboard() {
     try {
-        await loadInitialData(); 
-        
-        const result = await apiRequest('get_dashboard_summary', {});
+        const result = await apiRequest('get_dashboard_summary', {}); // <-- 呼叫新的超輕量 API
         if (!result.success) throw new Error(result.message);
 
         const { summary, stockNotes } = result.data;
@@ -123,33 +122,37 @@ export async function loadInitialDashboard() {
         }, {});
 
         setState({
+            // 先用空的 holdings 初始化，避免錯誤
             holdings: {},
             stockNotes: stockNotesMap,
             summary: summary
         });
 
+        // 核心：立即更新儀表板，並顯示一個空的持股表格
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable({});
+        renderHoldingsTable({}); // 傳入空物件，會顯示 "沒有持股紀錄..." 的訊息
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
     } catch (error) {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
+        // 完成後，無論成功或失敗，都隱藏主讀取畫面
         document.getElementById('loading-overlay').style.display = 'none';
+        // 立即在背景啟動後續數據的載入
         setTimeout(() => {
-            loadHoldingsInBackground();
-            loadChartDataInBackground();
-        }, 100);
+            loadHoldingsInBackground(); // 載入持股
+            loadChartDataInBackground(); // 載入圖表
+        }, 100); // 短暫延遲確保 UI 渲染完成
     }
 }
 
 /**
- * 第二階段：在背景載入持股列表
+ * 【新函式】第二階段：在背景載入持股列表
  */
 async function loadHoldingsInBackground() {
     try {
         console.log("正在背景載入持股數據...");
-        const result = await apiRequest('get_holdings', {});
+        const result = await apiRequest('get_holdings', {}); // <-- 呼叫新的持股專用 API
         if (result.success) {
             const { holdings } = result.data;
             const holdingsObject = (holdings || []).reduce((obj, item) => {
@@ -158,6 +161,7 @@ async function loadHoldingsInBackground() {
             
             setState({ holdings: holdingsObject });
             
+            // 數據回來後，重新渲染儀表板和持股表格
             const { summary } = getState();
             updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
             renderHoldingsTable(holdingsObject);
@@ -211,20 +215,31 @@ async function loadChartDataInBackground() {
 }
 
 async function loadSecondaryDataInBackground() {
-    console.log("正在背景預載次要數據 (配息等)...");
+    console.log("正在背景預載次要數據 (交易紀錄、配息等)...");
     
     const results = await Promise.allSettled([
+        apiRequest('get_transactions_and_splits', {}),
         apiRequest('get_dividends_for_management', {})
     ]);
 
     if (results[0].status === 'fulfilled' && results[0].value.success) {
         setState({
-            pendingDividends: results[0].value.data.pendingDividends,
-            confirmedDividends: results[0].value.data.confirmedDividends,
+            transactions: results[0].value.data.transactions || [],
+            userSplits: results[0].value.data.splits || [],
+        });
+        console.log("交易與拆股數據預載完成。");
+    } else {
+        console.error("預載交易紀錄失敗:", results[0].reason || results[0].value.message);
+    }
+    
+    if (results[1].status === 'fulfilled' && results[1].value.success) {
+        setState({
+            pendingDividends: results[1].value.data.pendingDividends,
+            confirmedDividends: results[1].value.data.confirmedDividends,
         });
         console.log("配息數據預載完成。");
     } else {
-        console.error("預載配息資料失敗:", results[0].reason || results[0].value.message);
+        console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
     }
 }
 
@@ -235,7 +250,23 @@ async function loadTransactionsData() {
         renderTransactionsTable();
         return;
     }
-    await loadInitialData();
+    
+    document.getElementById('loading-overlay').style.display = 'flex';
+    try {
+        const result = await apiRequest('get_transactions_and_splits', {});
+        if (result.success) {
+            setState({
+                transactions: result.data.transactions || [],
+                userSplits: result.data.splits || [],
+            });
+            renderTransactionsTable();
+            renderSplitsTable();
+        }
+    } catch (error) {
+        showNotification('error', `讀取交易紀錄失敗: ${error.message}`);
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
 }
 
 export async function loadAndShowDividends() {
@@ -290,12 +321,20 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            const { pendingDividends, confirmedDividends, userSplits } = getState();
+            const { transactions, pendingDividends, confirmedDividends, userSplits } = getState();
 
             if (tabName === 'dividends') {
-                await loadAndShowDividends();
+                if (pendingDividends && confirmedDividends) {
+                    renderDividendsManagementTab(pendingDividends, confirmedDividends);
+                } else {
+                    await loadAndShowDividends();
+                }
             } else if (tabName === 'transactions') {
-                await loadTransactionsData();
+                if (transactions.length > 0) {
+                    renderTransactionsTable();
+                } else {
+                    await loadTransactionsData();
+                }
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
@@ -313,20 +352,20 @@ function setupMainAppEventListeners() {
 
     const groupSelector = document.getElementById('group-selector');
 
-    // ========================= 【核心修改 - 開始】 =========================
+    // 【核心修改】簡化事件監聽器邏輯
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
-
         if (selectedGroupId === 'all') {
-            // 切換回「全部股票」時，呼叫初始載入函式
-            loadInitialDashboard();
+            // 切換回「全部股票」視圖
+            document.getElementById('loading-overlay').style.display = 'flex';
+            loadInitialDashboard(); 
         } else {
-            // 切換到特定群組時，呼叫群組計算函式
+            // 直接計算並顯示選定的群組視圖
             applyGroupView(selectedGroupId);
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
+
 }
 
 export function initializeAppUI() {
@@ -347,8 +386,6 @@ export function initializeAppUI() {
     initializeDividendEventListeners();
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
-    initializeStagingEventListeners();
-
     lucide.createIcons();
 
     setState({ isAppInitialized: true });
