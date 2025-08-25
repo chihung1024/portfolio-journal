@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.5 - Staging-Ready
+// == 通用事件處理模組 (general.events.js) v3.7 - Final Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -68,7 +68,6 @@ async function handleUpdateBenchmark() {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     const { closeModal } = await import('../ui/modals.js');
     closeModal(modalToClose);
@@ -87,7 +86,6 @@ async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
         showNotification('error', `儲存筆記失敗: ${error.message}`);
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 async function handleNotesFormSubmit(e) {
     e.preventDefault();
@@ -101,24 +99,44 @@ async function handleNotesFormSubmit(e) {
 }
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
-    // ... Omitted for brevity
+    const stateKey = chartType === 'twr' ? 'twrDateRange' : chartType === 'asset' ? 'assetDateRange' : 'netProfitDateRange';
+    const historyKey = chartType === 'twr' ? 'twrHistory' : chartType === 'asset' ? 'portfolioHistory' : 'netProfitHistory';
+    const controlsId = chartType === 'twr' ? 'twr-chart-controls' : chartType === 'asset' ? 'asset-chart-controls' : 'net-profit-chart-controls';
+
+    const newRange = { type: rangeType, start: startDate, end: endDate };
+    setState({ [stateKey]: newRange });
+
+    document.querySelectorAll(`#${controlsId} .chart-range-btn`).forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.range === rangeType) btn.classList.add('active');
+    });
+
+    const fullHistory = getState()[historyKey];
+    const { startDate: finalStartDate, endDate: finalEndDate } = getDateRangeForPreset(fullHistory, newRange);
+
+    if (rangeType !== 'custom') {
+        const startDateInput = document.getElementById(`${chartType}-start-date`);
+        const endDateInput = document.getElementById(`${chartType}-end-date`);
+        if (startDateInput && endDateInput) {
+            startDateInput.value = finalStartDate;
+            endDateInput.value = finalEndDate;
+        }
+    }
+
+    if (chartType === 'twr') {
+        const benchmarkSymbol = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim() || 'SPY';
+        updateTwrChart(benchmarkSymbol);
+    } else if (chartType === 'asset') {
+        updateAssetChart();
+    } else if (chartType === 'net-profit') {
+        updateNetProfitChart();
+    }
 }
 
 export function initializeGeneralEventListeners() {
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     document.getElementById('notes-form').addEventListener('submit', handleNotesFormSubmit);
-    document.getElementById('cancel-notes-btn').addEventListener('click', async () => {
-        const { closeModal } = await import('../ui/modals.js');
-        closeModal('notes-modal');
-    });
-
-    document.getElementById('notes-form').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            document.getElementById('save-notes-btn').click();
-        }
-    });
-
+    
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
         const notesBtn = e.target.closest('.open-notes-btn');
@@ -129,7 +147,43 @@ export function initializeGeneralEventListeners() {
             })();
             return;
         }
-        // ... other event handlers omitted for brevity
+        const viewSwitchBtn = e.target.closest('#holdings-view-switcher button');
+        if (viewSwitchBtn) {
+            const newView = viewSwitchBtn.dataset.view;
+            setState({ mobileViewMode: newView, activeMobileHolding: null });
+            renderHoldingsTable(holdings);
+            return;
+        }
+        const listItem = e.target.closest('.list-view-item');
+        if (listItem) {
+            const symbol = listItem.dataset.symbol;
+            const newActiveHolding = activeMobileHolding === symbol ? null : symbol;
+            setState({ activeMobileHolding: newActiveHolding });
+            renderHoldingsTable(holdings);
+            return;
+        }
+        const mobileDetailsBtn = e.target.closest('.open-details-btn');
+        if (mobileDetailsBtn) {
+             handleShowDetails(mobileDetailsBtn.dataset.symbol);
+             return;
+        }
+        const sortHeader = e.target.closest('[data-sort-key]');
+        if (sortHeader) {
+            const newSortKey = sortHeader.dataset.sortKey;
+            const { holdingsSort } = getState();
+            let newOrder = 'desc';
+            if (holdingsSort.key === newSortKey && holdingsSort.order === 'desc') {
+                newOrder = 'asc';
+            }
+            setState({ holdingsSort: { key: newSortKey, order: newOrder } });
+            renderHoldingsTable(holdings);
+            return;
+        }
+        const holdingRow = e.target.closest('.holding-row');
+        if (holdingRow) {
+            handleShowDetails(holdingRow.dataset.symbol);
+            return;
+        }
     });
     
     document.getElementById('details-modal').addEventListener('click', async (e) => {
@@ -138,7 +192,25 @@ export function initializeGeneralEventListeners() {
             closeModal('details-modal');
             return;
         }
-        // ... other event handlers omitted for brevity
+        const tabItem = e.target.closest('.details-tab-item');
+        if (tabItem) {
+            e.preventDefault();
+            const symbol = document.querySelector('#details-modal-content h2').textContent;
+            switchDetailsTab(tabItem.dataset.tab, symbol);
+            return;
+        }
+        const editBtn = e.target.closest('.details-edit-tx-btn');
+        if (editBtn) {
+            const txId = editBtn.dataset.id;
+            const { transactions } = getState();
+            const txToEdit = transactions.find(t => t.id === txId);
+            if (txToEdit) {
+                const { openModal } = await import('../ui/modals.js');
+                closeModal('details-modal');
+                openModal('transaction-modal', true, txToEdit);
+            }
+            return;
+        }
         const deleteBtn = e.target.closest('.details-delete-tx-btn');
         if (deleteBtn) {
             const txId = deleteBtn.dataset.id;
@@ -179,6 +251,29 @@ export function initializeGeneralEventListeners() {
         }
     });
 
-    // Chart controls listeners
-    // ... Omitted for brevity
+    // ========================= 【核心修改 - 開始】 =========================
+    // 恢復圖表控制項的事件監聽器
+    const chartTypes = ['twr', 'asset', 'net-profit'];
+    chartTypes.forEach(chartType => {
+        const controls = document.getElementById(`${chartType}-chart-controls`);
+        if (controls) {
+            controls.addEventListener('click', (e) => {
+                const btn = e.target.closest('.chart-range-btn');
+                if (btn) {
+                    handleChartRangeChange(chartType, btn.dataset.range);
+                }
+            });
+            controls.addEventListener('change', (e) => {
+                if (e.target.matches('.chart-date-input')) {
+                    const startInput = controls.querySelector(`#${chartType}-start-date`);
+                    const endInput = controls.querySelector(`#${chartType}-end-date`);
+                    if (startInput && endInput && startInput.value && endInput.value) {
+                        controls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                        handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
+                    }
+                }
+            });
+        }
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 }

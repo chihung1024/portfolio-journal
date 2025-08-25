@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 配息管理 UI 模組 (dividends.ui.js) v2.0 - Staging-Ready
+// == 配息管理 UI 模組 (dividends.ui.js) v2.1 - Defensive Render
 // == 職責：渲染配息管理分頁的整體 UI。
 // =========================================================================================
 
@@ -8,15 +8,19 @@ import { formatNumber, isTwStock } from '../utils.js';
 
 function renderPendingDividends(pendingDividends) {
     const container = document.getElementById('pending-dividends-container');
-    if (!container) return;
+    // ========================= 【核心修改 - 開始】 =========================
+    if (!container) return; // 防禦性檢查，如果容器不存在則不執行
+    // ========================= 【核心修改 - 結束】 =========================
 
     if (pendingDividends.length === 0) {
         container.innerHTML = '<p class="text-center text-gray-500 py-4">沒有待確認的配息。</p>';
-        document.getElementById('bulk-confirm-dividends-btn').classList.add('hidden');
+        const bulkBtn = document.getElementById('bulk-confirm-dividends-btn');
+        if(bulkBtn) bulkBtn.classList.add('hidden');
         return;
     }
 
-    document.getElementById('bulk-confirm-dividends-btn').classList.remove('hidden');
+    const bulkBtn = document.getElementById('bulk-confirm-dividends-btn');
+    if(bulkBtn) bulkBtn.classList.remove('hidden');
 
     const tableHeader = `
         <thead class="bg-gray-50">
@@ -46,6 +50,10 @@ function renderPendingDividends(pendingDividends) {
 
 function renderConfirmedDividends(confirmedDividends) {
     const container = document.getElementById('confirmed-dividends-container');
+    // ========================= 【核心修改 - 開始】 =========================
+    if (!container) return; // 防禦性檢查，如果容器不存在則不執行
+    // ========================= 【核心修改 - 結束】 =========================
+
     const { dividendFilter } = getState();
     const filteredDividends = dividendFilter
         ? confirmedDividends.filter(d => d.symbol.toUpperCase().includes(dividendFilter.toUpperCase()))
@@ -67,7 +75,6 @@ function renderConfirmedDividends(confirmedDividends) {
             </tr>
         </thead>`;
 
-    // ========================= 【核心修改 - 開始】 =========================
     const tableBody = filteredDividends.map(div => {
         let rowClass = 'border-b border-gray-200';
         let statusBadge = '';
@@ -100,7 +107,6 @@ function renderConfirmedDividends(confirmedDividends) {
             </tr>
         `;
     }).join('');
-    // ========================= 【核心修改 - 結束】 =========================
 
     container.innerHTML = `<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200">${tableHeader}<tbody class="bg-white divide-y divide-gray-200">${tableBody}</tbody></table></div>`;
 }

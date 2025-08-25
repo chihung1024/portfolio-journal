@@ -1,50 +1,26 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v6.0 - Refactored
+// == 主程式進入點 (main.js) v7.1 - Correct Listener Scope
 // == 職責：初始化身份驗證、綁定頂層事件監聽器、啟動應用程式。
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
-
-// ========================= 【核心修改 - 開始】 =========================
-// 匯入重構後的 app.js 模組，取代原有的本地函式
-import { 
-    initializeAppUI, 
-    loadInitialDashboard, 
-    loadAndShowDividends 
-} from './app.js';
-// ========================= 【核心修改 - 結束】 =========================
-
-import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
-import { renderSplitsTable } from './ui/components/splits.ui.js';
+import { initializeAppUI, loadInitialDashboard, loadAndShowDividends } from './app.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
-import { switchTab } from './ui/tabs.js';
+import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
-import { loadInitialData } from './api.js';
-
-
-/**
- * 載入交易分頁所需的數據
- */
-async function loadTransactionsData() {
-    const { transactions } = getState();
-    if (transactions && transactions.length > 0) {
-        renderTransactionsTable();
-        return;
-    }
-    // 如果 state 中沒有交易數據，則從後端重新載入
-    await loadInitialData();
-}
+import { switchTab } from './ui/tabs.js';
 
 /**
- * 綁定只需設定一次的通用事件監聽器
+ * 綁定通用事件監聽器（無論登入與否都應生效）
  */
 function setupCommonEventListeners() {
+    // 登入/註冊按鈕
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
-    
-    // 確認對話框的按鈕事件
+
+    // 全局確認對話框按鈕
     document.getElementById('confirm-cancel-btn').addEventListener('click', async () => {
         const { hideConfirm } = await import('./ui/modals.js');
         hideConfirm();
@@ -55,6 +31,24 @@ function setupCommonEventListeners() {
         const { hideConfirm } = await import('./ui/modals.js');
         hideConfirm(); 
     });
+
+    // 為所有彈出視窗的取消按鈕和背景遮罩，統一綁定關閉事件
+    document.querySelectorAll('[data-modal-id]').forEach(modal => {
+        const modalId = modal.dataset.modalId;
+        const cancelButton = modal.querySelector(`.cancel-btn[data-modal-cancel="${modalId}"]`);
+        if (cancelButton) {
+            cancelButton.onclick = () => {
+                const { closeModal } = require('./ui/modals.js');
+                closeModal(modalId);
+            };
+        }
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                const { closeModal } = require('./ui/modals.js');
+                closeModal(modalId);
+            }
+        });
+    });
 }
 
 /**
@@ -63,73 +57,67 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
-    // 頁籤切換邏輯
+    // 主頁籤切換邏輯
     document.getElementById('tabs').addEventListener('click', async (e) => {
         const tabItem = e.target.closest('.tab-item');
-        if (tabItem) {
+        if (tabItem && !tabItem.classList.contains('active')) {
             e.preventDefault();
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            const { userSplits } = getState();
-
-            if (tabName === 'dividends') {
-                await loadAndShowDividends();
-            } else if (tabName === 'transactions') {
-                await loadTransactionsData();
-            } else if (tabName === 'groups') {
-                renderGroupsTab();
-            } else if (tabName === 'splits') {
-                if(userSplits) {
+            switch (tabName) {
+                case 'dividends':
+                    await loadAndShowDividends();
+                    break;
+                case 'transactions':
+                    renderTransactionsTable();
+                    break;
+                case 'groups':
+                    renderGroupsTab();
+                    break;
+                case 'splits':
                     renderSplitsTable();
-                }
+                    break;
             }
         }
     });
     
-    // 交易視窗中的貨幣切換邏輯
-    document.getElementById('currency').addEventListener('change', async () => {
-        const { toggleOptionalFields } = await import('./ui/modals.js');
-        toggleOptionalFields();
-    });
-
     // 全局群組選擇器邏輯
-    const groupSelector = document.getElementById('group-selector');
-    groupSelector.addEventListener('change', (e) => {
+    document.getElementById('group-selector').addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
 
         if (selectedGroupId === 'all') {
-            // 切換回「全部股票」時，呼叫 app.js 中的全局視圖載入函式
             loadInitialDashboard();
         } else {
-            // 切換到特定群組時，呼叫 api.js 中的群組計算函式
             applyGroupView(selectedGroupId);
         }
     });
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 通用事件（如圖表、持股列表互動）只應在登入後初始化
+    const { initializeGeneralEventListeners } = require('./events/general.events.js');
+    initializeGeneralEventListeners();
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
  * 應用程式啟動函式
- * @param {object} user - Firebase Auth 使用者物件
  */
 export function startApp(user) {
-    // 1. 更新全局狀態
     setState({ currentUserId: user.uid });
 
-    // 2. 更新主 UI 介面
     document.getElementById('auth-container').style.display = 'none';
     document.querySelector('main').classList.remove('hidden');
-    document.getElementById('logout-btn').style.display = 'block';
     document.getElementById('user-info').classList.remove('hidden');
     document.getElementById('user-id').textContent = user.email;
-    document.getElementById('auth-status').textContent = '已連線';
     
-    // 3. 初始化 UI 元件 (如圖表) 和非通用事件監聽器
-    initializeAppUI();
-    setupMainAppEventListeners();
+    if (!getState().isAppInitialized) {
+        initializeAppUI();
+        setupMainAppEventListeners();
+        setState({ isAppInitialized: true });
+    }
     
-    // 4. 載入儀表板數據
     loadInitialDashboard();
 }
 
