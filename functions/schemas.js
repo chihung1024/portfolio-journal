@@ -30,18 +30,8 @@ const userDividendSchema = z.object({
     notes: z.string().optional().nullable(),
 });
 
-// ========================= 【核心修改 - 開始】 =========================
-const stagedChangeSchema = z.object({
-    op: z.enum(['CREATE', 'UPDATE', 'DELETE']),
-    entity: z.enum(['transaction', 'split', 'dividend']), // 初始階段先專注於交易
-    payload: z.any() // 具體驗證將在 handler 中根據 op 和 entity 進行
-});
-// ========================= 【核心修改 - 結束】 =========================
-
-
 module.exports = {
     transactionSchema,
     splitSchema,
     userDividendSchema,
-    stagedChangeSchema, // 導出新的 schema
 };

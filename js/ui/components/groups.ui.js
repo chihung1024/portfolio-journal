@@ -1,82 +1,44 @@
 // =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v2.4 - 修正撤銷按鈕 class)
+// == 檔案：js/ui/components/groups.ui.js (v2.2 - 修正編輯渲染邏輯)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState } from '../../state.js';
 
 /**
- * 渲染群組管理分頁的內容，現在能夠識別並顯示暫存狀態
+ * 渲染群組管理分頁的內容
  */
 export function renderGroupsTab() {
     const { groups } = getState();
     const container = document.getElementById('groups-content');
     if (!container) return;
 
-    if (!groups || groups.length === 0) {
-        container.innerHTML = `<div class="text-center py-10 text-gray-500">
-            <i data-lucide="folder-search" class="w-12 h-12 mx-auto text-gray-400"></i>
-            <p class="mt-4">尚未建立任何群組。</p>
-            <button id="add-new-group-btn-empty" class="btn btn-primary mt-4">建立第一個群組</button>
-        </div>`;
-        lucide.createIcons();
+    if (groups.length === 0) {
+        container.innerHTML = `<p class="text-center py-10 text-gray-500">尚未建立任何群組。</p>`;
         return;
     }
 
-    container.innerHTML = groups.map(group => {
-        const { status, changeId, name, description, transactionIds } = group;
-        const isStaged = status && status !== 'COMMITTED';
-
-        let statusBadge = '';
-        let bgClass = 'bg-white';
-        let nameClass = 'text-gray-800';
-        let buttons = `
-            <button data-group-id="${group.id}" class="edit-group-btn btn p-2 text-gray-500 hover:text-indigo-600" title="編輯群組">
-                <i data-lucide="edit" class="w-5 h-5"></i>
-            </button>
-            <button data-group-id="${group.id}" class="delete-group-btn btn p-2 text-gray-500 hover:text-red-600" title="刪除群組">
-                <i data-lucide="trash-2" class="w-5 h-5"></i>
-            </button>
-        `;
-
-        if (isStaged) {
-            // ========================= 【核心修正 - 開始】 =========================
-            // 修正 class 名稱以匹配 group.events.js 中的事件監聽器
-            buttons = `<button data-change-id="${changeId}" class="revert-change-btn btn btn-sm btn-secondary-outline">撤銷變更</button>`;
-            // ========================= 【核心修正 - 結束】 =========================
-        }
-
-        switch (status) {
-            case 'STAGED_CREATE':
-                bgClass = 'bg-green-50 border-green-200';
-                statusBadge = '<span class="bg-green-100 text-green-800 text-xs font-medium me-2 px-2.5 py-0.5 rounded-full">新增待提交</span>';
-                break;
-            case 'STAGED_UPDATE':
-                bgClass = 'bg-yellow-50 border-yellow-200';
-                statusBadge = '<span class="bg-yellow-100 text-yellow-800 text-xs font-medium me-2 px-2.5 py-0.5 rounded-full">修改待提交</span>';
-                break;
-            case 'STAGED_DELETE':
-                bgClass = 'bg-red-50 border-red-200 opacity-70';
-                nameClass += ' line-through';
-                statusBadge = '<span class="bg-red-100 text-red-800 text-xs font-medium me-2 px-2.5 py-0.5 rounded-full">刪除待提交</span>';
-                break;
-        }
-
-        return `
-            <div class="${bgClass} border rounded-lg p-4 flex justify-between items-center transition-all duration-200">
-                <div>
-                    <h4 class="font-bold text-lg ${nameClass}">${name} ${statusBadge}</h4>
-                    <p class="text-sm text-gray-600 mt-1">${description || '沒有描述'}</p>
-                    <div class="mt-2 text-xs text-gray-500">
-                        <span>共 <strong>${(transactionIds || []).length}</strong> 筆交易</span>
-                    </div>
-                </div>
-                <div class="flex-shrink-0 flex items-center space-x-2 ml-4">
-                    ${buttons}
+    container.innerHTML = groups.map(group => `
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 flex justify-between items-center">
+            <div>
+                <h4 class="font-bold text-lg text-gray-800">${group.name}</h4>
+                <p class="text-sm text-gray-600 mt-1">${group.description || '沒有描述'}</p>
+                <div class="mt-2 text-xs text-gray-500">
+                    <span>包含 <strong>${(group.symbols || []).length}</strong> 檔股票</span>
+                    <span class="mx-2">|</span>
+                    <span>共 <strong>${group.transaction_count || 0}</strong> 筆交易</span>
                 </div>
             </div>
-        `;
-    }).join('');
+            <div class="flex-shrink-0 flex items-center space-x-2 ml-4">
+                <button data-group-id="${group.id}" class="edit-group-btn btn p-2 text-gray-500 hover:text-indigo-600">
+                    <i data-lucide="edit" class="w-5 h-5"></i>
+                </button>
+                <button data-group-id="${group.id}" class="delete-group-btn btn p-2 text-gray-500 hover:text-red-600">
+                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+    `).join('');
 
     lucide.createIcons();
 }
@@ -98,7 +60,6 @@ export function renderGroupModal(groupToEdit = null) {
     const symbolsContainer = document.getElementById('group-symbols-container');
     
     const txsBySymbol = transactions.reduce((acc, tx) => {
-        if(tx.status === 'STAGED_DELETE') return acc; // 不顯示待刪除的交易
         if (!acc[tx.symbol]) {
             acc[tx.symbol] = [];
         }
@@ -108,7 +69,8 @@ export function renderGroupModal(groupToEdit = null) {
 
     const allSymbols = Object.keys(txsBySymbol).sort();
     
-    const includedTxIds = new Set(groupToEdit ? groupToEdit.transactionIds : []);
+    // 【核心修改】使用從 API 獲取的、準確的 ID 列表
+    const includedTxIds = new Set(groupToEdit ? groupToEdit.included_transaction_ids : []);
 
     if (allSymbols.length > 0) {
         symbolsContainer.innerHTML = `
@@ -130,7 +92,7 @@ export function renderGroupModal(groupToEdit = null) {
                             </div>
                             <div class="transaction-list hidden pl-6 border-l border-gray-200 ml-2">
                                 ${symbolTxs.sort((a,b) => new Date(b.date) - new Date(a.date)).map(tx => {
-                                    const isChecked = includedTxIds.has(tx.id);
+                                    const isChecked = includedTxIds.has(tx.id); // 根據 ID 列表判斷
                                     const typeClass = tx.type === 'buy' ? 'text-red-500' : 'text-green-500';
                                     return `
                                         <div class="transaction-node p-1" data-tx-id="${tx.id}">
@@ -147,7 +109,7 @@ export function renderGroupModal(groupToEdit = null) {
                 }).join('')}
             </div>
         `;
-        
+        // 手動設定「部分選取」狀態
         symbolsContainer.querySelectorAll('.symbol-checkbox').forEach(cb => {
             const symbolNode = cb.closest('.symbol-node');
             const includedCount = symbolNode.querySelectorAll('.transaction-checkbox:checked').length;

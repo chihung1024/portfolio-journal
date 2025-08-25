@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 暫存區 API 處理模組 (staging.handler.js) v3.4 - 修正 Note 提交 Bug
-// == 職責：處理所有實體的暫存、提交、合併狀態等核心邏輯
+// == [最終修正檔案] 暫存區 API 處理模組 (staging.handler.js) v1.5 - 補全提交回應
+// == 職責：處理所有與暫存區相關的 API Action，統一所有函式簽名以確保穩定性
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -8,315 +8,138 @@ const { z } = require("zod");
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
 const schemas = require('../schemas');
-const { populateSettlementFxRate } = require('./transaction.handler');
 
-/**
- * 將一筆變更操作加入到後端暫存區資料庫 (已擴展)
- */
-exports.stageChange = async (uid, data, res, isBatch = false) => {
-    const { op, entity, payload } = schemas.stagedChangeSchema.parse(data);
+const changeOperationSchema = z.object({
+    op: z.enum(['CREATE', 'UPDATE', 'DELETE']),
+    entity: z.enum(['transaction', 'split', 'dividend', 'group_membership']),
+    payload: z.any()
+});
+
+exports.stageChange = async (uid, data, res) => {
+    const { op, entity, payload } = changeOperationSchema.parse(data);
     let validatedPayload;
-    let entityId = payload.id || null;
-
+    let entityId = null;
     switch (`${entity}:${op}`) {
-        case 'transaction:CREATE':
-            validatedPayload = schemas.transactionSchema.parse(payload);
-            entityId = uuidv4();
-            validatedPayload.id = entityId;
-            break;
-        case 'transaction:UPDATE':
-            validatedPayload = schemas.transactionSchema.extend({ id: z.string().uuid() }).parse(payload);
-            break;
-        case 'transaction:DELETE':
-            validatedPayload = z.object({ id: z.string().uuid() }).parse(payload);
-            break;
-        case 'dividend:CREATE':
-        case 'dividend:UPDATE':
-            validatedPayload = schemas.userDividendSchema.parse(payload);
-            if (!entityId) { entityId = uuidv4(); validatedPayload.id = entityId; }
-            break;
-        case 'dividend:DELETE':
-            validatedPayload = z.object({ id: z.string().uuid() }).parse(payload);
-            break;
-        case 'split:CREATE':
-            validatedPayload = schemas.splitSchema.parse(payload);
-            entityId = uuidv4();
-            validatedPayload.id = entityId;
-            break;
-        case 'split:DELETE':
-            validatedPayload = z.object({ id: z.string().uuid() }).parse(payload);
-            break;
-        case 'note:UPDATE':
-            validatedPayload = schemas.stockNoteSchema.parse(payload);
-            entityId = payload.symbol;
-            break;
-        case 'group:CREATE':
-        case 'group:UPDATE':
-            validatedPayload = schemas.groupSchema.parse(payload);
-            if (!entityId) { entityId = uuidv4(); validatedPayload.id = entityId; }
-            break;
-        case 'group:DELETE':
-            validatedPayload = z.object({ id: z.string().uuid() }).parse(payload);
-            break;
-        case 'group_membership:UPDATE':
-            validatedPayload = z.object({ transactionId: z.string(), groupIds: z.array(z.string()) }).parse(payload);
-            entityId = payload.transactionId;
-            break;
-        default:
-            if (!isBatch) return res.status(400).send({ success: false, message: `不支援的操作: ${entity}:${op}` });
-            else throw new Error(`不支援的操作: ${entity}:${op}`);
+        case 'transaction:CREATE': validatedPayload = schemas.transactionSchema.parse(payload); break;
+        case 'transaction:UPDATE': validatedPayload = schemas.transactionSchema.extend({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        case 'transaction:DELETE': validatedPayload = z.object({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        case 'group_membership:UPDATE': validatedPayload = z.object({ transactionId: z.string().uuid(), groupIds: z.array(z.string()) }).parse(payload); entityId = validatedPayload.transactionId; break;
+        // 支援拆股與股利
+        case 'split:CREATE': validatedPayload = schemas.splitSchema.parse(payload); break;
+        case 'split:DELETE': validatedPayload = z.object({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        case 'dividend:CREATE': case 'dividend:UPDATE': validatedPayload = schemas.userDividendSchema.parse(payload); entityId = validatedPayload.id; break;
+        case 'dividend:DELETE': validatedPayload = z.object({ id: z.string().uuid() }).parse(payload); entityId = validatedPayload.id; break;
+        default: return res.status(400).send({ success: false, message: `不支援的操作: ${entity}:${op}` });
     }
-
     const changeId = uuidv4();
-    await d1Client.query(
-        `INSERT INTO staged_changes (id, uid, entity_type, operation_type, entity_id, payload) VALUES (?, ?, ?, ?, ?, ?)`,
-        [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]
-    );
-
-    if (!isBatch) {
-        return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId, entityId });
-    }
+    await d1Client.query( `INSERT INTO staged_changes (id, uid, entity_type, operation_type, entity_id, payload) VALUES (?, ?, ?, ?, ?, ?)`, [changeId, uid, entity, op, entityId, JSON.stringify(validatedPayload)]);
+    return res.status(200).send({ success: true, message: '變更已成功暫存。', changeId }); // changeId was already here, but let's ensure the frontend uses it.
 };
 
-/**
- * 提交指定使用者的所有暫存變更 (已擴展)
- */
-exports.commitAllChanges = async (uid, res) => {
-    const pendingChanges = await d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? ORDER BY created_at ASC`, [uid]);
-    if (pendingChanges.length === 0) return res.status(200).send({ success: true, message: '沒有待處理的變更。' });
-
-    const dbOperations = [];
-    let earliestChangeDate = new Date().toISOString();
-    let needsRecalculation = false;
-
-    const processedChanges = await Promise.all(pendingChanges.map(async (change) => {
-        let payload = JSON.parse(change.payload);
-        if (change.entity_type === 'transaction' && (change.operation_type === 'CREATE' || change.operation_type === 'UPDATE')) {
-            payload = await populateSettlementFxRate(payload);
-        }
-        return { ...change, payload };
-    }));
-
-    for (const change of processedChanges) {
-        const { payload, entity_type: entity, operation_type: op, entity_id: entityId } = change;
-        
-        if (payload.date && payload.date < earliestChangeDate) earliestChangeDate = payload.date;
-
-        switch (`${entity}:${op}`) {
-            case 'transaction:CREATE':
-            case 'transaction:UPDATE':
-            case 'transaction:DELETE':
-            case 'dividend:CREATE':
-            case 'dividend:UPDATE':
-            case 'dividend:DELETE':
-            case 'split:CREATE':
-            case 'split:DELETE':
-                needsRecalculation = true;
-                break;
-        }
-
-        switch (`${entity}:${op}`) {
-            case 'transaction:CREATE':
-                dbOperations.push({ sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, params: [entityId, uid, payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate] });
-                break;
-            case 'transaction:UPDATE':
-                dbOperations.push({ sql: `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, params: [payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate, entityId, uid] });
-                break;
-            case 'transaction:DELETE':
-                dbOperations.push({ sql: 'DELETE FROM transactions WHERE id = ? AND uid = ?', params: [entityId, uid] });
-                dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [entityId, uid] });
-                break;
-            case 'dividend:CREATE':
-            case 'dividend:UPDATE':
-                dbOperations.push({ sql: 'DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', params: [uid, payload.symbol, payload.ex_dividend_date] });
-                dbOperations.push({ sql: `INSERT OR REPLACE INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`, params: [entityId, uid, payload.symbol, payload.ex_dividend_date, payload.pay_date, payload.amount_per_share, payload.quantity_at_ex_date, payload.total_amount, payload.tax_rate, payload.currency, payload.notes] });
-                break;
-            case 'dividend:DELETE':
-                dbOperations.push({ sql: 'DELETE FROM user_dividends WHERE id = ? AND uid = ?', params: [entityId, uid] });
-                break;
-            case 'split:CREATE':
-                dbOperations.push({ sql: `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`, params: [entityId, uid, payload.date, payload.symbol, payload.ratio] });
-                break;
-            case 'split:DELETE':
-                dbOperations.push({ sql: 'DELETE FROM splits WHERE id = ? AND uid = ?', params: [entityId, uid] });
-                break;
-            // ========================= 【核心修正 - 開始】 =========================
-            case 'note:UPDATE':
-                const upsertNoteSql = `
-                    INSERT INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(uid, symbol) DO UPDATE SET
-                        target_price = excluded.target_price,
-                        stop_loss_price = excluded.stop_loss_price,
-                        notes = excluded.notes,
-                        last_updated = excluded.last_updated;
-                `;
-                const upsertNoteParams = [
-                    uuidv4(), // id
-                    uid, // uid
-                    payload.symbol, // symbol
-                    payload.target_price, // target_price
-                    payload.stop_loss_price, // stop_loss_price
-                    payload.notes, // notes
-                    new Date().toISOString() // last_updated
-                ];
-                dbOperations.push({ sql: upsertNoteSql, params: upsertNoteParams });
-                break;
-            // ========================= 【核心修正 - 結束】 =========================
-            case 'group:CREATE':
-            case 'group:UPDATE':
-                dbOperations.push({ sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1) ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, is_dirty=1`, params: [entityId, uid, payload.name, payload.description] });
-                dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND group_id = ?', params: [uid, entityId] });
-                if (payload.transactionIds && payload.transactionIds.length > 0) {
-                    payload.transactionIds.forEach(txId => dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, entityId, txId] }));
-                }
-                break;
-            case 'group:DELETE':
-                dbOperations.push({ sql: 'DELETE FROM group_cache WHERE group_id = ? AND uid = ?', params: [entityId, uid] });
-                dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE group_id = ? AND uid = ?', params: [entityId, uid] });
-                dbOperations.push({ sql: 'DELETE FROM groups WHERE id = ? AND uid = ?', params: [entityId, uid] });
-                break;
-            case 'group_membership:UPDATE':
-                const { transactionId, groupIds } = payload;
-                dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?', params: [uid, transactionId] });
-                if (groupIds && groupIds.length > 0) {
-                    groupIds.forEach(gid => dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, gid, transactionId] }));
-                }
-                break;
-        }
-    }
-    
-    if(dbOperations.length > 0) await d1Client.batch(dbOperations);
-
-    if (needsRecalculation) {
-        try { await performRecalculation(uid, earliestChangeDate, false); } 
-        catch (recalcError) { return res.status(500).send({ success: false, message: `資料庫已更新，但績效計算過程中發生錯誤。請聯繫管理員。` }); }
-    }
-    
-    const pendingIds = pendingChanges.map(c => c.id);
-    if(pendingIds.length > 0) {
-        const placeholders = pendingIds.map(() => '?').join(',');
-        await d1Client.query(`DELETE FROM staged_changes WHERE id IN (${placeholders})`, pendingIds);
-    }
-
-    return res.status(200).send({ success: true, message: '所有變更已成功提交並計算完畢。' });
-};
-
-/**
- * 獲取暫存區的摘要資訊 (例如：總變更數)
- */
-exports.getStagingSummary = async (uid, res) => {
+exports.getTransactionsWithStaging = async (uid, data, res) => {
     try {
-        const result = await d1Client.query(`SELECT COUNT(*) as count FROM staged_changes WHERE uid = ?`, [uid]);
-        const count = result[0]?.count || 0;
-        return res.status(200).send({
-            success: true,
-            data: {
-                totalStagedCount: count,
-                hasStagedChanges: count > 0
+        const { page = 1, pageSize = 15 } = z.object({ page: z.number().int().positive().optional(), pageSize: z.number().int().positive().optional() }).parse(data || {});
+        const [committedTxs, stagedChanges] = await Promise.all([ d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]), d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'transaction' ORDER BY created_at ASC`, [uid])]);
+        const txMap = new Map(committedTxs.map(tx => [tx.id, { ...tx, status: 'COMMITTED' }]));
+        for (const change of stagedChanges) {
+            if (change.operation_type !== 'CREATE' && change.operation_type !== 'UPDATE') continue;
+            try {
+                const payload = JSON.parse(change.payload); const entityId = change.entity_id || change.id || payload.id; if (!entityId) continue;
+                if (change.operation_type === 'CREATE') { txMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE' }); }
+                else { const existingTx = txMap.get(entityId); if (existingTx && typeof existingTx === 'object') { txMap.set(entityId, { ...existingTx, ...payload, status: 'STAGED_UPDATE' }); } }
+            } catch (e) { console.error(`Error processing CREATE/UPDATE change ${change.id}:`, e); }
+        }
+        for (const change of stagedChanges) {
+            if (change.operation_type !== 'DELETE') continue;
+            try {
+                const payload = JSON.parse(change.payload); const entityId = change.entity_id || payload.id; if (!entityId) continue;
+                const existingTx = txMap.get(entityId);
+                if (existingTx && typeof existingTx === 'object' && existingTx.hasOwnProperty('status')) {
+                    if (existingTx.status === 'STAGED_CREATE') { txMap.delete(entityId); } else { existingTx.status = 'STAGED_DELETE'; }
+                }
+            } catch(e) { console.error(`Error processing DELETE change ${change.id}:`, e); }
+        }
+        const mergedTxs = Array.from(txMap.values()).filter(tx => tx && tx.status !== 'STAGED_DELETE').sort((a, b) => new Date(b.date) - new Date(a.date));
+        const offset = (page - 1) * pageSize;
+        const paginatedTxs = mergedTxs.slice(offset, offset + pageSize);
+        return res.status(200).send({ success: true, data: { transactions: paginatedTxs, hasStagedChanges: stagedChanges.length > 0 } });
+    } catch (error) {
+        console.error("Critical error in getTransactionsWithStaging:", error);
+        return res.status(500).send({ success: false, message: `伺服器處理交易列表時發生嚴重錯誤: ${error.message}` });
+    }
+};
+
+exports.commitAllChanges = async (uid, data, res) => {
+    const pendingChanges = await d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND status = 'PENDING' ORDER BY created_at ASC`, [uid]);
+    if (pendingChanges.length === 0) return res.status(200).send({ success: true, message: '沒有待處理的變更。' });
+    const batchId = uuidv4();
+    const pendingIds = pendingChanges.map(c => c.id);
+    const placeholders = pendingIds.map(() => '?').join(',');
+    await d1Client.query(`UPDATE staged_changes SET status = 'COMMITTING', batch_id = ? WHERE id IN (${placeholders})`, [batchId, ...pendingIds]);
+    try {
+        pendingChanges.forEach(change => {
+            const payload = JSON.parse(change.payload); const { entity_type: entity, operation_type: op } = change;
+            switch (`${entity}:${op}`) {
+                case 'transaction:CREATE': schemas.transactionSchema.parse(payload); break;
+                case 'transaction:UPDATE': schemas.transactionSchema.extend({ id: z.string().uuid() }).parse(payload); break;
+                case 'transaction:DELETE': z.object({ id: z.string().uuid() }).parse(payload); break;
+                case 'group_membership:UPDATE': z.object({ transactionId: z.string().uuid(), groupIds: z.array(z.string()) }).parse(payload); break;
+                case 'split:CREATE': schemas.splitSchema.parse(payload); break;
+                case 'split:DELETE': z.object({ id: z.string().uuid() }).parse(payload); break;
+                case 'dividend:CREATE': case 'dividend:UPDATE': schemas.userDividendSchema.parse(payload); break;
+                case 'dividend:DELETE': z.object({ id: z.string().uuid() }).parse(payload); break;
             }
         });
     } catch (error) {
-        console.error(`[${uid}] Failed to get staging summary:`, error);
-        return res.status(500).send({ success: false, message: '無法讀取暫存區摘要。' });
+        await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [error.message, batchId]);
+        return res.status(400).send({ success: false, message: '提交的變更中有無效數據，請檢查。', error: error.message });
     }
-};
-
-async function getEntitiesWithStaging(uid, entityType, baseQuery) {
-    const [committedEntities, stagedChanges] = await Promise.all([
-        d1Client.query(baseQuery, [uid]),
-        d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = ? ORDER BY created_at ASC`, [uid, entityType])
+    const dbOperations = []; let earliestChangeDate = new Date().toISOString();
+    pendingChanges.forEach(change => {
+        const payload = JSON.parse(change.payload); const date = payload.date || new Date().toISOString(); if (date < earliestChangeDate) { earliestChangeDate = date; }
+        const entityId = change.entity_id || payload.id || change.id;
+        switch (`${change.entity_type}:${change.operation_type}`) {
+            case 'transaction:CREATE': dbOperations.push({ sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, params: [entityId, uid, payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate] }); break;
+            case 'transaction:UPDATE': dbOperations.push({ sql: `UPDATE transactions SET date = ?, symbol = ?, type = ?, quantity = ?, price = ?, currency = ?, totalCost = ?, exchangeRate = ? WHERE id = ? AND uid = ?`, params: [payload.date, payload.symbol, payload.type, payload.quantity, payload.price, payload.currency, payload.totalCost, payload.exchangeRate, payload.id, uid] }); break;
+            case 'transaction:DELETE': dbOperations.push({ sql: 'DELETE FROM transactions WHERE id = ? AND uid = ?', params: [payload.id, uid] }); dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [payload.id, uid] }); break;
+            case 'group_membership:UPDATE': dbOperations.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [payload.transactionId, uid]}); payload.groupIds.forEach(groupId => { dbOperations.push({ sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, groupId, payload.transactionId] }); }); break;
+        }
+    });
+    dbOperations.push({ sql: `DELETE FROM staged_changes WHERE batch_id = ?`, params: [batchId] });
+    try { await d1Client.batch(dbOperations); }
+    catch (dbError) { await d1Client.query(`UPDATE staged_changes SET status = 'FAILED', error_message = ? WHERE batch_id = ?`, [dbError.message, batchId]); return res.status(500).send({ success: false, message: '資料庫寫入失敗，您的變更已還原。', error: dbError.message }); }
+    try { await performRecalculation(uid, earliestChangeDate, false); }
+    catch (recalcError) { console.error(`[CRITICAL] UID ${uid}, BatchID ${batchId}: DB commit OK, but recalc failed! Error: ${recalcError.message}`); return res.status(500).send({ success: false, message: `資料庫已更新，但績效計算過程中發生錯誤。請聯繫管理員。 Batch ID: ${batchId}` }); }
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    // 在回傳前，把所有最新的資料都撈一次，確保前端能拿到最完整的狀態
+    const [holdings, summaryResult, transactions, splits, stockNotes] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
+        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM user_stock_notes WHERE uid = ?', [uid])
     ]);
-    const entityMap = new Map(committedEntities.map(e => [e.id, { ...e, status: 'COMMITTED' }]));
-    for (const change of stagedChanges) {
-        const payload = JSON.parse(change.payload);
-        const entityId = change.entity_id;
-        if (change.operation_type === 'CREATE') {
-            entityMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE', changeId: change.id });
-        } else if (change.operation_type === 'UPDATE') {
-            const existing = entityMap.get(entityId);
-            if (existing) Object.assign(existing, payload, { status: 'STAGED_UPDATE', changeId: change.id });
-        } else if (change.operation_type === 'DELETE') {
-            const existing = entityMap.get(entityId);
-            if (existing) {
-                if (existing.status === 'STAGED_CREATE') entityMap.delete(entityId);
-                else { existing.status = 'STAGED_DELETE'; existing.changeId = change.id; }
-            }
-        }
-    }
-    return { entities: Array.from(entityMap.values()), hasStagedChanges: stagedChanges.length > 0 };
-}
+    // ========================= 【核心修改 - 結束】 =========================
 
-exports.getTransactionsWithStaging = async (uid, res) => {
-    const { entities, hasStagedChanges } = await getEntitiesWithStaging(uid, 'transaction', 'SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC');
-    return res.status(200).send({ success: true, data: { transactions: entities.sort((a, b) => new Date(b.date) - new Date(a.date)), hasStagedChanges } });
-};
-
-exports.getSplitsWithStaging = async (uid, res) => {
-    const { entities, hasStagedChanges } = await getEntitiesWithStaging(uid, 'split', 'SELECT * FROM splits WHERE uid = ? ORDER BY date DESC');
-    return res.status(200).send({ success: true, data: { splits: entities.sort((a, b) => new Date(b.date) - new Date(a.date)), hasStagedChanges } });
-};
-
-exports.getDividendsWithStaging = async (uid, res) => {
-    const { entities, hasStagedChanges } = await getEntitiesWithStaging(uid, 'dividend', 'SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date DESC');
-    return res.status(200).send({ success: true, data: { dividends: entities.sort((a, b) => new Date(b.pay_date) - new Date(a.pay_date)), hasStagedChanges } });
-};
-
-exports.getGroupsWithStaging = async (uid, res) => {
-    try {
-        const [committedGroups, stagedChanges, allInclusions] = await Promise.all([
-            d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY name ASC', [uid]),
-            d1Client.query(`SELECT * FROM staged_changes WHERE uid = ? AND entity_type = 'group' ORDER BY created_at ASC`, [uid]),
-            d1Client.query('SELECT group_id, transaction_id FROM group_transaction_inclusions WHERE uid = ?', [uid])
-        ]);
-
-        const inclusionsMap = new Map();
-        for (const inclusion of allInclusions) {
-            if (!inclusionsMap.has(inclusion.group_id)) {
-                inclusionsMap.set(inclusion.group_id, []);
-            }
-            inclusionsMap.get(inclusion.group_id).push(inclusion.transaction_id);
-        }
-
-        const entityMap = new Map(committedGroups.map(g => {
-            const groupWithInclusions = {
-                ...g,
-                transactionIds: inclusionsMap.get(g.id) || [],
-                status: 'COMMITTED'
-            };
-            return [g.id, groupWithInclusions];
-        }));
-
-        for (const change of stagedChanges) {
-            const payload = JSON.parse(change.payload);
-            const entityId = change.entity_id;
-
-            if (change.operation_type === 'CREATE') {
-                entityMap.set(entityId, { ...payload, id: entityId, status: 'STAGED_CREATE', changeId: change.id });
-            } else if (change.operation_type === 'UPDATE') {
-                const existing = entityMap.get(entityId);
-                if (existing) {
-                    Object.assign(existing, payload, { status: 'STAGED_UPDATE', changeId: change.id });
-                }
-            } else if (change.operation_type === 'DELETE') {
-                const existing = entityMap.get(entityId);
-                if (existing) {
-                    if (existing.status === 'STAGED_CREATE') {
-                        entityMap.delete(entityId);
-                    } else {
-                        existing.status = 'STAGED_DELETE';
-                        existing.changeId = change.id;
-                    }
-                }
-            }
-        }
-        
-        const entities = Array.from(entityMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-        return res.status(200).send({ success: true, data: { groups: entities, hasStagedChanges: stagedChanges.length > 0 } });
-    } catch (error) {
-        console.error(`[${uid}] Failed to get groups with staging:`, error);
-        return res.status(500).send({ success: false, message: '無法讀取群組資料。' });
-    }
+    const summaryRow = summaryResult[0] || {}; const summary_data = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {}; const portfolioHistory = summaryRow.history ? JSON.parse(summaryRow.history) : {}; const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {}; const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {}; const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    
+    return res.status(200).send({ 
+        success: true, 
+        message: '所有變更已成功提交並計算完畢。', 
+        data: { 
+            holdings, 
+            summary: summary_data, 
+            history: portfolioHistory, 
+            twrHistory, 
+            netProfitHistory, 
+            benchmarkHistory,
+            // 【核心修改】將撈取到的新資料加入回傳包
+            transactions,
+            splits,
+            stockNotes
+        } 
+    });
 };
 
 exports.revertStagedChange = async (uid, data, res) => {
@@ -325,7 +148,8 @@ exports.revertStagedChange = async (uid, data, res) => {
     return res.status(200).send({ success: true, message: '變更已捨棄。' });
 };
 
-exports.discardAllChanges = async (uid, res) => {
-    await d1Client.query(`DELETE FROM staged_changes WHERE uid = ?`, [uid]);
-    return res.status(200).send({ success: true, message: '所有暫存變更已捨棄。' });
+exports.getSystemHealth = async (uid, data, res) => {
+    const snapshotResult = await d1Client.query('SELECT MAX(snapshot_date) as last_snapshot_date FROM portfolio_snapshots WHERE uid = ?', [uid]);
+    const lastSnapshotDate = snapshotResult[0]?.last_snapshot_date || null;
+    return res.status(200).send({ success: true, data: { lastSnapshotDate } });
 };
