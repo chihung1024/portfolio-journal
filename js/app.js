@@ -1,5 +1,5 @@
 // =========================================================================================
-// == App Core Control (app.js) v1.0
+// == App Core Control (app.js) v1.1 - Fix Data Loading
 // == 職責：提供高階的、可重用的應用程式控制函式，打破循環依賴。
 // =========================================================================================
 
@@ -16,8 +16,6 @@ import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
-import { switchTab } from './ui/tabs.js';
-import { renderGroupsTab } from './ui/components/groups.ui.js';
 import { getDateRangeForPreset } from './ui/utils.js';
 import { initializeStagingEventListeners } from './ui/components/stagingBanner.ui.js';
 
@@ -32,8 +30,6 @@ let liveRefreshInterval = null;
 
 /**
  * 統一的函式，用來接收【完整】計算結果並更新整個 App 的 UI
- * @param {object} portfolioData - 後端返回的完整投資組合數據
- * @param {string} seriesName - 圖表系列名稱
  */
 export function updateAppWithData(portfolioData, seriesName = '投資組合') {
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
@@ -85,6 +81,8 @@ export function updateAppWithData(portfolioData, seriesName = '投資組合') {
     });
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+// == 以下是恢復的多階段背景載入邏輯，確保數據能被正確載入 ==
 
 async function refreshDashboardAndHoldings() {
     try {
@@ -107,55 +105,6 @@ async function refreshDashboardAndHoldings() {
 
     } catch (error) {
         console.error("Live refresh failed:", error);
-    }
-}
-
-export function startLiveRefresh() {
-    stopLiveRefresh(); 
-
-    const poll = async () => {
-        const { selectedGroupId } = getState();
-        if (selectedGroupId !== 'all') {
-            console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
-            return;
-        }
-        
-        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
-                            document.querySelector('#split-modal:not(.hidden)') ||
-                            document.querySelector('#dividend-modal:not(.hidden)') ||
-                            document.querySelector('#notes-modal:not(.hidden)') ||
-                            document.querySelector('#details-modal:not(.hidden)') ||
-                            document.querySelector('#group-modal:not(.hidden)');
-
-        if (isModalOpen) {
-            console.log("A modal is open, skipping live refresh to avoid interruption.");
-            return;
-        }
-
-        const now = new Date();
-        const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
-        const dayOfWeek = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getDay();
-
-        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-            const isTwMarketOpen = taipeiHour >= 9 && taipeiHour < 14;
-            const isUsMarketOpen = taipeiHour >= 21 || taipeiHour < 4;
-
-            if (isTwMarketOpen || isUsMarketOpen) {
-                 console.log("Market is open. Refreshing data...");
-                 refreshDashboardAndHoldings();
-            }
-        }
-    };
-    
-    liveRefreshInterval = setInterval(poll, 60000); 
-    poll();
-}
-
-export function stopLiveRefresh() {
-    if (liveRefreshInterval) {
-        clearInterval(liveRefreshInterval);
-        liveRefreshInterval = null;
-        console.log("Live refresh stopped.");
     }
 }
 
@@ -241,7 +190,7 @@ async function loadSecondaryDataInBackground() {
 }
 
 /**
- * 載入並顯示儀表板 (全局視圖)
+ * 【已修正】第一階段：載入儀表板摘要與包含暫存狀態的交易列表
  */
 export async function loadInitialDashboard() {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -250,29 +199,90 @@ export async function loadInitialDashboard() {
     loadingOverlay.style.display = 'flex';
 
     try {
+        // 步驟 1: 載入交易紀錄 (這會處理暫存區狀態)
         await loadInitialData(); 
         
+        // 步驟 2: 僅載入儀表板摘要，用於快速顯示
         const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
-        const { summary, stockNotes, holdings, history, twrHistory, benchmarkHistory, netProfitHistory, splits } = result.data;
+        const { summary, stockNotes } = result.data;
         
-        updateAppWithData({
-            summary,
-            stockNotes,
-            holdings,
-            history,
-            twrHistory,
-            benchmarkHistory,
-            netProfitHistory,
-            splits,
-            transactions: getState().transactions // 保留從 loadInitialData 來的交易數據
+        const stockNotesMap = (stockNotes || []).reduce((map, note) => {
+            map[note.symbol] = note; return map;
+        }, {});
+
+        // 步驟 3: 先用空的持股數據渲染畫面，避免延遲
+        setState({
+            holdings: {}, 
+            stockNotes: stockNotesMap,
+            summary: summary
         });
 
+        updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+        renderHoldingsTable({});
+        document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
+
     } catch (error) {
-        showNotification('error', `讀取儀表板數據失敗: ${error.message}`);
+        showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
+        // 步驟 4: 無論成功失敗，都隱藏遮罩，並在背景啟動後續資料載入
         loadingOverlay.style.display = 'none';
+        setTimeout(() => {
+            loadHoldingsInBackground();
+            loadChartDataInBackground();
+        }, 100);
+    }
+}
+
+// ========================= 【核心修改 - 結束】 =========================
+
+export function startLiveRefresh() {
+    stopLiveRefresh(); 
+
+    const poll = async () => {
+        const { selectedGroupId } = getState();
+        if (selectedGroupId !== 'all') {
+            console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
+            return;
+        }
+        
+        const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
+                            document.querySelector('#split-modal:not(.hidden)') ||
+                            document.querySelector('#dividend-modal:not(.hidden)') ||
+                            document.querySelector('#notes-modal:not(.hidden)') ||
+                            document.querySelector('#details-modal:not(.hidden)') ||
+                            document.querySelector('#group-modal:not(.hidden)');
+
+        if (isModalOpen) {
+            console.log("A modal is open, skipping live refresh to avoid interruption.");
+            return;
+        }
+
+        const now = new Date();
+        const taipeiHour = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getHours();
+        const dayOfWeek = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Taipei" })).getDay();
+
+        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+            const isTwMarketOpen = taipeiHour >= 9 && taipeiHour < 14;
+            const isUsMarketOpen = taipeiHour >= 21 || taipeiHour < 4;
+
+            if (isTwMarketOpen || isUsMarketOpen) {
+                 console.log("Market is open. Refreshing data...");
+                 refreshDashboardAndHoldings();
+            }
+        }
+    };
+    
+    liveRefreshInterval = setInterval(poll, 60000); 
+    poll();
+}
+
+export function stopLiveRefresh() {
+    if (liveRefreshInterval) {
+        clearInterval(liveRefreshInterval);
+        liveRefreshInterval = null;
+        console.log("Live refresh stopped.");
     }
 }
 
@@ -321,7 +331,6 @@ export function initializeAppUI() {
     
     loadGroups();
     
-    // 注意：主事件監聽器 (setupMainAppEventListeners) 仍在 main.js 中，由它來呼叫此處的函式
     initializeTransactionEventListeners();
     initializeSplitEventListeners();
     initializeDividendEventListeners();
