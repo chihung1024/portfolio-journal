@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.1.0 - Fix Circular Dependency
+// == API 通訊模組 (api.js) v5.2.0 - Remove Circular Dependency
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -59,10 +59,12 @@ export async function apiRequest(action, data) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 高階 API 執行器，用於處理【非交易相關】的立即執行操作
+ * 高階 API 執行器，用於處理【立即執行】的操作 (例如拆股、筆記等)
+ * 【修改】移除 shouldRefreshData 和對 main.js 的依賴，將刷新責任交給調用者。
  */
-export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
+export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage }) {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingTextElement = document.getElementById('loading-text');
     loadingTextElement.textContent = loadingText;
@@ -71,16 +73,12 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     try {
         const result = await apiRequest(action, payload);
         
-        if (shouldRefreshData) {
-            const main = await import('../main.js');
-            await main.loadInitialDashboard();
-        }
-        
         if (successMessage) {
             showNotification('success', successMessage);
         }
         
-        return result; 
+        // 直接返回結果，讓調用者決定如何刷新
+        return result;
     } catch (error) {
         showNotification('error', `操作失敗: ${error.message}`);
         throw error; 
@@ -89,6 +87,7 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -181,14 +180,9 @@ export async function loadInitialData() {
 }
 
 /**
- * 【重構】請求後端按需計算特定群組的數據
+ * 請求後端按需計算特定群組的數據
  */
 export async function applyGroupView(groupId) {
-    // ========================= 【核心修改 - 開始】 =========================
-    // 移除 if (groupId === 'all') 的判斷，打破循環依賴
-    // 此函式現在只處理特定群組的計算請求
-    // ========================= 【核心修改 - 結束】 =========================
-
     const loadingText = document.getElementById('loading-text');
     document.getElementById('loading-overlay').style.display = 'flex';
     loadingText.textContent = '正在為您即時計算群組績效...';
