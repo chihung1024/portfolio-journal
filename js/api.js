@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.2.0 - Remove Circular Dependency
+// == API 通訊模組 (api.js) v5.3.0 - Initialization Refactor
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -59,10 +59,8 @@ export async function apiRequest(action, data) {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 高階 API 執行器，用於處理【立即執行】的操作 (例如拆股、筆記等)
- * 【修改】移除 shouldRefreshData 和對 main.js 的依賴，將刷新責任交給調用者。
  */
 export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage }) {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -77,7 +75,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
             showNotification('success', successMessage);
         }
         
-        // 直接返回結果，讓調用者決定如何刷新
         return result;
     } catch (error) {
         showNotification('error', `操作失敗: ${error.message}`);
@@ -87,7 +84,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -140,7 +136,8 @@ function updateAppWithData(portfolioData) {
                 btn.classList.remove('active');
                 if (btn.dataset.range === 'all') btn.classList.add('active');
             });
-            const history = getState()[`${chartType === 'asset' ? 'portfolio' : chartType}History`];
+            const historyKey = chartType === 'asset' ? 'portfolioHistory' : `${chartType}History`;
+            const history = getState()[historyKey];
             const dates = getDateRangeForPreset(history, { type: 'all' });
             document.getElementById(`${chartType}-start-date`).value = dates.startDate;
             document.getElementById(`${chartType}-end-date`).value = dates.endDate;
@@ -148,36 +145,15 @@ function updateAppWithData(portfolioData) {
     });
 }
 
-
+// ========================= 【核心 Bug 修復 - 開始】 =========================
 /**
- * 從後端載入包含暫存狀態的初始資料
+ * 【移除】此函式已被廢棄
+ * 它的邏輯已經被合併到 main.js 的 loadInitialDashboard 中，以建立一個更穩健、
+ * 無競爭條件的應用程式啟動流程。
  */
-export async function loadInitialData() {
-    const { currentUserId } = getState();
-    if (!currentUserId) return;
+// export async function loadInitialData() { ... }
+// ========================= 【核心 Bug 修復 - 結束】 =========================
 
-    document.getElementById('loading-overlay').style.display = 'flex';
-    try {
-        const result = await apiRequest('get_transactions_with_staging', {});
-        
-        if (result.success) {
-            setState({
-                transactions: result.data.transactions || [],
-                hasStagedChanges: result.data.hasStagedChanges
-            });
-
-            renderTransactionsTable();
-            updateStagingBanner();
-        } else {
-            throw new Error(result.message);
-        }
-    } catch (error) {
-        console.error('Failed to load initial data:', error);
-        showNotification('error', `讀取初始資料失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
-}
 
 /**
  * 請求後端按需計算特定群組的數據
@@ -190,15 +166,18 @@ export async function applyGroupView(groupId) {
     try {
         const result = await apiRequest('calculate_group_on_demand', { groupId });
         if (result.success) {
-            const currentTransactions = getState().transactions;
-            updateAppWithData({ ...result.data, transactions: currentTransactions });
+            // 從 state 中獲取當前的交易列表，因為群組計算不應影響交易分頁的顯示
+            const { transactions } = getState();
+            updateAppWithData({ ...result.data, transactions });
             showNotification('success', '群組績效計算完成！');
         }
     } catch (error) {
         showNotification('error', `計算群組績效失敗: ${error.message}`);
+        // 如果計算失敗，安全地切換回 'all' 視圖
+        const { loadInitialDashboard } = await import('./main.js');
         document.getElementById('group-selector').value = 'all';
-        const main = await import('../main.js');
-        main.loadInitialDashboard();
+        setState({ selectedGroupId: 'all' });
+        loadInitialDashboard();
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
         loadingText.textContent = '正在從雲端同步資料...';
