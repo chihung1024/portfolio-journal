@@ -1,12 +1,12 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v3.5 - Context-Aware Benchmark Fix
+// == 通用事件處理模組 (general.events.js) v3.3 - 支援鍵盤操作
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// ========================= 【核心修改 - 開始】 =========================
-import { apiRequest, executeApiAction, applyGroupView } from '../api.js';
-// ========================= 【核心修改 - 結束】 =========================
+// 【修改】導入 apiRequest
+import { apiRequest, executeApiAction } from '../api.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
 import { updateAssetChart } from '../ui/charts/assetChart.js';
@@ -16,15 +16,20 @@ import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsMo
 
 // --- Private Functions ---
 
+// 【新增】處理開啟詳情彈窗的核心邏輯
 async function handleShowDetails(symbol) {
     const { transactions } = getState();
+
+    // 檢查 state 中是否已存在此股票的交易紀錄
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     
     const { openModal } = await import('../ui/modals.js');
 
     if (hasDataLocally) {
+        // 如果本地已有數據，直接開啟彈窗
         openModal('details-modal', false, { symbol });
     } else {
+        // 如果沒有，顯示讀取畫面，並向後端請求該個股的數據
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
         loadingText.textContent = `正在讀取 ${symbol} 的詳細資料...`;
@@ -36,6 +41,7 @@ async function handleShowDetails(symbol) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
 
+                // 合併新的數據到全域 state，並過濾掉可能重複的項目
                 const txIds = new Set(currentState.transactions.map(t => t.id));
                 const uniqueNewTxs = newTransactions.filter(t => !txIds.has(t.id));
                 
@@ -47,6 +53,7 @@ async function handleShowDetails(symbol) {
                     confirmedDividends: [...currentState.confirmedDividends, ...uniqueNewDivs]
                 });
                 
+                // 數據準備好後，打開彈窗
                 openModal('details-modal', false, { symbol });
             } else {
                 throw new Error(result.message);
@@ -54,42 +61,26 @@ async function handleShowDetails(symbol) {
         } catch (error) {
             showNotification('error', `讀取 ${symbol} 資料失敗: ${error.message}`);
         } finally {
-            loadingText.textContent = '正在從雲端同步資料...';
+            loadingText.textContent = '正在從雲端同步資料...'; // 恢復預設文字
             loadingOverlay.style.display = 'none';
         }
     }
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) {
         showNotification('error', '請輸入 Benchmark 的股票代碼。');
         return;
     }
-
-    const { selectedGroupId } = getState();
-
-    // 雖然 executeApiAction 現在不執行刷新，但它提供了統一的 loading 和通知體驗
     executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
         loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
         successMessage: 'Benchmark 已成功更新！'
-    }).then(async () => {
-        // 操作成功後，根據當前所在的視圖，執行對應的刷新邏輯
-        if (selectedGroupId === 'all') {
-            const { loadInitialDashboard } = await import('../main.js');
-            return loadInitialDashboard();
-        } else {
-            // 重新載入當前的群組視圖，這會觸發一次新的按需計算
-            return applyGroupView(selectedGroupId);
-        }
     }).catch(error => {
         console.error("更新 Benchmark 最終失敗:", error);
     });
 }
-// ========================= 【核心修改 - 結束】 =========================
-
 
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     const { closeModal } = await import('../ui/modals.js');
@@ -98,8 +89,8 @@ async function saveNoteAction(noteData, modalToClose = 'notes-modal') {
     executeApiAction('save_stock_note', noteData, {
         loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
         successMessage: `${noteData.symbol} 的筆記已儲存！`,
+        shouldRefreshData: false
     }).then(() => {
-        // 儲存筆記後，只需刷新持股即可，無需全局重算
         const { holdings, stockNotes } = getState();
         stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
         setState({ stockNotes });
@@ -174,18 +165,24 @@ export function initializeGeneralEventListeners() {
         closeModal('notes-modal');
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為主筆記表單增加 Enter 鍵監聽
     document.getElementById('notes-form').addEventListener('keydown', (e) => {
+        // 使用 Ctrl+Enter 或 Command+Enter 送出，避免在輸入筆記時誤觸
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             document.getElementById('save-notes-btn').click();
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
 
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
         const notesBtn = e.target.closest('.open-notes-btn');
         if (notesBtn) {
+            // 此處的 openModal 會在 async 函式中被呼叫，但因事件監聽器本身不是 async,
+            // 我們可以這樣處理：
             (async () => {
                 const { openModal } = await import('../ui/modals.js');
                 openModal('notes-modal', false, { symbol: notesBtn.dataset.symbol });
@@ -210,6 +207,7 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
+        // 【修改】呼叫新的處理函式
         const mobileDetailsBtn = e.target.closest('.open-details-btn');
         if (mobileDetailsBtn) {
              handleShowDetails(mobileDetailsBtn.dataset.symbol);
@@ -229,6 +227,7 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
+        // 【修改】呼叫新的處理函式
         const holdingRow = e.target.closest('.holding-row');
         if (holdingRow) {
             handleShowDetails(holdingRow.dataset.symbol);
@@ -265,9 +264,18 @@ export function initializeGeneralEventListeners() {
 
         const deleteBtn = e.target.closest('.details-delete-tx-btn');
         if (deleteBtn) {
-            // This button's logic is now handled in transaction.events.js
-            // To trigger it, we can dispatch a custom event or click the main list's button
-            // For now, we assume the user will use the main list for staged operations
+            const txId = deleteBtn.dataset.id;
+            const { showConfirm } = await import('../ui/modals.js');
+            showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
+                executeApiAction('delete_transaction', { txId }, {
+                    loadingText: '正在刪除交易...',
+                    successMessage: '交易已成功刪除！'
+                }).then(() => {
+                    const symbol = document.querySelector('#details-modal-content h2').textContent;
+                    setTimeout(() => renderDetailsModal(symbol), 200);
+                }).catch(err => console.error("刪除交易失敗:", err));
+            });
+            return;
         }
     });
 
@@ -280,36 +288,85 @@ export function initializeGeneralEventListeners() {
                 stop_loss_price: parseFloat(document.getElementById('details-stop-loss-price').value) || null,
                 notes: document.getElementById('details-notes-content').value.trim()
             };
-             saveNoteAction(noteData);
+             executeApiAction('save_stock_note', noteData, {
+                loadingText: `正在儲存 ${noteData.symbol} 的筆記...`,
+                successMessage: `${noteData.symbol} 的筆記已儲存！`,
+                shouldRefreshData: false
+            }).then(() => {
+                const { holdings, stockNotes } = getState();
+                stockNotes[noteData.symbol] = { ...stockNotes[noteData.symbol], ...noteData };
+                setState({ stockNotes });
+                renderHoldingsTable(holdings);
+                renderDetailsModal(noteData.symbol);
+                switchDetailsTab('notes', noteData.symbol);
+            }).catch(error => {
+                console.error("儲存筆記最終失敗:", error);
+            });
         }
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 使用事件委派，為詳情彈窗內的筆記表單增加 Enter 鍵監聽
     document.getElementById('details-modal').addEventListener('keydown', (e) => {
         if (e.target.closest('#details-notes-form') && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             document.getElementById('details-save-notes-btn').click();
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
 
-    // Chart controls listeners
-    const chartControls = ['twr', 'asset', 'net-profit'];
-    chartControls.forEach(chartType => {
-        const controls = document.getElementById(`${chartType}-chart-controls`);
-        if (controls) {
-            controls.addEventListener('click', (e) => {
-                const btn = e.target.closest('.chart-range-btn');
-                if (btn) handleChartRangeChange(chartType, btn.dataset.range);
-            });
-            controls.addEventListener('change', (e) => {
-                if (e.target.matches('.chart-date-input')) {
-                    const startInput = controls.querySelector(`#${chartType}-start-date`);
-                    const endInput = controls.querySelector(`#${chartType}-end-date`);
-                    if (startInput && endInput && startInput.value && endInput.value) {
-                        controls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
-                        handleChartRangeChange(chartType, 'custom', startInput.value, endInput.value);
-                    }
+    // Chart controls listeners (unchanged)
+    const twrControls = document.getElementById('twr-chart-controls');
+    if (twrControls) {
+        twrControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('twr', btn.dataset.range);
+        });
+        twrControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = twrControls.querySelector('#twr-start-date');
+                const endInput = twrControls.querySelector('#twr-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    twrControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('twr', 'custom', startInput.value, endInput.value);
                 }
-            });
-        }
-    });
+            }
+        });
+    }
+
+    const assetControls = document.getElementById('asset-chart-controls');
+    if (assetControls) {
+        assetControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('asset', btn.dataset.range);
+        });
+        assetControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = assetControls.querySelector('#asset-start-date');
+                const endInput = assetControls.querySelector('#asset-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    assetControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('asset', 'custom', startInput.value, endInput.value);
+                }
+            }
+        });
+    }
+    
+    const netProfitControls = document.getElementById('net-profit-chart-controls');
+    if (netProfitControls) {
+        netProfitControls.addEventListener('click', (e) => {
+            const btn = e.target.closest('.chart-range-btn');
+            if (btn) handleChartRangeChange('net-profit', btn.dataset.range);
+        });
+        netProfitControls.addEventListener('change', (e) => {
+            if (e.target.matches('.chart-date-input')) {
+                const startInput = netProfitControls.querySelector('#net-profit-start-date');
+                const endInput = netProfitControls.querySelector('#net-profit-end-date');
+                if (startInput && endInput && startInput.value && endInput.value) {
+                    netProfitControls.querySelectorAll('.chart-range-btn').forEach(btn => btn.classList.remove('active'));
+                    handleChartRangeChange('net-profit', 'custom', startInput.value, endInput.value);
+                }
+            }
+        });
+    }
 }
