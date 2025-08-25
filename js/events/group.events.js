@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v2.3 - 支援鍵盤操作)
-// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
+// == 檔案：js/events/group.events.js (v3.0 - Refactored)
+// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染與事件
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { apiRequest } from '../api.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
 
@@ -45,8 +44,6 @@ function updateGroupSelector() {
 
     // 確保在群組被刪除或變更後，選擇器能正確地反映當前狀態
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
-    
-    // 【核心修改】移除對 #recalculate-group-btn 的操作，因為該按鈕已被刪除
 }
 
 /**
@@ -133,7 +130,6 @@ export function initializeGroupEventListeners() {
             loadingOverlay.style.display = 'flex';
 
             try {
-                // 【核心修改】呼叫新的 API 來獲取完整的群組詳情
                 const result = await apiRequest('get_group_details', { groupId });
                 if (result.success) {
                     const groupToEdit = result.data;
@@ -165,19 +161,16 @@ export function initializeGroupEventListeners() {
         closeModal('group-modal');
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
     // 為群組編輯表單增加 Enter 鍵監聽
     document.getElementById('group-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.target.matches('textarea')) { // 避免在描述欄位按 Enter 就送出
             e.preventDefault();
-            // 在樹狀視圖中按 Enter 可能有其他用途，此處不觸發送出
             // 僅當焦點在群組名稱輸入框時觸發
             if (document.activeElement === document.getElementById('group-name')) {
                 document.getElementById('save-group-btn').click();
             }
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
     
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {
@@ -222,4 +215,8 @@ export function initializeGroupEventListeners() {
     }
 }
 
-export { loadGroups, updateGroupSelector };
+// ========================= 【核心修改 - 開始】 =========================
+// 匯出 loadGroups 供 app.js 初始化時使用
+// 不再匯出 updateGroupSelector，因其僅在模組內部使用
+export { loadGroups };
+// ========================= 【核心修改 - 結束】 =========================
