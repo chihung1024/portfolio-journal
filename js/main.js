@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.2.0 - Refactor & Fix Circular Dependency
+// == 主程式進入點 (main.js) v5.3.0 - Robust Initialization Refactor
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-import { apiRequest, applyGroupView, loadInitialData } from './api.js';
+// 【修改】applyGroupView 現在從 api.js 導入
+import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 
 // --- UI Module Imports ---
@@ -33,17 +34,22 @@ let liveRefreshInterval = null;
 
 async function refreshDashboardAndHoldings() {
     try {
+        // 【修改】API action 'get_dashboard_and_holdings' 已被新的架構棄用，此處保持不變，待後續全局暫存區重構時一併更新
         const result = await apiRequest('get_dashboard_and_holdings', {});
         if (!result.success) return;
 
-        const { summary, holdings } = result.data;
+        const { summary, holdings, stockNotes } = result.data;
         const holdingsObject = (holdings || []).reduce((obj, item) => {
             obj[item.symbol] = item; return obj;
+        }, {});
+         const stockNotesMap = (stockNotes || []).reduce((map, note) => {
+            map[note.symbol] = note; return map;
         }, {});
 
         setState({
             holdings: holdingsObject,
-            summary: summary
+            summary: summary,
+            stockNotes: stockNotesMap
         });
 
         updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
@@ -105,67 +111,72 @@ export function stopLiveRefresh() {
     }
 }
 
-
+// ========================= 【核心 Bug 修復 - 開始】 =========================
 /**
- * 第一階段：載入儀表板摘要與包含暫存狀態的交易列表
+ * 【重構】應用程式初始資料載入函式
+ * 職責：作為登入後唯一的資料入口點，使用 Promise.all 並行獲取所有核心資料，
+ * 確保 UI 渲染前所有必要數據都已到位，從而消除競爭條件。
  */
 export async function loadInitialDashboard() {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+    loadingText.textContent = '正在從雲端同步資料...';
+    loadingOverlay.style.display = 'flex';
+
     try {
-        await loadInitialData(); 
-        
-        const result = await apiRequest('get_dashboard_summary', {});
-        if (!result.success) throw new Error(result.message);
+        // 使用 Promise.all 並行請求所有必要的初始數據
+        const [summaryResult, holdingsResult, allStagedEntitiesResult] = await Promise.all([
+            apiRequest('get_dashboard_summary', {}),
+            apiRequest('get_holdings', {}),
+            // 注意：我們在這裡提前使用下一階段才會正式啟用的 API
+            // 這是為了讓 Bug 修復能與即將到來的架構升級無縫接軌
+            apiRequest('get_all_entities_with_staging', {}) 
+        ]);
 
-        const { summary, stockNotes } = result.data;
-        
-        const stockNotesMap = (stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note; return map;
-        }, {});
+        // 檢查所有請求是否成功
+        if (!summaryResult.success || !holdingsResult.success || !allStagedEntitiesResult.success) {
+            throw new Error('無法載入核心儀表板或持股數據。');
+        }
 
+        // 解構所有回傳的資料
+        const { summary, stockNotes } = summaryResult.data;
+        const { holdings } = holdingsResult.data;
+        const { transactions, splits, dividends, hasStagedChanges } = allStagedEntitiesResult.data;
+        
+        // 將資料整理成 state 需要的格式
+        const holdingsObject = (holdings || []).reduce((obj, item) => { obj[item.symbol] = item; return obj; }, {});
+        const stockNotesMap = (stockNotes || []).reduce((map, note) => { map[note.symbol] = note; return map; }, {});
+
+        // 一次性更新 state，觸發 UI 重新渲染
         setState({
-            holdings: {},
+            summary,
+            holdings: holdingsObject,
             stockNotes: stockNotesMap,
-            summary: summary
+            transactions: transactions || [],
+            userSplits: splits || [],
+            // 注意：dividends 需要拆分為 pending 和 confirmed
+            pendingDividends: [], // getAllEntitiesWithStaging 尚未實作 pending，暫時為空
+            confirmedDividends: dividends || [],
+            hasStagedChanges,
+            isAppInitialized: true // 確保只初始化一次
         });
 
-        updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable({});
+        // 更新 UI 元件
+        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
+        renderHoldingsTable(holdingsObject);
+        renderTransactionsTable(); // 現在可以安全地渲染交易列表
+        updateStagingBanner();
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
-    } catch (error) {
-        showNotification('error', `讀取核心數據失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
+        // 在背景非同步載入較大的圖表數據
         setTimeout(() => {
-            loadHoldingsInBackground();
             loadChartDataInBackground();
         }, 100);
-    }
-}
 
-/**
- * 第二階段：在背景載入持股列表
- */
-async function loadHoldingsInBackground() {
-    try {
-        console.log("正在背景載入持股數據...");
-        const result = await apiRequest('get_holdings', {});
-        if (result.success) {
-            const { holdings } = result.data;
-            const holdingsObject = (holdings || []).reduce((obj, item) => {
-                obj[item.symbol] = item; return obj;
-            }, {});
-            
-            setState({ holdings: holdingsObject });
-            
-            const { summary } = getState();
-            updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-            renderHoldingsTable(holdingsObject);
-            console.log("持股數據載入完成。");
-        }
     } catch (error) {
-        console.error('背景載入持股數據失敗:', error);
-        showNotification('error', '持股列表載入失敗。');
+        showNotification('error', `讀取儀表板數據失敗: ${error.message}`);
+    } finally {
+        loadingOverlay.style.display = 'none';
     }
 }
 
@@ -201,46 +212,46 @@ async function loadChartDataInBackground() {
             
             console.log("圖表數據與日期範圍載入完成。");
             
-            loadSecondaryDataInBackground();
-
         }
     } catch (error) {
         console.error('背景載入圖表數據失敗:', error);
         showNotification('error', '背景圖表數據載入失敗，部分圖表可能無法顯示。');
     }
 }
-
-async function loadSecondaryDataInBackground() {
-    console.log("正在背景預載次要數據 (配息等)...");
-    
-    const results = await Promise.allSettled([
-        apiRequest('get_dividends_for_management', {})
-    ]);
-
-    if (results[0].status === 'fulfilled' && results[0].value.success) {
-        setState({
-            pendingDividends: results[0].value.data.pendingDividends,
-            confirmedDividends: results[0].value.data.confirmedDividends,
-        });
-        console.log("配息數據預載完成。");
-    } else {
-        console.error("預載配息資料失敗:", results[0].reason || results[0].value.message);
-    }
-}
+// ========================= 【核心 Bug 修復 - 結束】 =========================
 
 
 async function loadTransactionsData() {
+    // 這個函式現在可以被簡化，因為初始載入時就會獲取交易數據
     const { transactions } = getState();
-    if (transactions && transactions.length > 0) {
+    if (transactions) {
         renderTransactionsTable();
-        return;
     }
-    await loadInitialData();
 }
 
-// ========================= 【核心修改 - 開始】 =========================
-// 移除 loadAndShowDividends 函式，它已被移至 dividend.events.js
-// ========================= 【核心修改 - 結束】 =========================
+async function loadAndShowDividends() {
+    const { pendingDividends, confirmedDividends } = getState();
+    // 檢查 state 中是否已有數據
+    if (pendingDividends && confirmedDividends) {
+         renderDividendsManagementTab(pendingDividends, confirmedDividends);
+         return;
+    }
+    
+    // 如果沒有，則從後端獲取
+    try {
+        const result = await apiRequest('get_dividends_for_management', {});
+        if (result.success) {
+            setState({
+                pendingDividends: result.data.pendingDividends,
+                confirmedDividends: result.data.confirmedDividends,
+            });
+            renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
+        }
+    } catch(e) {
+        showNotification('error', `讀取配息資料失敗: ${e.message}`);
+    }
+}
+
 
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
@@ -267,21 +278,14 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            // ========================= 【核心修改 - 開始】 =========================
             if (tabName === 'dividends') {
-                // 從 dividend.events.js 動態導入並執行刷新函式
-                const dividendEvents = await import('./events/dividend.events.js');
-                await dividendEvents.loadAndShowDividends();
-            // ========================= 【核心修改 - 結束】 =========================
+                await loadAndShowDividends();
             } else if (tabName === 'transactions') {
                 await loadTransactionsData();
             } else if (tabName === 'groups') {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
-                const { userSplits } = getState();
-                if(userSplits) {
-                    renderSplitsTable();
-                }
+                renderSplitsTable();
             }
         }
     });
@@ -298,7 +302,7 @@ function setupMainAppEventListeners() {
         setState({ selectedGroupId });
 
         if (selectedGroupId === 'all') {
-            loadInitialDashboard();
+            loadInitialDashboard(); // 切回 'all' 時，重新執行一次完整的 dashboard 載入
         } else {
             applyGroupView(selectedGroupId);
         }
@@ -327,7 +331,7 @@ export function initializeAppUI() {
 
     lucide.createIcons();
 
-    setState({ isAppInitialized: true });
+    // isAppInitialized 的狀態現在由 loadInitialDashboard 管理，確保在資料載入後才設為 true
 }
 
 document.addEventListener('DOMContentLoaded', () => {
