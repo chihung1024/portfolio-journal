@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v6.0 - Global Cache Invalidation)
+# == Python 每日增量更新腳本 (v7.0 - Precision Cache Invalidation)
 # =========================================================================================
 
 import os
@@ -175,9 +175,11 @@ def fetch_intraday_prices(symbols):
     
     return latest_prices
 
-
+# ========================= 【核心修改 - 開始】 =========================
 def fetch_and_append_market_data(all_symbols, session, batch_size=10):
-    if not all_symbols: return
+    if not all_symbols:
+        return set(), set() # 回傳空的集合
+
     print("\n--- 【歷史數據階段】開始為所有標的更新每日歷史收盤價 ---")
     
     placeholders_all = ','.join('?' for _ in all_symbols)
@@ -188,10 +190,9 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
     today_str = datetime.now().strftime('%Y-%m-%d')
     symbol_batches = [all_symbols[i:i + batch_size] for i in range(0, len(all_symbols), batch_size)]
     
-    # ========================= 【核心修正 - 開始】 =========================
-    # 在所有價格更新前，先設定一個旗標，追蹤是否有任何價格數據被成功寫入
-    any_price_data_updated = False
-    # ========================= 【核心修正 - 結束】 =========================
+    # 建立兩個集合，用來追蹤哪些股票和匯率被成功更新
+    updated_stock_symbols = set()
+    updated_fx_symbols = set()
 
     for i, batch in enumerate(symbol_batches):
         print(f"\n--- 正在處理歷史數據批次 {i+1}/{len(symbol_batches)}: {batch} ---")
@@ -265,7 +266,12 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
         
         if db_ops_upsert and d1_batch(db_ops_upsert, api_key=D1_API_KEY):
             print(f"成功！ 批次 {batch} 的歷史數據已安全地更新/寫入。")
-            any_price_data_updated = True # 【核心修正】標記有數據更新
+            for sym in symbols_successfully_processed:
+                if "=" in sym:
+                    updated_fx_symbols.add(sym)
+                else:
+                    updated_stock_symbols.add(sym)
+            
             coverage_updates = []
             for symbol in symbols_successfully_processed:
                 if first_tx_dates.get(symbol):
@@ -299,25 +305,89 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
                 if intraday_db_ops:
                     if d1_batch(intraday_db_ops, api_key=D1_API_KEY):
                         print("資料庫批次寫入請求已成功發送！")
-                        any_price_data_updated = True # 【核心修正】標記有數據更新
+                        for sym in latest_prices_info.keys():
+                            if "=" in sym:
+                                updated_fx_symbols.add(sym.upper())
+                            else:
+                                updated_stock_symbols.add(sym.upper())
                     else:
                         print("FATAL: 資料庫批次寫入請求失敗！")
     else:
         print("\n--- 【即時更新階段】跳過：市場休市中。 ---")
         
-    # ========================= 【核心修正 - 開始】 =========================
-    # 只有在確定有任何價格數據（歷史或即時）被成功寫入資料庫後，才執行全局快取失效
-    if any_price_data_updated:
-        print("\n--- 【全局快取失效階段】偵測到價格數據更新，正在將所有群組標記為 dirty... ---")
-        invalidate_sql = "UPDATE groups SET is_dirty = 1"
-        if d1_batch([{"sql": invalidate_sql, "params": []}], api_key=D1_API_KEY):
-            print("成功！所有自訂群組的快取都已被標記為需要重新計算。")
-        else:
-            print("FATAL: 全局快取失效操作失敗！")
-    else:
-        print("\n--- 【全局快取失效階段】跳過：未偵測到任何價格數據更新。 ---")
-    # ========================= 【核心修正 - 結束】 =========================
+    return updated_stock_symbols, updated_fx_symbols
 
+
+def invalidate_caches_precisely(updated_stocks, updated_fx):
+    """根據更新的股票和匯率，精準地將相關的群組標記為 dirty"""
+    if not updated_stocks and not updated_fx:
+        print("\n--- 【精準快取失效階段】跳過：未偵測到任何價格數據更新。 ---")
+        return
+
+    print("\n--- 【精準快取失效階段】開始！---")
+    fx_to_currency = {"TWD=X": "USD", "HKDTWD=X": "HKD", "JPYTWD=X": "JPY"}
+    
+    group_ids_to_invalidate = set()
+
+    # 1. 處理因股票價格更新而需要失效的群組
+    if updated_stocks:
+        print(f"正在處理 {len(updated_stocks)} 筆股票更新: {list(updated_stocks)}")
+        placeholders = ','.join('?' for _ in updated_stocks)
+        sql = f"""
+            SELECT DISTINCT g.group_id 
+            FROM group_transaction_inclusions g 
+            JOIN transactions t ON g.transaction_id = t.id 
+            WHERE t.symbol IN ({placeholders})
+        """
+        results = d1_query(sql, list(updated_stocks), api_key=D1_API_KEY)
+        if results:
+            for row in results:
+                group_ids_to_invalidate.add(row['group_id'])
+            print(f"找到 {len(results)} 個因股票更新需失效的群組。")
+
+    # 2. 處理因匯率更新而需要失效的群組
+    if updated_fx:
+        print(f"正在處理 {len(updated_fx)} 筆匯率更新: {list(updated_fx)}")
+        affected_currencies = [fx_to_currency[fx] for fx in updated_fx if fx in fx_to_currency]
+        if affected_currencies:
+            placeholders = ','.join('?' for _ in affected_currencies)
+            sql = f"""
+                SELECT DISTINCT g.group_id 
+                FROM group_transaction_inclusions g 
+                JOIN transactions t ON g.transaction_id = t.id 
+                WHERE t.currency IN ({placeholders})
+            """
+            results = d1_query(sql, affected_currencies, api_key=D1_API_KEY)
+            if results:
+                initial_count = len(group_ids_to_invalidate)
+                for row in results:
+                    group_ids_to_invalidate.add(row['group_id'])
+                print(f"找到 {len(group_ids_to_invalidate) - initial_count} 個新的因匯率更新需失效的群組。")
+
+    # 3. 執行最終的批次更新
+    if group_ids_to_invalidate:
+        print(f"總計將有 {len(group_ids_to_invalidate)} 個獨立群組被標記為 dirty。")
+        group_id_list = list(group_ids_to_invalidate)
+        
+        # D1 的 SQL 參數數量有限制，需要分批處理
+        chunk_size = 100 
+        statements = []
+        for i in range(0, len(group_id_list), chunk_size):
+            chunk = group_id_list[i:i + chunk_size]
+            placeholders = ','.join('?' for _ in chunk)
+            statements.append({
+                "sql": f"UPDATE groups SET is_dirty = 1 WHERE id IN ({placeholders})",
+                "params": chunk
+            })
+
+        if d1_batch(statements, api_key=D1_API_KEY):
+            print("成功！所有受影響的自訂群組快取都已被精準標記為需要重新計算。")
+        else:
+            print("FATAL: 精準快取失效操作失敗！")
+    else:
+        print("沒有找到任何需要標記為 dirty 的群組。")
+
+# ========================= 【核心修改 - 結束】 =========================
 
 def trigger_recalculations(uids):
     if not uids: print("沒有找到需要觸發重算的使用者。"); return
@@ -338,15 +408,21 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v6.0 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v7.0 - Precision Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
     
     if all_symbols:
         print(f"將為所有 {len(all_symbols)} 個標的檢查歷史數據並更新: {all_symbols}")
-        fetch_and_append_market_data(all_symbols, session)
-        if all_uids: trigger_recalculations(all_uids)
+        # 【修改】接收回傳的已更新標的
+        updated_stocks, updated_fx = fetch_and_append_market_data(all_symbols, session)
+        
+        # 【修改】執行精準快取失效
+        invalidate_caches_precisely(updated_stocks, updated_fx)
+
+        if all_uids: 
+            trigger_recalculations(all_uids)
     else:
         print("資料庫中沒有找到任何需要處理的標的。")
     print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
