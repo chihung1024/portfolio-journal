@@ -1,3 +1,7 @@
+// =========================================================================================
+// == 檔案：functions/schemas.js (v2.0 - Staging Area Expansion)
+// =========================================================================================
+
 const { z } = require("zod");
 
 const transactionSchema = z.object({
@@ -33,7 +37,16 @@ const userDividendSchema = z.object({
 // ========================= 【核心修改 - 開始】 =========================
 const stagedChangeSchema = z.object({
     op: z.enum(['CREATE', 'UPDATE', 'DELETE']),
-    entity: z.enum(['transaction', 'split', 'dividend']), // 初始階段先專注於交易
+    // 擴充 entity 枚舉，使其能處理所有類型的 CUD 操作
+    entity: z.enum([
+        'transaction', 
+        'split', 
+        'dividend',
+        'group',
+        'group_membership', // 用於處理單一交易與群組的關係變更
+        'note',
+        'benchmark'
+    ]),
     payload: z.any() // 具體驗證將在 handler 中根據 op 和 entity 進行
 });
 // ========================= 【核心修改 - 結束】 =========================
@@ -43,5 +56,5 @@ module.exports = {
     transactionSchema,
     splitSchema,
     userDividendSchema,
-    stagedChangeSchema, // 導出新的 schema
+    stagedChangeSchema,
 };
