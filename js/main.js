@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.0.0 - Staging Area Integration
+// == 主程式進入點 (main.js) v5.1.0 - Fix Circular Dependency
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -19,9 +19,7 @@ import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
 import { getDateRangeForPreset } from './ui/utils.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { initializeStagingEventListeners, updateStagingBanner } from './ui/components/stagingBanner.ui.js';
-// ========================= 【核心修改 - 結束】 =========================
 
 
 // --- Event Module Imports ---
@@ -109,14 +107,12 @@ export function stopLiveRefresh() {
 
 
 /**
- * 【修改】第一階段：載入儀表板摘要與包含暫存狀態的交易列表
+ * 第一階段：載入儀表板摘要與包含暫存狀態的交易列表
  */
 export async function loadInitialDashboard() {
     try {
-        // 【修改】首先，呼叫新的輕量級 API 獲取交易列表和暫存狀態
         await loadInitialData(); 
         
-        // 然後，呼叫 API 獲取儀表板摘要
         const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
@@ -132,7 +128,6 @@ export async function loadInitialDashboard() {
             summary: summary
         });
 
-        // 更新儀表板，並顯示一個空的持股表格
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable({});
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
@@ -141,7 +136,6 @@ export async function loadInitialDashboard() {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
-        // 啟動後續數據的背景載入
         setTimeout(() => {
             loadHoldingsInBackground();
             loadChartDataInBackground();
@@ -219,7 +213,6 @@ async function loadChartDataInBackground() {
 async function loadSecondaryDataInBackground() {
     console.log("正在背景預載次要數據 (配息等)...");
     
-    // 【修改】交易紀錄已在初始時載入，此處不再需要
     const results = await Promise.allSettled([
         apiRequest('get_dividends_for_management', {})
     ]);
@@ -237,14 +230,12 @@ async function loadSecondaryDataInBackground() {
 
 
 async function loadTransactionsData() {
-    // 此函式現在主要用於確保在切換到交易分頁時數據存在，
-    // 但大部分情況下，數據已在初始時由 loadInitialData 載入。
     const { transactions } = getState();
     if (transactions && transactions.length > 0) {
         renderTransactionsTable();
         return;
     }
-    await loadInitialData(); // 如果沒有數據，則重新執行初始載入流程
+    await loadInitialData();
 }
 
 export async function loadAndShowDividends() {
@@ -322,11 +313,20 @@ function setupMainAppEventListeners() {
 
     const groupSelector = document.getElementById('group-selector');
 
+    // ========================= 【核心修改 - 開始】 =========================
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
-        applyGroupView(selectedGroupId); // applyGroupView 內部已處理 'all' 的情況
+
+        if (selectedGroupId === 'all') {
+            // 切換回「全部股票」時，呼叫初始載入函式
+            loadInitialDashboard();
+        } else {
+            // 切換到特定群組時，呼叫群組計算函式
+            applyGroupView(selectedGroupId);
+        }
     });
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 export function initializeAppUI() {
@@ -347,9 +347,7 @@ export function initializeAppUI() {
     initializeDividendEventListeners();
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
-    // ========================= 【核心修改 - 開始】 =========================
-    initializeStagingEventListeners(); // 初始化暫存區橫幅的事件監聽
-    // ========================= 【核心修改 - 結束】 =========================
+    initializeStagingEventListeners();
 
     lucide.createIcons();
 
