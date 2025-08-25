@@ -1,5 +1,5 @@
 // =========================================================================================
-// == App Core Control (app.js) v1.6 - Fix Initial Render
+// == App Core Control (app.js) v1.8 - Race Condition Fix
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -32,28 +32,23 @@ export async function refreshAllStagedViews() {
             apiRequest('get_transactions_with_staging'),
             apiRequest('get_dividends_with_staging'),
             apiRequest('get_splits_with_staging'),
-            apiRequest('get_groups_with_staging'),
-            apiRequest('get_notes_with_staging')
+            apiRequest('get_groups_with_staging')
         ]);
 
-        const [transactionsResult, dividendsResult, splitsResult, groupsResult, notesResult] = results;
+        const [transactionsResult, dividendsResult, splitsResult, groupsResult] = results;
         const hasStagedChanges = results.some(r => r.success && r.data.hasStagedChanges);
 
-        const newStockNotes = notesResult.success ? (notesResult.data.notes || []).reduce((map, note) => {
-            map[note.symbol] = note; return map;
-        }, {}) : getState().stockNotes;
-
-        setState({
-            transactions: transactionsResult.success ? transactionsResult.data.transactions : getState().transactions,
-            confirmedDividends: dividendsResult.success ? dividendsResult.data.dividends : getState().confirmedDividends,
-            userSplits: splitsResult.success ? splitsResult.data.splits : getState().userSplits,
-            groups: groupsResult.success ? groupsResult.data.groups : getState().groups,
-            stockNotes: newStockNotes,
+        // ========================= 【核心修正 - 開始】 =========================
+        setState(prevState => ({
+            ...prevState,
+            transactions: transactionsResult.success ? transactionsResult.data.transactions : prevState.transactions,
+            confirmedDividends: dividendsResult.success ? dividendsResult.data.dividends : prevState.confirmedDividends,
+            userSplits: splitsResult.success ? splitsResult.data.splits : prevState.userSplits,
+            groups: groupsResult.success ? groupsResult.data.groups : prevState.groups,
             hasStagedChanges
-        });
+        }));
+        // ========================= 【核心修正 - 結束】 =========================
 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 根據當前激活的 Tab 來決定渲染哪個列表，避免操作隱藏的 DOM
         const activeTab = document.querySelector('.tab-item.active')?.dataset.tab || 'dashboard';
         
         if (activeTab === 'transactions') renderTransactionsTable();
@@ -61,10 +56,9 @@ export async function refreshAllStagedViews() {
         if (activeTab === 'splits') renderSplitsTable();
         if (activeTab === 'groups') renderGroupsTab();
         
-        // Dashboard 和 Holdings 總是可見的，所以總是渲染
         renderHoldingsTable(getState().holdings);
+        
         updateStagingBanner();
-        // ========================= 【核心修改 - 結束】 =========================
 
     } catch (error) {
         showNotification('error', `刷新暫存視圖失敗: ${error.message}`);
@@ -79,12 +73,16 @@ async function loadChartDataInBackground() {
     try {
         const result = await apiRequest('get_chart_data', {});
         if (result.success) {
-            setState({
+            // ========================= 【核心修正 - 開始】 =========================
+            setState(prevState => ({
+                ...prevState,
                 portfolioHistory: result.data.portfolioHistory || {},
                 twrHistory: result.data.twrHistory || {},
                 benchmarkHistory: result.data.benchmarkHistory || {},
                 netProfitHistory: result.data.netProfitHistory || {}
-            });
+            }));
+            // ========================= 【核心修正 - 結束】 =========================
+            
             const { summary } = getState();
             updateAssetChart();
             updateTwrChart(summary?.benchmarkSymbol || 'SPY');
@@ -110,8 +108,7 @@ export async function loadInitialDashboard() {
                 apiRequest('get_transactions_with_staging'),
                 apiRequest('get_dividends_with_staging'),
                 apiRequest('get_splits_with_staging'),
-                apiRequest('get_groups_with_staging'),
-                apiRequest('get_notes_with_staging')
+                apiRequest('get_groups_with_staging')
             ])
         ]);
 
@@ -121,13 +118,17 @@ export async function loadInitialDashboard() {
 
         const { summary } = summaryResult.data;
         const { holdings } = holdingsResult.data;
-        const [txs, divs, splits, groups, notes] = stagedDataResult;
+        const [txs, divs, splits, groups] = stagedDataResult;
+        
         const hasStagedChanges = stagedDataResult.some(r => r.success && r.data.hasStagedChanges);
 
         const holdingsObject = (holdings || []).reduce((obj, item) => { obj[item.symbol] = item; return obj; }, {});
-        const stockNotes = notes.success ? (notes.data.notes || []).reduce((map, note) => { map[note.symbol] = note; return map; }, {}) : {};
+        
+        const stockNotes = getState().stockNotes || {};
 
-        setState({
+        // ========================= 【核心修正 - 開始】 =========================
+        setState(prevState => ({
+            ...prevState,
             summary,
             holdings: holdingsObject,
             stockNotes,
@@ -137,16 +138,13 @@ export async function loadInitialDashboard() {
             groups: groups.success ? groups.data.groups : [],
             hasStagedChanges,
             pendingDividends: divs.success ? divs.data.pendingDividends : []
-        });
+        }));
+        // ========================= 【核心修正 - 結束】 =========================
 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在初次載入時，只渲染儀表板相關的、確定可見的元件
         updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable(holdingsObject);
         updateStagingBanner();
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
-        // 其他分頁的渲染，交給 main.js 中的頁籤點擊事件處理器來觸發
-        // ========================= 【核心修改 - 結束】 =========================
 
         setTimeout(() => {
             loadChartDataInBackground();
@@ -170,10 +168,13 @@ export async function loadAndShowDividends() {
     try {
         const result = await apiRequest('get_dividends_for_management', {});
         if (result.success) {
-            setState({
+            // ========================= 【核心修正 - 開始】 =========================
+            setState(prevState => ({
+                ...prevState,
                 pendingDividends: result.data.pendingDividends,
                 confirmedDividends: result.data.confirmedDividends,
-            });
+            }));
+            // ========================= 【核心修正 - 結束】 =========================
             renderDividendsManagementTab(result.data.pendingDividends, result.data.confirmedDividends);
         } else {
             throw new Error(result.message);
@@ -202,5 +203,7 @@ export function initializeAppUI() {
     initializeGroupEventListeners();
     initializeStagingEventListeners();
     lucide.createIcons();
-    setState({ isAppInitialized: true });
+    // ========================= 【核心修正 - 開始】 =========================
+    setState(prevState => ({ ...prevState, isAppInitialized: true }));
+    // ========================= 【核心修正 - 結束】 =========================
 }
