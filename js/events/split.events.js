@@ -1,24 +1,47 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v2.1 - 支援鍵盤操作
+// == 拆股事件處理模組 (split.events.js) v3.2 - Final Cleanup
 // =========================================================================================
 
-import { executeApiAction } from '../api.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
+import { apiRequest } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
+// 【修改】導入職責更清晰的全局刷新函式
+import { refreshAllStagedViews } from '../main.js';
 
 // --- Private Functions ---
 
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這個拆股事件嗎？', () => {
-        executeApiAction('delete_split', { splitId }, {
-            loadingText: '正在刪除拆股事件...',
-            successMessage: '拆股事件已成功刪除！'
-        }).catch(error => {
-            console.error("刪除拆股事件最終失敗:", error);
-        });
+
+    showConfirm('此拆股事件將被標記為待刪除，在您點擊「全部提交」後才會真正刪除。確定嗎？', async () => {
+        const change = {
+            op: 'DELETE',
+            entity: 'split',
+            payload: { id: splitId }
+        };
+        try {
+            const result = await apiRequest('stage_change', change);
+            if (result.success) {
+                showNotification('info', `刪除拆股操作已加入暫存區。`);
+                await refreshAllStagedViews(); // 【修改】統一呼叫
+            }
+        } catch (error) {
+            showNotification('error', `刪除失敗: ${error.message}`);
+        }
     });
+}
+
+async function handleRevertDelete(button) {
+    const changeId = button.dataset.changeId;
+    try {
+        const result = await apiRequest('revert_staged_change', { changeId });
+        if(result.success) {
+            showNotification('success', '刪除操作已成功復原。');
+            await refreshAllStagedViews(); // 【修改】統一呼叫
+        }
+    } catch (error) {
+        showNotification('error', `復原失敗: ${error.message}`);
+    }
 }
 
 async function handleSplitFormSubmit(e) {
@@ -37,32 +60,43 @@ async function handleSplitFormSubmit(e) {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('split-modal');
     
-    executeApiAction('add_split', splitData, {
-        loadingText: '正在新增拆股事件...',
-        successMessage: '拆股事件已成功新增！'
-    }).catch(error => {
-        console.error("新增拆股事件最終失敗:", error);
-    });
+    const change = {
+        op: 'CREATE',
+        entity: 'split',
+        payload: splitData
+    };
+    try {
+        const result = await apiRequest('stage_change', change);
+        if (result.success) {
+            showNotification('info', `新增拆股操作已加入暫存區。`);
+            await refreshAllStagedViews(); // 【修改】統一呼叫
+        }
+    } catch (error) {
+        showNotification('error', `新增失敗: ${error.message}`);
+    }
 }
 
 // --- Public Function ---
 
 export function initializeSplitEventListeners() {
-    // 【修改】將事件監聽器綁定到更具體的父元素上
     const splitsTab = document.getElementById('splits-tab');
     if (splitsTab) {
         splitsTab.addEventListener('click', async (e) => { 
-            // 監聽 "新增拆股" 按鈕
             const addBtn = e.target.closest('#add-split-btn');
             if (addBtn) {
                 const { openModal } = await import('../ui/modals.js');
                 openModal('split-modal');
                 return;
             }
-            // 監聽 "刪除" 按鈕
             const deleteBtn = e.target.closest('.delete-split-btn');
             if(deleteBtn) {
                 handleDeleteSplit(deleteBtn);
+                return;
+            }
+            const revertBtn = e.target.closest('.revert-delete-split-btn');
+            if (revertBtn) {
+                handleRevertDelete(revertBtn);
+                return;
             }
         });
     }
@@ -73,13 +107,10 @@ export function initializeSplitEventListeners() {
         closeModal('split-modal');
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
-    // 為拆股表單增加 Enter 鍵監聽
     document.getElementById('split-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             document.getElementById('save-split-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 }

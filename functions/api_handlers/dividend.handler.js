@@ -1,15 +1,17 @@
 // =========================================================================================
-// == 股利 Action 處理模組 (dividend.handler.js) v2.0 - 整合群組快取失效邏輯
+// == 股利 Action 處理模組 (dividend.handler.js) v3.0 - Refactored for Staging
+// == 職責：提供股利相關的讀取 API 與輔助函式。CUD 操作已移至 staging.handler。
 // =========================================================================================
 
-const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
-const { performRecalculation } = require('../performRecalculation');
-const { userDividendSchema } = require('../schemas');
+// 【移除】不再需要 uuid, performRecalculation 和 schemas
+// const { v4: uuidv4 } = require('uuid');
+// const { performRecalculation } = require('../performRecalculation');
+// const { userDividendSchema } = require('../schemas');
 
-// ========================= 【核心修改 - 開始】 =========================
+
 /**
- * 【新增輔助函式】根據股票代碼(們)，將所有包含這些股票的群組標記為 "dirty"。
+ * 【保留】根據股票代碼(們)，將所有包含這些股票的群組標記為 "dirty"。
  * @param {string} uid - 使用者 ID
  * @param {string|string[]} symbols - 單一或多個發生變更的股票代碼
  */
@@ -45,11 +47,10 @@ async function markAssociatedGroupsAsDirtyBySymbol(uid, symbols) {
         }
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
- * 獲取待確認及已確認的股利列表
+ * 【保留】獲取待確認及已確認的股利列表 (唯讀操作)
  */
 exports.getDividendsForManagement = async (uid, res) => {
     const [pendingDividends, confirmedDividends] = await Promise.all([
@@ -66,109 +67,29 @@ exports.getDividendsForManagement = async (uid, res) => {
     });
 };
 
-/**
- * 儲存（新增或編輯）一筆使用者確認的股利
- */
-exports.saveUserDividend = async (uid, data, res) => {
-    const parsedData = userDividendSchema.parse(data);
-    
-    await d1Client.query(
-        'DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?',
-        [uid, parsedData.symbol, parsedData.ex_dividend_date]
-    );
+// ========================= 【核心修改 - 開始】 =========================
 
-    const { id, ...divData } = parsedData;
-    const dividendId = id || uuidv4();
+// 【移除】saveUserDividend 函式
+// 理由：新增/編輯股利的操作現在由前端發起 'stage_change' API，
+//       並由 staging.handler.js 的 'commitAllChanges' 統一處理。
+/*
+exports.saveUserDividend = async (uid, data, res) => { ... };
+*/
 
-    if (id) {
-        await d1Client.query(
-            `UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?`,
-            [divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, id, uid]
-        );
-    } else {
-        await d1Client.query(
-            `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`,
-            [dividendId, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]
-        );
-    }
+// 【移除】bulkConfirmAllDividends 函式
+// 理由：批次確認的操作也將由 staging area 統一管理。
+/*
+exports.bulkConfirmAllDividends = async (uid, data, res) => { ... };
+*/
 
-    // 【新增】將與此股票相關的群組標記為 dirty
-    await markAssociatedGroupsAsDirtyBySymbol(uid, parsedData.symbol);
+// 【移除】deleteUserDividend 函式
+// 理由：刪除股利的操作也將由 staging area 統一管理。
+/*
+exports.deleteUserDividend = async (uid, data, res) => { ... };
+*/
 
-    res.status(200).send({ success: true, message: '配息紀錄已儲存，後端將在背景更新數據。' });
 
-    performRecalculation(uid, null, false).catch(err => {
-        console.error(`[${uid}] UID 的背景儲存/編輯配息重算失敗:`, err);
-    });
+// 導出需要保留的函式
+module.exports.markAssociatedGroupsAsDirtyBySymbol = markAssociatedGroupsAsDirtyBySymbol;
 
-    return;
-};
-
-/**
- * 批次確認所有待處理股利
- */
-exports.bulkConfirmAllDividends = async (uid, data, res) => {
-    const pendingDividends = data.pendingDividends || [];
-    if (pendingDividends.length === 0) {
-        return res.status(200).send({ success: true, message: '沒有需要批次確認的配息。' });
-    }
-
-    const dbOps = [];
-    const symbolsToInvalidate = new Set();
-    const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
-
-    for (const pending of pendingDividends) {
-        symbolsToInvalidate.add(pending.symbol);
-        const payDateStr = pending.ex_dividend_date.split('T')[0];
-        const taxRate = isTwStock(pending.symbol) ? 0.0 : 0.30;
-        const totalAmount = pending.amount_per_share * pending.quantity_at_ex_date * (1 - taxRate);
-        dbOps.push({
-            sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', '批次確認')`,
-            params: [
-                uuidv4(), uid, pending.symbol, pending.ex_dividend_date,
-                payDateStr, pending.amount_per_share, pending.quantity_at_ex_date,
-                totalAmount, taxRate * 100, pending.currency
-            ]
-        });
-    }
-
-    if (dbOps.length > 0) {
-        await d1Client.batch(dbOps);
-        
-        // 【新增】將所有涉及的股票相關群組一次性標記為 dirty
-        await markAssociatedGroupsAsDirtyBySymbol(uid, Array.from(symbolsToInvalidate));
-
-        await performRecalculation(uid, null, false);
-    }
-
-    return res.status(200).send({ success: true, message: `成功批次確認 ${dbOps.length} 筆配息紀錄。` });
-};
-
-/**
- * 刪除一筆已確認的股利紀錄
- */
-exports.deleteUserDividend = async (uid, data, res) => {
-    const dividendResult = await d1Client.query(
-        'SELECT symbol FROM user_dividends WHERE id = ? AND uid = ?',
-        [data.dividendId, uid]
-    );
-
-    if (dividendResult.length > 0) {
-        const symbol = dividendResult[0].symbol;
-        // 【新增】在刪除前，先將與此股票相關的群組標記為 dirty
-        await markAssociatedGroupsAsDirtyBySymbol(uid, symbol);
-    }
-    
-    await d1Client.query(
-        'DELETE FROM user_dividends WHERE id = ? AND uid = ?',
-        [data.dividendId, uid]
-    );
-    
-    res.status(200).send({ success: true, message: '配息紀錄已刪除，後端將在背景更新數據。' });
-
-    performRecalculation(uid, null, false).catch(err => {
-        console.error(`[${uid}] UID 的背景刪除配息重算失敗:`, err);
-    });
-
-    return;
-};
+// ========================= 【核心修改 - 結束】 =========================
