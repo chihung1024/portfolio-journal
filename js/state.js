@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.1.0 - Staging Area Support
+// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
 // =========================================================================================
 
 // 應用程式的核心狀態
 let state = {
     currentUserId: null,
-    // transactions 陣列現在可能包含帶有 status 屬性的物件 (e.g., 'COMMITTED', 'STAGED_CREATE')
     transactions: [],
     userSplits: [],
     stockNotes: {},
@@ -19,12 +18,9 @@ let state = {
     netProfitChart: null, 
     confirmCallback: null,
 
-    // ========================= 【核心修改 - 開始】 =========================
-    hasStagedChanges: false, // 是否有未提交的變更
-    isCommitting: false,     // 是否正在提交中
-    // ========================= 【核心修改 - 結束】 =========================
+    isSyncing: false,
 
-    // 用於引導式流程的暫存數據 (維持不變)
+    // 【新增】用於引導式流程的暫存數據
     tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
     tempMembershipEdit: null, // 儲存 { txId }
 

@@ -1,16 +1,15 @@
 // =========================================================================================
-// == 拆股 Action 處理模組 (split.handler.js) v3.0 - Refactored for Staging
-// == 職責：提供拆股相關的輔助函式。直接的 CUD 操作已移至 staging.handler。
+// == 拆股 Action 處理模組 (split.handler.js) v2.0 - 整合群組快取失效邏輯
 // =========================================================================================
 
+const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
-// 【移除】不再需要 performRecalculation 和 schemas
-// const { performRecalculation } = require('../performRecalculation');
-// const { splitSchema } = require('../schemas');
+const { performRecalculation } = require('../performRecalculation');
+const { splitSchema } = require('../schemas');
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【保留】根據股票代碼，將所有包含該股票的群組標記為 "dirty"。
- * 此函式作為一個輔助工具，可能會在 staging.handler 中被調用以實現更精準的快取失效。
+ * 【新增輔助函式】根據股票代碼，將所有包含該股票的群組標記為 "dirty"。
  * @param {string} uid - 使用者 ID
  * @param {string} symbol - 發生變更的股票代碼
  */
@@ -42,25 +41,52 @@ async function markAssociatedGroupsAsDirtyBySymbol(uid, symbol) {
         }
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
-// ========================= 【核心修改 - 開始】 =========================
 
-// 【移除】addSplit 函式
-// 理由：新增拆股的操作現在由前端發起 'stage_change' API，
-//       並由 staging.handler.js 的 'commitAllChanges' 統一處理。
-/*
-exports.addSplit = async (uid, data, res) => { ... };
-*/
+/**
+ * 新增一筆拆股事件
+ */
+exports.addSplit = async (uid, data, res) => {
+    const splitData = splitSchema.parse(data);
+    const newSplitId = uuidv4();
 
-// 【移除】deleteSplit 函式
-// 理由：刪除拆股的操作現在也由 staging area 統一管理。
-/*
-exports.deleteSplit = async (uid, data, res) => { ... };
-*/
+    await d1Client.query(
+        `INSERT INTO splits (id, uid, date, symbol, ratio) VALUES (?,?,?,?,?)`,
+        [newSplitId, uid, splitData.date, splitData.symbol, splitData.ratio]
+    );
 
-// 導出需要保留的輔助函式
-module.exports = {
-    markAssociatedGroupsAsDirtyBySymbol
+    // 【新增】將與此股票相關的群組標記為 dirty
+    await markAssociatedGroupsAsDirtyBySymbol(uid, splitData.symbol);
+
+    await performRecalculation(uid, splitData.date, false);
+    return res.status(200).send({ success: true, message: '分割事件已新增。', splitId: newSplitId });
 };
 
-// ========================= 【核心修改 - 結束】 =========================
+/**
+ * 刪除一筆拆股事件
+ */
+exports.deleteSplit = async (uid, data, res) => {
+    const splitResult = await d1Client.query(
+        'SELECT date, symbol FROM splits WHERE id = ? AND uid = ?',
+        [data.splitId, uid]
+    );
+    
+    if (splitResult.length === 0) {
+        return res.status(404).send({ success: false, message: '找不到指定的拆股事件。'});
+    }
+
+    const splitDate = splitResult[0].date.split('T')[0];
+    const symbol = splitResult[0].symbol;
+
+    // 【新增】在刪除前，先將與此股票相關的群組標記為 dirty
+    await markAssociatedGroupsAsDirtyBySymbol(uid, symbol);
+
+    await d1Client.query(
+        'DELETE FROM splits WHERE id = ? AND uid = ?',
+        [data.splitId, uid]
+    );
+
+    await performRecalculation(uid, splitDate, false);
+    return res.status(200).send({ success: true, message: '分割事件已刪除。' });
+};
