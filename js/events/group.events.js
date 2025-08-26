@@ -1,16 +1,16 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.0.0 - 整合操作隊列)
+// == 檔案：js/events/group.events.js (v2.3 - 支援鍵盤操作)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { apiRequest } from '../api.js';
-import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
 
 /**
- * 載入所有群組並更新 UI (此函式主要用於初始載入)
+ * 載入所有群組並更新 UI
  */
 async function loadGroups() {
     try {
@@ -18,7 +18,7 @@ async function loadGroups() {
         if (result.success) {
             setState({ groups: result.data });
             renderGroupsTab();
-            updateGroupSelector();
+            updateGroupSelector(); // 更新頂部的全局選擇器
         }
     } catch (error) {
         showNotification('error', `讀取群組失敗: ${error.message}`);
@@ -43,7 +43,10 @@ function updateGroupSelector() {
         selector.appendChild(option);
     });
 
+    // 確保在群組被刪除或變更後，選擇器能正確地反映當前狀態
     selector.value = groups.some(g => g.id === currentValue) ? currentValue : 'all';
+    
+    // 【核心修改】移除對 #recalculate-group-btn 的操作，因為該按鈕已被刪除
 }
 
 /**
@@ -53,6 +56,7 @@ async function handleGroupFormSubmit(e) {
     e.preventDefault();
     const saveBtn = document.getElementById('save-group-btn');
     saveBtn.disabled = true;
+    saveBtn.textContent = '儲存中...';
 
     const selectedTransactionIds = Array.from(document.querySelectorAll('input.transaction-checkbox:checked'))
                                       .map(cb => cb.value);
@@ -67,24 +71,22 @@ async function handleGroupFormSubmit(e) {
     if (!groupData.name) {
         showNotification('error', '群組名稱為必填項。');
         saveBtn.disabled = false;
+        saveBtn.textContent = '儲存群組';
         return;
     }
-    
-    const { closeModal } = await import('../ui/modals.js');
-    closeModal('group-modal');
 
-    // 【核心修改】將操作加入隊列
-    const operation = groupData.id ? 'UPDATE' : 'CREATE';
-    const success = addToQueue(operation, 'group', groupData);
-
-    if(success) {
-        showNotification('info', `群組變更已暫存。點擊同步按鈕以儲存。`);
-        // 立即重新渲染 UI
-        renderGroupsTab();
-        updateGroupSelector();
+    try {
+        await apiRequest('save_group', groupData);
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('group-modal');
+        showNotification('success', '群組已成功儲存！');
+        await loadGroups();
+    } catch (error) {
+        showNotification('error', `儲存群組失敗: ${error.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '儲存群組';
     }
-    
-    saveBtn.disabled = false;
 }
 
 /**
@@ -97,15 +99,13 @@ async function handleDeleteGroup(button) {
     if (!group) return;
 
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm(`您確定要刪除群組 "${group.name}" 嗎？此操作將被暫存。`, () => {
-        // 【核心修改】將操作加入隊列
-        const success = addToQueue('DELETE', 'group', { groupId });
-        
-        if (success) {
-            showNotification('info', '群組已標記為刪除。點擊同步按鈕以儲存。');
-            // 立即重新渲染 UI
-            renderGroupsTab();
-            updateGroupSelector();
+    showConfirm(`您確定要刪除群組 "${group.name}" 嗎？此操作無法復原。`, async () => {
+        try {
+            await apiRequest('delete_group', { groupId });
+            showNotification('success', '群組已刪除。');
+            await loadGroups();
+        } catch (error) {
+            showNotification('error', `刪除群組失敗: ${error.message}`);
         }
     });
 }
@@ -133,6 +133,7 @@ export function initializeGroupEventListeners() {
             loadingOverlay.style.display = 'flex';
 
             try {
+                // 【核心修改】呼叫新的 API 來獲取完整的群組詳情
                 const result = await apiRequest('get_group_details', { groupId });
                 if (result.success) {
                     const groupToEdit = result.data;
@@ -163,15 +164,20 @@ export function initializeGroupEventListeners() {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('group-modal');
     });
-    
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為群組編輯表單增加 Enter 鍵監聽
     document.getElementById('group-form').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.target.matches('textarea')) {
+        if (e.key === 'Enter' && !e.target.matches('textarea')) { // 避免在描述欄位按 Enter 就送出
             e.preventDefault();
+            // 在樹狀視圖中按 Enter 可能有其他用途，此處不觸發送出
+            // 僅當焦點在群組名稱輸入框時觸發
             if (document.activeElement === document.getElementById('group-name')) {
                 document.getElementById('save-group-btn').click();
             }
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
     
     const groupModal = document.getElementById('group-modal');
     if (groupModal) {

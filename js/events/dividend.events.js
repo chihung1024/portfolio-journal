@@ -1,14 +1,16 @@
 // =========================================================================================
-// == 配息事件處理模듈 (dividend.events.js) v2.0.0 - 整合操作隊列
+// == 配息事件處理模듈 (dividend.events.js) v1.1 - 支援鍵盤操作
+// == 職責：處理所有與配息管理分頁相關的用戶互動事件。
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
+// [核心修改] 導入 executeApiAction，不再需要 loadPortfolioData
+import { apiRequest, executeApiAction } from '../api.js';
+// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
-// 【移除】不再需要直接與後端溝通
-// import { apiRequest, executeApiAction } from '../api.js';
-// import { loadAndShowDividends } from '../main.js';
+// [核心修改] 從 main.js 引入 loadAndShowDividends，因為它是跨模組調用的
+import { loadAndShowDividends } from '../main.js';
 
 // --- Private Functions ---
 
@@ -19,41 +21,23 @@ async function handleBulkConfirm() {
         return;
     }
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。此操作將被暫存。`, () => {
-        // 【核心修改】為每一筆待確認配息都建立一個 CREATE 操作並加入隊列
-        const isTwStock = (symbol) => symbol ? (symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO')) : false;
-        
-        pendingDividends.forEach(p => {
-            const taxRate = isTwStock(p.symbol) ? 0 : 30;
-            const totalAmount = p.amount_per_share * p.quantity_at_ex_date * (1 - taxRate / 100);
-            
-            const dividendData = {
-                symbol: p.symbol,
-                ex_dividend_date: p.ex_dividend_date,
-                pay_date: p.ex_dividend_date.split('T')[0],
-                currency: p.currency,
-                quantity_at_ex_date: p.quantity_at_ex_date,
-                amount_per_share: p.amount_per_share,
-                total_amount: parseFloat(totalAmount.toFixed(2)),
-                tax_rate: taxRate,
-                notes: '批次確認'
-            };
-            addToQueue('CREATE', 'user_dividend', dividendData);
+    showConfirm(`您確定要一次確認 ${pendingDividends.length} 筆配息紀錄嗎？系統將套用預設稅率與發放日期。`, () => {
+        // [核心修改] 使用 executeApiAction 處理
+        executeApiAction('bulk_confirm_all_dividends', { pendingDividends }, {
+            loadingText: '正在批次確認配息...',
+            successMessage: '所有待確認配息已處理完畢！'
+        }).then(() => {
+            // 成功後，額外刷新配息管理分頁的內容
+            return loadAndShowDividends();
+        }).catch(error => {
+            console.error("批次確認配息最終失敗:", error);
         });
-
-        // 清空前端 state 中的待確認列表
-        setState({ pendingDividends: [] });
-
-        showNotification('info', `${pendingDividends.length} 筆配息已暫存。點擊同步按鈕以儲存。`);
-        
-        // 立即重新渲染 UI
-        const { confirmedDividends } = getState();
-        renderDividendsManagementTab([], confirmedDividends);
     });
 }
 
 async function handleDividendFormSubmit(e) {
     e.preventDefault();
+    const saveBtn = document.getElementById('save-dividend-btn');
     const id = document.getElementById('dividend-id').value;
     const isEditing = !!id;
     const dividendData = {
@@ -67,53 +51,44 @@ async function handleDividendFormSubmit(e) {
         tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value) || 0,
         notes: document.getElementById('dividend-notes').value.trim()
     };
+    if (isEditing) { dividendData.id = id; }
     
     const { closeModal } = await import('../ui/modals.js');
     closeModal('dividend-modal');
 
-    // 【核心修改】將操作加入隊列
-    let success;
-    if (isEditing) {
-        dividendData.id = id;
-        success = addToQueue('UPDATE', 'user_dividend', dividendData);
-    } else {
-        success = addToQueue('CREATE', 'user_dividend', dividendData);
-    }
-
-    if(success) {
-        // 如果是從 "待確認" 來的，需要手動從 state 中移除
-        if (!isEditing) {
-            const { pendingDividends } = getState();
-            const updatedPending = pendingDividends.filter(p => 
-                !(p.symbol === dividendData.symbol && p.ex_dividend_date === dividendData.ex_dividend_date)
-            );
-            setState({ pendingDividends: updatedPending });
-        }
-        
-        showNotification('info', '配息紀錄已暫存。點擊同步按鈕以儲存。');
-        const { pendingDividends, confirmedDividends } = getState();
-        renderDividendsManagementTab(pendingDividends, confirmedDividends);
-    }
+    // [核心修改] 使用 executeApiAction 處理
+    executeApiAction('save_user_dividend', dividendData, {
+        loadingText: '正在儲存配息紀錄...',
+        successMessage: '配息紀錄已成功儲存！'
+    }).then(() => {
+        // 成功後，額外刷新配息管理分頁的內容
+        return loadAndShowDividends();
+    }).catch(error => {
+        console.error("儲存配息紀錄最終失敗:", error);
+    });
 }
 
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？此操作將被暫存。', () => {
-        // 【核心修改】將操作加入隊列
-        const success = addToQueue('DELETE', 'user_dividend', { dividendId });
-
-        if (success) {
-            showNotification('info', '配息紀錄已標記為刪除。點擊同步按鈕以儲存。');
-            const { pendingDividends, confirmedDividends } = getState();
-            renderDividendsManagementTab(pendingDividends, confirmedDividends);
-        }
+    showConfirm('確定要刪除這筆已確認的配息紀錄嗎？', () => {
+        // [核心修改] 使用 executeApiAction 處理
+        executeApiAction('delete_user_dividend', { dividendId }, {
+            loadingText: '正在刪除配息紀錄...',
+            successMessage: '配息紀錄已成功刪除！'
+        }).then(() => {
+            // 成功後，額外刷新配息管理分頁的內容
+            return loadAndShowDividends();
+        }).catch(error => {
+            console.error("刪除配息紀錄最終失敗:", error);
+        });
     });
 }
 
 // --- Public Function ---
 
 export function initializeDividendEventListeners() {
+    // 監聽配息管理分頁內的所有互動
     document.getElementById('dividends-tab').addEventListener('click', async (e) => {
         const bulkConfirmBtn = e.target.closest('#bulk-confirm-dividends-btn');
         if (bulkConfirmBtn) {
@@ -138,6 +113,7 @@ export function initializeDividendEventListeners() {
         }
     });
 
+    // 監聽配息分頁中的股票篩選器
     document.getElementById('dividends-tab').addEventListener('change', (e) => {
         if (e.target.id === 'dividend-symbol-filter') {
             setState({ dividendFilter: e.target.value });
@@ -146,18 +122,22 @@ export function initializeDividendEventListeners() {
         }
     });
     
+    // 監聽配息表單的提交與取消
     document.getElementById('dividend-form').addEventListener('submit', handleDividendFormSubmit);
     document.getElementById('cancel-dividend-btn').addEventListener('click', async () => {
         const { closeModal } = await import('../ui/modals.js');
         closeModal('dividend-modal');
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 為配息表單增加 Enter 鍵監聽
     document.getElementById('dividend-form').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.target.matches('textarea')) {
+        if (e.key === 'Enter' && !e.target.matches('textarea')) { // 避免在多行備註欄位按 Enter 就送出
             e.preventDefault();
             document.getElementById('save-dividend-btn').click();
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
     
     document.getElementById('dividend-history-modal').addEventListener('click', async (e) => {
         if (e.target.closest('#close-dividend-history-btn') || !e.target.closest('#dividend-history-content')) {

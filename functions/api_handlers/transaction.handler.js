@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易 Action 處理模組 (transaction.handler.js) v3.2 - 修正模組導出
+// == 交易 Action 處理模組 (transaction.handler.js) v3.1 - 整合群組快取失效與交割匯率
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -55,6 +55,7 @@ async function findSettlementFxRate(currency, txDateStr, settlementDays) {
     targetSettlementDate.setDate(transactionDate.getDate() + settlementDays);
     const targetSettlementDateStr = targetSettlementDate.toISOString().split('T')[0];
 
+    // 步驟 1: 嘗試從資料庫尋找未來的交割日匯率
     const futureRateResult = await d1Client.query(
         'SELECT price FROM exchange_rates WHERE symbol = ? AND date >= ? ORDER BY date ASC LIMIT 1',
         [fxSymbol, targetSettlementDateStr]
@@ -65,6 +66,7 @@ async function findSettlementFxRate(currency, txDateStr, settlementDays) {
         return futureRateResult[0].price;
     }
 
+    // 步驟 2: 【智慧 Fallback】若找不到，則從資料庫中抓取最新的匯率紀錄
     console.warn(`[FX Logic] For ${currency} on ${txDateStr}, could not find a future settlement rate. Fallback: fetching latest rate from DB.`);
 
     const latestRateResult = await d1Client.query(
@@ -78,7 +80,7 @@ async function findSettlementFxRate(currency, txDateStr, settlementDays) {
     }
 
     console.error(`[FX Logic] Fallback failed: Could not find any historical rate for ${fxSymbol} in the database.`);
-    return null;
+    return null; // 如果資料庫中完全沒有該貨幣的匯率，則返回 null
 }
 
 /**
@@ -86,6 +88,7 @@ async function findSettlementFxRate(currency, txDateStr, settlementDays) {
  * @param {object} txData - 已通過 schema 驗證的交易數據
  */
 async function populateSettlementFxRate(txData) {
+    // 只有在非台幣且使用者未手動提供匯率時才觸發
     if (txData.currency !== 'TWD' && (txData.exchangeRate == null || txData.exchangeRate === 0)) {
         const settlementDays = txData.type === 'buy' ? 1 : 2;
         const calculatedRate = await findSettlementFxRate(txData.currency, txData.date, settlementDays);
@@ -102,7 +105,7 @@ async function populateSettlementFxRate(txData) {
 /**
  * 新增一筆交易紀錄 (支援引導式群組歸因)
  */
-const addTransaction = async (uid, data, res) => {
+exports.addTransaction = async (uid, data, res) => {
     const { txData, groupInclusions, newGroups } = data;
     let parsedTxData = transactionSchema.parse(txData);
     const txId = uuidv4();
@@ -111,23 +114,26 @@ const addTransaction = async (uid, data, res) => {
 
     const dbOps = [];
 
+    // 步驟 1: (可選) 如果有新群組建立請求，先建立新群組
     const newGroupIdMap = {};
     if (newGroups && newGroups.length > 0) {
         newGroups.forEach(group => {
             const newGroupId = uuidv4();
             newGroupIdMap[group.tempId] = newGroupId;
             dbOps.push({
-                sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`,
+                sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`, // 新建的群組預設為 dirty
                 params: [newGroupId, uid, group.name, '']
             });
         });
     }
 
+    // 步驟 2: 插入新的交易紀錄
     dbOps.push({
         sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         params: [txId, uid, parsedTxData.date, parsedTxData.symbol, parsedTxData.type, parsedTxData.quantity, parsedTxData.price, parsedTxData.currency, parsedTxData.totalCost, parsedTxData.exchangeRate]
     });
 
+    // 步驟 3: (可選) 處理交易的群組歸屬
     const finalGroupIdsToMarkDirty = new Set();
     if (groupInclusions && groupInclusions.length > 0) {
         groupInclusions.forEach(groupId => {
@@ -142,6 +148,7 @@ const addTransaction = async (uid, data, res) => {
 
     await d1Client.batch(dbOps);
 
+    // 【新增】將所有被關聯的群組標記為 dirty
     if (finalGroupIdsToMarkDirty.size > 0) {
         const groupIds = Array.from(finalGroupIdsToMarkDirty);
         const placeholders = groupIds.map(() => '?').join(',');
@@ -151,6 +158,7 @@ const addTransaction = async (uid, data, res) => {
         );
     }
 
+    // 執行同步的全局重算
     await performRecalculation(uid, parsedTxData.date, false);
 
     const [holdings, summaryResult] = await Promise.all([
@@ -183,7 +191,7 @@ const addTransaction = async (uid, data, res) => {
 /**
  * 編輯一筆現有的交易紀錄
  */
-const editTransaction = async (uid, data, res) => {
+exports.editTransaction = async (uid, data, res) => {
     let txData = transactionSchema.parse(data.txData);
     const txId = data.txId;
 
@@ -198,8 +206,10 @@ const editTransaction = async (uid, data, res) => {
 
     const dbOps = [];
 
+    // 如果股票代碼被修改，則自動清除其所有舊的群組歸屬
     if (oldSymbol !== newSymbol) {
         console.log(`[Data Integrity] Transaction ${txId} symbol changed from ${oldSymbol} to ${newSymbol}. Resetting group memberships.`);
+        // 【新增】在清除歸屬前，先將舊的關聯群組標記為 dirty
         await markAssociatedGroupsAsDirty(uid, txId);
         dbOps.push({
             sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?',
@@ -216,6 +226,7 @@ const editTransaction = async (uid, data, res) => {
         await d1Client.batch(dbOps);
     }
 
+    // 【新增】將與此交易相關的群組標記為 dirty
     await markAssociatedGroupsAsDirty(uid, txId);
 
     await performRecalculation(uid, txData.date, false);
@@ -250,13 +261,14 @@ const editTransaction = async (uid, data, res) => {
 /**
  * 刪除一筆交易紀錄
  */
-const deleteTransaction = async (uid, data, res) => {
+exports.deleteTransaction = async (uid, data, res) => {
     const txResult = await d1Client.query(
         'SELECT date FROM transactions WHERE id = ? AND uid = ?',
         [data.txId, uid]
     );
     const txDate = txResult.length > 0 ? txResult[0].date.split('T')[0] : null;
 
+    // 【新增】在刪除前，先將與此交易相關的群組標記為 dirty
     await markAssociatedGroupsAsDirty(uid, data.txId);
 
     const deleteOps = [
@@ -299,12 +311,3 @@ const deleteTransaction = async (uid, data, res) => {
         }
     });
 };
-
-// ========================= 【核心修改 - 開始】 =========================
-module.exports = {
-    addTransaction,
-    editTransaction,
-    deleteTransaction,
-    populateSettlementFxRate // 將此函式導出
-};
-// ========================= 【核心修改 - 結束】 =========================
