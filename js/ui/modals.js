@@ -1,16 +1,15 @@
-// ='========================================================================================
-// == 彈出視窗模組 (modals.js) v4.0 - 整合暫存區
+// =========================================================================================
+// == 彈出視窗模組 (modals.js) v4.1 - Bug Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { stagingService } from '../staging.service.js'; // 【核心修改】
+import { stagingService } from '../staging.service.js';
 import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
-import { apiRequest } from '../api.js';
+import { apiRequest, executeApiAction } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
-import { showNotification } from './notifications.js'; // 【核心修改】
-import { renderTransactionsTable } from './components/transactions.ui.js'; // 【核心修改】
-
+import { showNotification } from './notifications.js';
+import { renderTransactionsTable } from './components/transactions.ui.js';
 
 // --- Helper Functions ---
 
@@ -56,29 +55,24 @@ function renderGroupAttributionContent(includedGroupIds = new Set()) {
     });
 }
 
-/**
- * 【核心修改】提交歸因選擇並將交易存入暫存區
- */
 async function submitAttributionAndSaveTransaction() {
     const { tempTransactionData } = getState();
     if (!tempTransactionData) return;
-
-    // 注意：群組歸屬的邏輯將在後端批次處理時完成，前端暫存時只需記錄交易本身。
-    // 更進階的作法是可以將群組歸屬也作為一個暫存操作。為了簡化，我們先只暫存交易。
     
     closeModal('group-attribution-modal');
 
     try {
+        // 【核心修正】確保新增操作被正確標記
         const actionType = tempTransactionData.isEditing ? 'UPDATE' : 'CREATE';
         await stagingService.addAction(actionType, 'transaction', tempTransactionData.data);
         
         showNotification('info', '交易操作已暫存。');
-        renderTransactionsTable(); // 立即刷新列表以顯示暫存狀態
+        await renderTransactionsTable();
 
     } catch (error) {
         showNotification('error', `暫存交易失敗: ${error.message}`);
     } finally {
-        setState({ tempTransactionData: null }); // 清空臨時數據
+        setState({ tempTransactionData: null });
     }
 }
 
@@ -90,9 +84,7 @@ async function handleMembershipSave() {
 
     closeModal('membership-editor-modal');
     
-    // 注意：這個操作比較特殊，它直接修改關聯表，我們將其視為對群組的更新
-    // 為了簡化，此處維持直接呼叫 API
-    const { executeApiAction } = await import('../api.js');
+    // 這個操作直接修改關聯，維持直接API呼叫，因其不直接修改實體本身
     executeApiAction('update_transaction_group_membership', {
         transactionId: tempMembershipEdit.txId,
         groupIds: selectedGroupIds
@@ -108,7 +100,7 @@ async function handleMembershipSave() {
 // --- Exported Functions ---
 
 export async function openModal(modalId, isEdit = false, data = null) {
-    const { pendingDividends, confirmedDividends, transactions, groups } = getState();
+    const { stockNotes, pendingDividends, confirmedDividends, transactions, groups } = getState();
     const formId = modalId.replace('-modal', '-form');
     const form = document.getElementById(formId);
     if (form) form.reset();
@@ -139,7 +131,6 @@ export async function openModal(modalId, isEdit = false, data = null) {
     } else if (modalId === 'split-modal') {
         document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
     } 
-    // 【核心修改】移除 notes-modal 的處理邏輯
     else if (modalId === 'dividend-modal') {
         const record = isEdit
             ? confirmedDividends.find(d => d.id === data.id)
@@ -148,8 +139,8 @@ export async function openModal(modalId, isEdit = false, data = null) {
 
         document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`;
         document.getElementById('dividend-id').value = record.id || '';
-        document.getElementById('dividend-symbol').value = record.symbol;
         // ... (其他配息 modal 欄位設定)
+
     } else if (modalId === 'details-modal') {
         const { symbol } = data;
         if (symbol) {
@@ -157,11 +148,43 @@ export async function openModal(modalId, isEdit = false, data = null) {
         }
     } else if (modalId === 'membership-editor-modal') {
         const { txId } = data;
-        const tx = transactions.find(t => t.id === txId);
-        if (!tx) return;
+        
+        // 【核心修正】合併 state 和 staging area 的數據
+        const stagedActions = await stagingService.getStagedActions();
+        const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction' && a.type !== 'DELETE').map(a => a.payload);
+        const combinedTxs = [...transactions, ...stagedTransactions];
+        const tx = combinedTxs.find(t => t.id === txId);
+        
+        if (!tx) {
+            showNotification('error', '找不到指定的交易紀錄來編輯群組。');
+            return;
+        }
         
         setState({ tempMembershipEdit: { txId } });
-        // ... (其他 membership modal 欄位設定)
+
+        document.getElementById('membership-symbol-placeholder').textContent = tx.symbol;
+        document.getElementById('membership-date-placeholder').textContent = tx.date.split('T')[0];
+        
+        const container = document.getElementById('membership-groups-container');
+        container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取歸屬狀態...</p>';
+        
+        try {
+            const result = await apiRequest('get_transaction_memberships', { transactionId: txId });
+            const includedGroupIds = new Set(result.data.groupIds);
+
+            container.innerHTML = groups.length > 0
+                ? groups.map(g => `
+                    <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
+                        <input type="checkbox" name="membership_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
+                        <span class="font-medium text-gray-700">${g.name}</span>
+                    </label>
+                `).join('')
+                : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
+
+        } catch (error) {
+            container.innerHTML = '<p class="text-center text-sm text-red-500 py-4">讀取歸屬狀態失敗。</p>';
+            console.error("讀取交易歸屬失敗:", error);
+        }
     }
 
     document.getElementById(modalId).classList.remove('hidden');
@@ -209,15 +232,19 @@ export function closeModal(modalId) {
     document.getElementById(modalId).classList.add('hidden');
 }
 
-export function showConfirm(message, callback, title = '確認操作') {
+export function showConfirm(message, callback, title = '確認操作', cancelCallback = null) {
     document.getElementById('confirm-title').textContent = title;
     document.getElementById('confirm-message').textContent = message;
     setState({ confirmCallback: callback });
+    // 【核心修正】儲存取消回呼
+    document.getElementById('confirm-cancel-btn').onclick = cancelCallback || (() => hideConfirm());
     document.getElementById('confirm-modal').classList.remove('hidden');
 }
 
 export function hideConfirm() {
     setState({ confirmCallback: null });
+    // 還原預設的取消行為
+    document.getElementById('confirm-cancel-btn').onclick = () => hideConfirm();
     document.getElementById('confirm-modal').classList.add('hidden');
 }
 
