@@ -1,66 +1,25 @@
 // =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v3.0 - 整合暫存區狀態)
+// == 檔案：js/ui/components/groups.ui.js (v2.2 - 修正編輯渲染邏輯)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState } from '../../state.js';
-import { stagingService } from '../../staging.service.js'; // 【核心修改】
 
 /**
  * 渲染群組管理分頁的內容
  */
-export async function renderGroupsTab() {
+export function renderGroupsTab() {
     const { groups } = getState();
     const container = document.getElementById('groups-content');
     if (!container) return;
 
-    // 【核心修改】從暫存區獲取群組相關的操作
-    const stagedActions = await stagingService.getStagedActions();
-    const groupActions = stagedActions.filter(a => a.entity === 'group');
-    const stagedActionMap = new Map();
-    groupActions.forEach(action => {
-        stagedActionMap.set(action.payload.id, action);
-    });
-
-    // 結合 state 中的數據和暫存區的數據
-    let combinedGroups = [...groups];
-
-    stagedActionMap.forEach((action, groupId) => {
-        const existingIndex = combinedGroups.findIndex(g => g.id === groupId);
-        
-        if (action.type === 'CREATE') {
-            if (existingIndex === -1) {
-                combinedGroups.push({ ...action.payload, _staging_status: 'CREATE' });
-            }
-        } else if (action.type === 'UPDATE') {
-            if (existingIndex > -1) {
-                combinedGroups[existingIndex] = { ...combinedGroups[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
-            }
-        } else if (action.type === 'DELETE') {
-            if (existingIndex > -1) {
-                combinedGroups[existingIndex]._staging_status = 'DELETE';
-            }
-        }
-    });
-    
-    // 按創建時間排序 (假設 state 中有 created_at)
-    combinedGroups.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-
-
-    if (combinedGroups.length === 0) {
+    if (groups.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">尚未建立任何群組。</p>`;
         return;
     }
 
-    container.innerHTML = combinedGroups.map(group => {
-        // 【核心修改】根據暫存狀態決定背景色
-        let stagingClass = 'bg-gray-50'; // 預設
-        if (group._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
-        else if (group._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
-        else if (group._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
-
-        return `
-        <div class="${stagingClass} border border-gray-200 rounded-lg p-4 flex justify-between items-center">
+    container.innerHTML = groups.map(group => `
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 flex justify-between items-center">
             <div>
                 <h4 class="font-bold text-lg text-gray-800">${group.name}</h4>
                 <p class="text-sm text-gray-600 mt-1">${group.description || '沒有描述'}</p>
@@ -79,36 +38,89 @@ export async function renderGroupsTab() {
                 </button>
             </div>
         </div>
-    `}).join('');
+    `).join('');
 
     lucide.createIcons();
 }
 
 /**
- * 【核心修改】渲染群組編輯/新增彈出視窗的內容 (現在為 async)
+ * 【核心重構】渲染群組編輯/新增彈出視窗的內容 (樹狀圖)
  * @param {Object|null} groupToEdit - (可選) 要編輯的群組物件
  */
-export async function renderGroupModal(groupToEdit = null) {
+export function renderGroupModal(groupToEdit = null) {
     const { transactions } = getState();
     const form = document.getElementById('group-form');
     form.reset();
 
-    let finalGroupData = groupToEdit ? { ...groupToEdit } : null;
-
-    // 如果是編輯模式，檢查暫存區是否有更新的版本
-    if (groupToEdit) {
-        const stagedActions = await stagingService.getStagedActions();
-        const stagedUpdate = stagedActions.find(a => a.entity === 'group' && a.type === 'UPDATE' && a.payload.id === groupToEdit.id);
-        if (stagedUpdate) {
-            finalGroupData = { ...finalGroupData, ...stagedUpdate.payload };
-        }
-    }
-
-    document.getElementById('group-id').value = finalGroupData ? finalGroupData.id : '';
-    document.getElementById('group-modal-title').textContent = finalGroupData ? `編輯群組：${finalGroupData.name}` : '新增群組';
-    document.getElementById('group-name').value = finalGroupData ? finalGroupData.name : '';
-    document.getElementById('group-description').value = finalGroupData ? finalGroupData.description || '' : '';
+    document.getElementById('group-id').value = groupToEdit ? groupToEdit.id : '';
+    document.getElementById('group-modal-title').textContent = groupToEdit ? `編輯群組：${groupToEdit.name}` : '新增群組';
+    document.getElementById('group-name').value = groupToEdit ? groupToEdit.name : '';
+    document.getElementById('group-description').value = groupToEdit ? groupToEdit.description || '' : '';
 
     const symbolsContainer = document.getElementById('group-symbols-container');
-    symbolsContainer.innerHTML = `<p class="text-center text-sm text-gray-500 py-4">群組內的交易紀錄管理將在提交後處理。</p>`;
+    
+    const txsBySymbol = transactions.reduce((acc, tx) => {
+        if (!acc[tx.symbol]) {
+            acc[tx.symbol] = [];
+        }
+        acc[tx.symbol].push(tx);
+        return acc;
+    }, {});
+
+    const allSymbols = Object.keys(txsBySymbol).sort();
+    
+    // 【核心修改】使用從 API 獲取的、準確的 ID 列表
+    const includedTxIds = new Set(groupToEdit ? groupToEdit.included_transaction_ids : []);
+
+    if (allSymbols.length > 0) {
+        symbolsContainer.innerHTML = `
+            <div id="group-tree-view" class="p-2">
+                ${allSymbols.map(symbol => {
+                    const symbolTxs = txsBySymbol[symbol];
+                    const includedCount = symbolTxs.filter(t => includedTxIds.has(t.id)).length;
+                    const isAllChecked = includedCount === symbolTxs.length && symbolTxs.length > 0;
+
+                    return `
+                        <div class="symbol-node" data-symbol="${symbol}">
+                            <div class="flex items-center p-1 rounded-md hover:bg-gray-100">
+                                <i data-lucide="chevron-right" class="w-4 h-4 mr-1 cursor-pointer expand-symbol-btn"></i>
+                                <label class="flex items-center space-x-3 flex-grow cursor-pointer">
+                                    <input type="checkbox" name="group_symbol" value="${symbol}" class="h-4 w-4 symbol-checkbox" ${isAllChecked ? 'checked' : ''}>
+                                    <span class="font-mono text-sm font-medium text-gray-800">${symbol}</span>
+                                    <span class="text-xs text-gray-400">(${includedCount}/${symbolTxs.length})</span>
+                                </label>
+                            </div>
+                            <div class="transaction-list hidden pl-6 border-l border-gray-200 ml-2">
+                                ${symbolTxs.sort((a,b) => new Date(b.date) - new Date(a.date)).map(tx => {
+                                    const isChecked = includedTxIds.has(tx.id); // 根據 ID 列表判斷
+                                    const typeClass = tx.type === 'buy' ? 'text-red-500' : 'text-green-500';
+                                    return `
+                                        <div class="transaction-node p-1" data-tx-id="${tx.id}">
+                                            <label class="flex items-center space-x-3 text-xs cursor-pointer">
+                                                <input type="checkbox" name="group_transaction" value="${tx.id}" class="h-4 w-4 transaction-checkbox" ${isChecked ? 'checked' : ''}>
+                                                <span>${tx.date.split('T')[0]} <span class="${typeClass}">${tx.type}</span> ${tx.quantity} @ ${tx.price}</span>
+                                            </label>
+                                        </div>
+                                    `;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+        // 手動設定「部分選取」狀態
+        symbolsContainer.querySelectorAll('.symbol-checkbox').forEach(cb => {
+            const symbolNode = cb.closest('.symbol-node');
+            const includedCount = symbolNode.querySelectorAll('.transaction-checkbox:checked').length;
+            const totalCount = symbolNode.querySelectorAll('.transaction-checkbox').length;
+            if(includedCount > 0 && includedCount < totalCount){
+                cb.indeterminate = true;
+            }
+        });
+    } else {
+        symbolsContainer.innerHTML = `<p class="text-center text-sm text-gray-500 py-4">您的投資組合中還沒有任何交易，無法選擇股票。</p>`;
+    }
+    
+    lucide.createIcons();
 }

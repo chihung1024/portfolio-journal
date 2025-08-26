@@ -18,10 +18,6 @@
         .chart-range-btn.active { background-color: #4f46e5; color: white; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        /* 【新增】暫存區狀態顏色 */
-        .bg-staging-create { background-color: #e6fffa; } /* 淺綠 */
-        .bg-staging-update { background-color: #feffeb; } /* 淺黃 */
-        .bg-staging-delete { background-color: #fff5f5; text-decoration: line-through; } /* 淺紅 + 刪除線 */
     </style>
 </head>
 <body class="text-gray-800">
@@ -35,24 +31,11 @@
                     <i data-lucide="line-chart" class="text-indigo-600 h-8 w-8"></i>
                     <h1 class="text-2xl font-bold text-gray-800">交易紀錄與資產分析</h1>
                 </div>
-                <div id="auth-status-display" class="flex items-center space-x-2 sm:space-x-4">
+                <div id="auth-status-display" class="flex items-center space-x-4">
                     <div id="user-info" class="hidden text-xs text-gray-500 text-right">
                         <span id="auth-status"></span>
-                        <p id="user-id" class="truncate max-w-[100px] sm:max-w-xs"></p>
+                        <p id="user-id" class="truncate max-w-[150px] sm:max-w-xs"></p>
                     </div>
-                    
-                    <div id="staging-controls" class="hidden items-center space-x-2">
-                        <button id="edit-staging-btn" class="btn bg-yellow-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-yellow-600 flex items-center space-x-1">
-                            <i data-lucide="edit-3" class="h-4 w-4"></i>
-                            <span>編輯暫存</span>
-                            <span id="staging-count-badge" class="ml-1 bg-white text-yellow-600 text-xs font-bold px-2 py-0.5 rounded-full">0</span>
-                        </button>
-                        <button id="submit-all-btn" class="btn bg-green-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-green-600 flex items-center space-x-1">
-                             <i data-lucide="send" class="h-4 w-4"></i>
-                            <span>全部提交</span>
-                        </button>
-                    </div>
-
                     <button id="logout-btn" class="hidden btn bg-red-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-red-600">登出</button>
                 </div>
             </div>
@@ -287,7 +270,7 @@
         <div id="transaction-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop" ></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 id="modal-title" class="text-2xl font-bold mb-6 text-gray-800">新增交易紀錄</h3><form id="transaction-form"><input type="hidden" id="transaction-id"><div class="mb-4"><label for="transaction-date" class="block text-sm font-medium text-gray-700 mb-1">日期</label><input type="date" id="transaction-date" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div class="mb-4"><label for="stock-symbol" class="block text-sm font-medium text-gray-700 mb-1">股票代碼</label><input type="text" id="stock-symbol" placeholder="例如: AAPL, 2330.TW" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div class="mb-4"><label class="block text-sm font-medium text-gray-700 mb-1">交易類型</label><div class="flex space-x-4"><label class="flex items-center"><input type="radio" name="transaction-type" value="buy" class="h-4 w-4 text-indigo-600" checked><span class="ml-2">買入</span></label><label class="flex items-center"><input type="radio" name="transaction-type" value="sell" class="h-4 w-4 text-indigo-600"><span class="ml-2">賣出</span></label></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="quantity" class="block text-sm font-medium text-gray-700 mb-1">股數</label><input type="number" step="any" id="quantity" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div><div><label for="price" class="block text-sm font-medium text-gray-700 mb-1">價格 (原幣)</label><input type="number" step="any" id="price" class="w-full px-3 py-2 border border-gray-300 rounded-md" required></div></div><div class="mb-4"><label for="currency" class="block text-sm font-medium text-gray-700 mb-1">幣別</label><select id="currency" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="USD">USD</option><option value="TWD">TWD</option><option value="HKD">HKD</option><option value="JPY">JPY</option></select></div><div id="exchange-rate-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="exchange-rate" class="block text-sm font-medium text-gray-700">手動匯率 (選填)</label><input type="number" step="any" id="exchange-rate" placeholder="留空則自動抓取" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div><div id="total-cost-field" class="space-y-4 mb-4 p-4 border border-gray-200 rounded-md"><label for="total-cost" class="block text-sm font-medium text-gray-700">總成本 (含費用, 原幣, 選填)</label><input type="number" step="any" id="total-cost" placeholder="留空則自動計算 (股數*價格)" class="w-full px-3 py-2 border border-gray-300 rounded-md"></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-transaction-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg">取消</button><button type="button" id="confirm-transaction-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg">下一步</button></div></form></div></div></div>
         <div id="split-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-md mx-4"><h3 class="text-2xl font-bold mb-6">新增拆股/合股事件</h3><form id="split-form"><input type="hidden" id="split-id"><div class="mb-4"><label for="split-date" class="block text-sm font-medium">日期</label><input type="date" id="split-date" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="split-symbol" class="block text-sm font-medium">股票代碼</label><input type="text" id="split-symbol" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="split-ratio" class="block text-sm font-medium">比例</label><input type="number" step="any" id="split-ratio" placeholder="1拆10, 輸入10; 10合1, 輸入0.1" class="w-full px-3 py-2 border rounded-md" required></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-split-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-split-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存</button></div></form></div></div></div>
         <div id="confirm-modal" class="fixed inset-0 z-50 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-sm mx-4"><h3 id="confirm-title" class="text-lg font-semibold mb-4">確認操作</h3><p id="confirm-message" class="text-gray-600 mb-6">您確定要執行此操作嗎？</p><div class="flex justify-end space-x-4"><button id="confirm-cancel-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button id="confirm-ok-btn" class="btn bg-red-600 text-white py-2 px-4 rounded-lg">確定</button></div></div></div></div>
-        
+        <div id="notes-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="notes-modal-title" class="text-2xl font-bold mb-6">編輯筆記與目標</h3><form id="notes-form"><input type="hidden" id="notes-symbol"><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4"><div><label for="target-price" class="block text-sm font-medium">目標價</label><input type="number" step="any" id="target-price" class="w-full px-3 py-2 border rounded-md"></div><div><label for="stop-loss-price" class="block text-sm font-medium">停損價</label><input type="number" step="any" id="stop-loss-price" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="notes-content" class="block text-sm font-medium">投資筆記</label><textarea id="notes-content" rows="6" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-notes-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-notes-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存筆記</button></div></form></div></div></div>
         <div id="dividend-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="dividend-modal-title" class="text-2xl font-bold mb-6">確認配息入帳</h3><form id="dividend-form"><input type="hidden" id="dividend-id"><input type="hidden" id="dividend-symbol"><input type="hidden" id="dividend-ex-date"><input type="hidden" id="dividend-currency"><input type="hidden" id="dividend-quantity"><input type="hidden" id="dividend-original-amount-ps"><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4 p-4 bg-gray-50 rounded-lg"><div><p class="text-sm text-gray-500">股票代碼</p><p id="dividend-info-symbol" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日</p><p id="dividend-info-ex-date" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日持股</p><p id="dividend-info-quantity" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">每股配息(原幣)</p><p id="dividend-info-amount-ps" class="font-semibold"></p></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4"><div><label for="dividend-pay-date" class="block text-sm font-medium mb-1">實際發放日</label><input type="date" id="dividend-pay-date" class="w-full px-3 py-2 border rounded-md" required></div><div><label for="dividend-tax-rate" class="block text-sm font-medium mb-1">稅率 (%)</label><input type="number" step="any" id="dividend-tax-rate" placeholder="例如: 30" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="dividend-total-amount" class="block text-sm font-medium mb-1">稅後實收總額 (原幣)</label><input type="number" step="any" id="dividend-total-amount" class="w-full px-3 py-2 border rounded-md" required><p class="text-xs text-gray-500 mt-1">此為計算已實現損益的最終依據。</p></div><div class="mb-4"><label for="dividend-notes" class="block text-sm font-medium mb-1">備註 (選填)</label><textarea id="dividend-notes" rows="3" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-dividend-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-dividend-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存紀錄</button></div></form></div></div></div>
         <div id="dividend-history-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div id="dividend-history-content" class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-2xl mx-4"></div></div></div>
         <div id="group-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="group-modal-title" class="text-2xl font-bold mb-6">新增/編輯群組</h3><form id="group-form"><input type="hidden" id="group-id"><div class="mb-4"><label for="group-name" class="block text-sm font-medium">群組名稱</label><input type="text" id="group-name" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="group-description" class="block text-sm font-medium">描述 (選填)</label><textarea id="group-description" rows="2" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="mb-4"><label class="block text-sm font-medium">包含股票與交易紀錄</label><div id="group-symbols-container" class="mt-2 p-2 border rounded-md max-h-60 overflow-y-auto space-y-2"></div></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-group-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-group-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存群組</button></div></form></div></div></div>
@@ -321,29 +304,6 @@
                 </div>
             </div>
         </div>
-
-        <div id="staging-modal" class="fixed inset-0 z-40 overflow-y-auto hidden">
-            <div class="flex items-center justify-center min-h-screen p-4">
-                <div class="fixed inset-0 modal-backdrop"></div>
-                <div class="bg-white rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4 transform transition-all">
-                    <div class="p-6">
-                        <div class="flex justify-between items-center pb-4 border-b border-gray-200">
-                            <h2 class="text-2xl font-bold text-gray-800">編輯暫存區</h2>
-                            <button id="close-staging-modal-btn" class="p-1 rounded-full hover:bg-gray-200">
-                                <i data-lucide="x" class="w-6 h-6 text-gray-500"></i>
-                            </button>
-                        </div>
-                        <div id="staging-list-container" class="mt-4 max-h-[60vh] overflow-y-auto space-y-3">
-                            </div>
-                         <div class="flex justify-end space-x-4 mt-6 pt-4 border-t border-gray-200">
-                            <button id="clear-staging-btn" class="btn bg-red-600 text-white font-bold py-2 px-4 rounded-lg">清空所有暫存</button>
-                            <button id="submit-from-staging-btn" class="btn bg-green-600 text-white font-bold py-2 px-4 rounded-lg">全部提交</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
 
     </div>
 

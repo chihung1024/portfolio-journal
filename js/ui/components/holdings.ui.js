@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_simplified (v2 - Cleanup)
+// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_simplified (手機列表視圖簡化)
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -96,7 +96,8 @@ export function renderHoldingsTable(currentHoldings) {
                     <div class="flex items-center">
                         <span>${h.symbol}</span>
                         ${isShort ? shortBadge : ''}
-                        </div>
+                        <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
+                    </div>
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-base font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-right">
@@ -125,7 +126,8 @@ export function renderHoldingsTable(currentHoldings) {
                         <div class="flex items-center">
                             <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
                             ${isShort ? shortBadge : ''}
-                            </div>
+                            <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-5 h-5 text-gray-400 hover:text-indigo-600"></i></button>
+                        </div>
                         <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
                     </div>
                     ${renderHoldingDetailCardContent(h)}
@@ -137,6 +139,7 @@ export function renderHoldingsTable(currentHoldings) {
                 </div>
             </div>`; }).join('')}</div>`;
 
+    // ========================= 【核心修改 - 開始】 =========================
     const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
         const isShort = h.quantity < 0;
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
@@ -156,7 +159,8 @@ export function renderHoldingsTable(currentHoldings) {
                     <div class="flex items-center">
                         <h3 class="font-bold text-base text-indigo-600">${h.symbol}</h3>
                         ${isShort ? shortBadge : ''}
-                        </div>
+                        <button class="ml-2 open-notes-btn" data-symbol="${h.symbol}"><i data-lucide="notebook-pen" class="w-4 h-4 text-gray-400 hover:text-indigo-600"></i></button>
+                    </div>
                     <div class="text-right">
                         <p class="font-medium text-base text-gray-900">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-sm text-gray-500">${h.currency}</span></p>
                         <p class="text-sm ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p>
@@ -169,6 +173,7 @@ export function renderHoldingsTable(currentHoldings) {
             </div>
         `;
     }).join('')}</div>`;
+    // ========================= 【核心修改 - 結束】 =========================
 
     const mobileContent = `
         <div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div>
