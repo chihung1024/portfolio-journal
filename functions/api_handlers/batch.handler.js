@@ -69,9 +69,36 @@ export async function submitBatch(req, env, ctx) {
         // Execute all statements in a single transaction batch
         await env.DB.batch(statements);
 
-        // TODO: Trigger the global recalculation on GCP
-        // This might be an async fetch call to a GCP Cloud Function URL
-        // await fetch('https://your-gcp-recalculation-endpoint', { method: 'POST' });
+        // Trigger the global recalculation on GCP
+        const gcpUrl = 'https://portfolio-journal-api-951186116587.asia-east1.run.app';
+        const gcpApiKey = env.GCP_API_KEY; 
+        const serviceAccountKey = env.SERVICE_ACCOUNT_KEY;
+
+        if (gcpUrl && gcpApiKey && serviceAccountKey) {
+            try {
+                // Based on the python script, we send a request with an action
+                const response = await fetch(gcpUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-KEY': gcpApiKey,
+                        'X-Service-Account-Key': serviceAccountKey
+                    },
+                    body: JSON.stringify({ action: 'recalculate_all_users' }) 
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error(`Failed to trigger GCP recalculation: ${response.status} ${response.statusText}`, errorText);
+                } else {
+                    console.log('Successfully triggered GCP recalculation.');
+                }
+            } catch (e) {
+                console.error('Error while triggering GCP recalculation:', e);
+            }
+        } else {
+            console.warn('GCP_API_URL, GCP_API_KEY, or SERVICE_ACCOUNT_KEY is not configured. Skipping recalculation trigger.');
+        }
 
         return new Response(JSON.stringify({ success: true, message: 'Batch submission successful.' }), {
             headers: { 'Content-Type': 'application/json' },
