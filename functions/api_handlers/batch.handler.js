@@ -1,8 +1,8 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v2.0 (Bug Fix - 匯率 & ID 同步)
+// == 批次操作處理模組 (batch.handler.js) - v2.1 (Final Bug Fix - 匯率 & ID 同步)
 // =========================================================================================
 
-const { v4: uuidv4 } = require('uuid'); // 【核心修正】
+const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
 // 【核心修正】從 transaction.handler 導入匯率計算函式
@@ -43,7 +43,15 @@ const getQueryForAction = (uid, action, newId = null) => {
         }
 
         case 'CREATE': {
-            const createPayload = { ...payload, uid, id: newId }; // 使用後端產生的新 ID
+            // 使用後端產生的新 ID，並確保 payload 中移除了臨時 id
+            const createPayload = { ...payload, uid, id: newId };
+            const tempIdKey = Object.keys(createPayload).find(k => String(createPayload[k]).startsWith('temp_'));
+            if(tempIdKey) {
+                // 通常 id 就是 tempId, 但做個防禦性編程
+                delete createPayload[tempIdKey];
+                createPayload.id = newId;
+            }
+
             const createFields = Object.keys(createPayload);
             const placeholders = createFields.map(() => '?').join(', ');
             return {
@@ -71,7 +79,6 @@ exports.submitBatch = async (uid, data, res) => {
         const tempIdMap = {};
         const statements = [];
 
-        // 【核心修正】分階段處理，優先處理 CREATE 操作以建立 ID Map
         const creates = actions.filter(a => a.type === 'CREATE');
         const updates = actions.filter(a => a.type === 'UPDATE');
         const deletes = actions.filter(a => a.type === 'DELETE');
@@ -79,12 +86,12 @@ exports.submitBatch = async (uid, data, res) => {
         for (const action of creates) {
             const permanentId = uuidv4();
             const tempId = action.payload.id;
-            if (String(tempId).startsWith('temp_')) {
+            if (tempId && String(tempId).startsWith('temp_')) {
                 tempIdMap[tempId] = permanentId;
             }
 
-            // 如果是交易，則先計算匯率
             if (action.entity === 'transaction') {
+                // 【核心修正】確保 await 生效
                 action.payload = await populateSettlementFxRate(action.payload);
             }
             
@@ -92,7 +99,6 @@ exports.submitBatch = async (uid, data, res) => {
             statements.push({ sql, params });
         }
         
-        // 處理更新和刪除
         [...updates, ...deletes].forEach(action => {
              const { sql, params } = getQueryForAction(uid, action);
              statements.push({ sql, params });
@@ -104,6 +110,7 @@ exports.submitBatch = async (uid, data, res) => {
 
         await performRecalculation(uid, null, false);
         
+        // 重新獲取所有數據，以確保回傳的是最新、最完整的狀態
         const [txs, splits, holdings, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
@@ -122,7 +129,7 @@ exports.submitBatch = async (uid, data, res) => {
                 holdings,
                 transactions: txs,
                 splits,
-                // 回傳 ID 對照表給前端
+                // 【核心修正】回傳 ID 對照表給前端
                 tempIdMap: tempIdMap 
             }
         });
