@@ -1,15 +1,17 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v2.9.1 (UI 可見性修正)
+// == 身份驗證模組 (auth.js) v2.9.2 (Firebase Import 修正)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
+// ========================= 【核心修改 - 開始】 =========================
 import { 
     getAuth, 
     createUserWithEmailAndPassword, 
     signInWithEmailAndPassword, 
     signOut, 
     onAuthStateChanged 
-} from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
+} from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
+// ========================= 【核心修改 - 結束】 =========================
 
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
@@ -38,10 +40,7 @@ export function initializeAuth() {
             document.getElementById('user-id').textContent = user.email;
             document.getElementById('auth-status').textContent = '已連線';
             
-            // ========================= 【核心修改 - 開始】 =========================
-            // 顯示包含同步和登出按鈕的整個容器
             document.getElementById('user-actions').classList.remove('hidden');
-            // ========================= 【核心修改 - 結束】 =========================
             
             initializeAppUI();
             
@@ -63,10 +62,7 @@ export function initializeAuth() {
             document.querySelector('main').classList.add('hidden');
             document.getElementById('user-info').classList.add('hidden');
             
-            // ========================= 【核心修改 - 開始】 =========================
-            // 隱藏包含同步和登出按鈕的整個容器
             document.getElementById('user-actions').classList.add('hidden');
-            // ========================= 【核心修改 - 結束】 =========================
 
             if (loadingOverlay) {
                 loadingOverlay.style.display = 'none';
