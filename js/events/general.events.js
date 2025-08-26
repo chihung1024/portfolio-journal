@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.0 - 整合暫存區與功能清理
+// == 通用事件處理模組 (general.events.js) v4.1 - Bug Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction, submitBatch } from '../api.js'; // 【核心修改】 導入 submitBatch
-import { stagingService } from '../staging.service.js'; // 【核心修改】
+import { apiRequest, executeApiAction, submitBatch } from '../api.js';
+import { stagingService } from '../staging.service.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { getDateRangeForPreset } from '../ui/utils.js';
@@ -63,26 +63,27 @@ async function handleUpdateBenchmark() {
         return;
     }
 
-    // 【核心修改】在更新前檢查暫存區
     const stagedActions = await stagingService.getStagedActions();
     if (stagedActions.length > 0) {
-        const { showConfirm } = await import('../ui/modals.js');
+        const { showConfirm, hideConfirm } = await import('../ui/modals.js'); // 【核心修正】導入 hideConfirm
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
-            async () => {
+            async () => { // 確認回呼
+                hideConfirm();
                 const netActions = await stagingService.getNetActions();
-                await submitBatch(netActions); // 提交暫存區
+                await submitBatch(netActions);
                 await stagingService.clearActions();
-                // 提交成功後，再執行更新 Benchmark 的操作
                 await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
                     loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
                     successMessage: 'Benchmark 已成功更新！'
                 });
             },
-            '提交並更新 Benchmark？'
+            '提交並更新 Benchmark？',
+            () => { // 【核心修正】新增取消回呼
+                hideConfirm(); // 點擊取消時，只關閉彈窗，不做任何事
+            }
         );
     } else {
-        // 如果暫存區是空的，直接執行
         executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
             loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
             successMessage: 'Benchmark 已成功更新！'
@@ -142,8 +143,6 @@ function handleChartRangeChange(chartType, rangeType, startDate = null, endDate 
 export function initializeGeneralEventListeners() {
     document.getElementById('update-benchmark-btn').addEventListener('click', handleUpdateBenchmark);
     
-    // 【核心修改】移除所有 note 相關的事件監聽
-
     document.getElementById('holdings-content').addEventListener('click', (e) => {
         const { holdings, activeMobileHolding } = getState();
 
@@ -222,7 +221,6 @@ export function initializeGeneralEventListeners() {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
             showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-                // 注意：此處的刪除也應改為暫存區操作
                 stagingService.addAction('DELETE', 'transaction', { id: txId }).then(() => {
                     showNotification('info', '刪除操作已暫存。');
                     const symbol = document.querySelector('#details-modal-content h2').textContent;
