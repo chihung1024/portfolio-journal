@@ -95,3 +95,33 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     
     // ================== 【修改的程式碼結束】 ==================
 }
+
+export async function updateDashboardStaleIndicators() {
+    const cardIds = ['total-assets', 'daily-pl', 'unrealized-pl', 'realized-pl', 'total-return', 'xirr-value'];
+    try {
+        const actions = await stagingService.getActions();
+        const hasStagedActions = actions.length > 0;
+
+        for (const cardId of cardIds) {
+            const mainEl = document.getElementById(cardId);
+            if (!mainEl) continue;
+
+            let indicator = mainEl.parentNode.querySelector('.stale-indicator');
+
+            if (hasStagedActions) {
+                if (!indicator) {
+                    indicator = document.createElement('span');
+                    indicator.className = 'stale-indicator text-primary small ms-1';
+                    indicator.textContent = '(變更待提交)';
+                    mainEl.parentNode.appendChild(indicator);
+                }
+            } else {
+                if (indicator) {
+                    indicator.remove();
+                }
+            }
+        }
+    } catch (error) {
+        console.error("Failed to update dashboard stale indicators:", error);
+    }
+}

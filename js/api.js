@@ -100,6 +100,34 @@ export async function submitBatch(actions) {
     }
 }
 
+export async function getPortfolioTimestamp() {
+    const auth = getAuth();
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not logged in');
+
+    try {
+        const token = await user.getIdToken();
+        const url = '/api/portfolio/timestamp';
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+            },
+        });
+        
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.message || 'Failed to fetch portfolio timestamp.');
+        }
+        return result;
+
+    } catch (error) {
+        console.error('API 請求失敗:', error);
+        throw error;
+    }
+}
+
 /**
  * 高階 API 執行器，封裝了載入狀態、通知和數據刷新邏輯
  */
@@ -152,6 +180,7 @@ function updateAppWithData(portfolioData) {
     }, {});
     
     setState({
+        dataTimestamp: portfolioData.timestamp || null,
         stockNotes: stockNotesMap,
         holdings: holdingsObject,
         portfolioHistory: portfolioData.history || {},

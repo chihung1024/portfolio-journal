@@ -4,6 +4,7 @@
 
 // 應用程式的核心狀態
 let state = {
+    dataTimestamp: null,
     currentUserId: null,
     transactions: [],
     userSplits: [],

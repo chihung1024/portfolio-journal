@@ -74,12 +74,36 @@ async function handleUpdateBenchmark() {
         showNotification('error', '請輸入 Benchmark 的股票代碼。');
         return;
     }
-    executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-        loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-        successMessage: 'Benchmark 已成功更新！'
-    }).catch(error => {
-        console.error("更新 Benchmark 最終失敗:", error);
-    });
+
+    const stagedActions = await stagingService.getActions();
+    if (stagedActions.length > 0) {
+        const { showConfirm } = await import('../ui/modals.js');
+        showConfirm(
+            '您有未提交的變更。更新 Benchmark 將會先提交所有變更，是否繼續？',
+            async () => { // onConfirm
+                try {
+                    await stagingService.submitAll();
+                    // After submission and the first reload, now we update the benchmark, which will trigger another reload.
+                    await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
+                        loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
+                        successMessage: 'Benchmark 已成功更新！'
+                    });
+                } catch (error) {
+                    // Error during submitAll will be handled by submitAll itself.
+                    console.log("Benchmark update aborted due to submission failure.", error);
+                }
+            }
+            // No 'onCancel' needed, just don't do anything.
+        );
+    } else {
+        // Original behavior if no staged actions
+        executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
+            loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
+            successMessage: 'Benchmark 已成功更新！'
+        }).catch(error => {
+            console.error("更新 Benchmark 最終失敗:", error);
+        });
+    }
 }
 
 async function saveNoteAction(noteData, modalToClose = 'notes-modal') {

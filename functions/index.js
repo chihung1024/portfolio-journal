@@ -19,6 +19,7 @@ router.all('*', withDurables(), withContent(), withParams, resolveUser);
 
 // Portfolio
 router.get('/api/portfolio', auth, portfolioHandler.getPortfolio);
+router.get('/api/portfolio/timestamp', auth, portfolioHandler.getPortfolioTimestamp);
 router.post('/api/portfolio/recalculate', auth, portfolioHandler.recalculatePortfolio);
 router.post('/api/portfolio/settings', auth, portfolioHandler.updateSettings);
 router.get('/api/portfolio/export', auth, portfolioHandler.exportPortfolio);
