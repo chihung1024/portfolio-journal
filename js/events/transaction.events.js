@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.1 - Bug Fix
+// == 交易事件處理模組 (transaction.events.js) v3.2 - Bug Fix (Delete Payload)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -14,7 +14,6 @@ async function handleEdit(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
     
-    // 【核心修正】從 state 和 staging area 合併數據源，確保能編輯尚未提交的項目
     const stagedActions = await stagingService.getStagedActions();
     const stagedTransactions = stagedActions
         .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
@@ -24,9 +23,9 @@ async function handleEdit(button) {
     stagedTransactions.forEach(stagedTx => {
         const index = combined.findIndex(t => t.id === stagedTx.id);
         if (index > -1) {
-            combined[index] = { ...combined[index], ...stagedTx }; // Update existing
+            combined[index] = { ...combined[index], ...stagedTx };
         } else {
-            combined.push(stagedTx); // Add new
+            combined.push(stagedTx);
         }
     });
 
@@ -40,9 +39,6 @@ async function handleEdit(button) {
     openModal('transaction-modal', true, transaction);
 }
 
-/**
- * 操作成功存入暫存區後，更新 UI
- */
 async function handleStagingSuccess() {
     showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
     await renderTransactionsTable();
@@ -53,11 +49,24 @@ async function handleStagingSuccess() {
 
 async function handleDelete(button) {
     const txId = button.dataset.id;
-    
     const { showConfirm } = await import('../ui/modals.js');
+
+    // 【核心修正】在暫存刪除操作前，先找到完整的交易物件
+    const { transactions } = getState();
+    const stagedActions = await stagingService.getStagedActions();
+    const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction').map(a => a.payload);
+    const allTxs = [...transactions, ...stagedTransactions];
+    const txToDelete = allTxs.find(t => t.id === txId);
+
+    if (!txToDelete) {
+        showNotification('error', '找不到要刪除的交易紀錄。');
+        return;
+    }
+
     showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
         try {
-            await stagingService.addAction('DELETE', 'transaction', { id: txId });
+            // 將完整的交易物件作為 payload 存入，而不僅僅是 id
+            await stagingService.addAction('DELETE', 'transaction', txToDelete);
             await handleStagingSuccess();
         } catch (error) {
             showNotification('error', `暫存刪除操作失敗: ${error.message}`);
@@ -108,7 +117,7 @@ async function handleNextStep() {
     }
 }
 
-// --- Public Function (公開函式，由 main.js 呼叫) ---
+// --- Public Function ---
 
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
