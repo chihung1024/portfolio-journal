@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.1 (Bug Fix - UI Refresh)
+// == 暫存區事件處理模組 (staging.events.js) - v2.2 (Final Bug Fix - UI Refresh)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
@@ -18,6 +18,9 @@ async function refreshCurrentView() {
     const activeTab = document.querySelector('.tab-content:not(.hidden)');
     if (!activeTab) return;
 
+    // 延遲一小段時間確保DOM更新
+    await new Promise(resolve => setTimeout(resolve, 50));
+
     switch (activeTab.id) {
         case 'transactions-tab':
             await renderTransactionsTable();
@@ -32,7 +35,6 @@ async function refreshCurrentView() {
         case 'groups-tab':
             await renderGroupsTab();
             break;
-        // holdings-tab 不需要，因為它的操作是從其他地方觸發的
     }
 }
 
@@ -167,6 +169,7 @@ export function initializeStagingEventListeners() {
                 const actionId = parseInt(removeBtn.dataset.actionId, 10);
                 await stagingService.removeAction(actionId);
                 await renderStagingModal();
+                await refreshCurrentView(); // 【核心修正】移除單項後也要刷新
                 return;
             }
 
@@ -179,7 +182,6 @@ export function initializeStagingEventListeners() {
                 showConfirm('您確定要清空所有暫存的操作嗎？此操作無法復原。', async () => {
                     await stagingService.clearActions();
                     await renderStagingModal();
-                    // 【核心修正】清空後，刷新當前視圖
                     await refreshCurrentView(); 
                     showNotification('info', '暫存區已清空。');
                 });
