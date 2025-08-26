@@ -1,12 +1,12 @@
 // =========================================================================================
-// == 同步操作處理模組 (sync.handler.js) - 【新檔案】
+// == 同步操作處理模組 (sync.handler.js) - v1.1.0 (支援群組歸屬更新)
 // == 職責：接收並處理前端的操作隊列，執行批次資料庫操作，並觸發一次性的重算。
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-const transactionHandler = require('./transaction.handler'); // 引入 transaction.handler 以使用其輔助函式
+const transactionHandler = require('./transaction.handler'); 
 
 /**
  * 處理前端發送的操作隊列
@@ -20,27 +20,25 @@ exports.syncOperations = async (uid, data, res) => {
     console.log(`[${uid}] [Sync] 收到 ${op_queue.length} 筆操作，開始處理...`);
 
     const dbOps = [];
-    const tempIdMap = new Map(); // 用來映射前端臨時 ID 到後端產生的 UUID
-    let modifiedDate = null; // 記錄最早被影響的日期，用於增量重算
+    const tempIdMap = new Map(); 
+    let modifiedDate = null; 
+    const groupsToMarkDirty = new Set(); // 【新增】用來收集所有需要標記為 dirty 的群組 ID
 
-    // 循序處理操作隊列
     for (const op of op_queue) {
         const { op: operation, entity, payload } = op;
-        const entityId = payload.id || payload.txId || payload.splitId || payload.dividendId || payload.groupId;
         
-        // 檢查 payload 中是否有臨時 ID，若有，則換成先前已產生的 UUID
         const resolveId = (tempId) => tempIdMap.has(tempId) ? tempIdMap.get(tempId) : tempId;
 
-        // 更新最早修改日期
         if (payload.date && (!modifiedDate || payload.date < modifiedDate)) {
             modifiedDate = payload.date;
         }
 
         switch (entity) {
             case 'transaction':
+                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE') {
                     const newId = uuidv4();
-                    tempIdMap.set(payload.id, newId); // 記錄臨時ID與新UUID的對應關係
+                    tempIdMap.set(payload.id, newId); 
                     const txData = await transactionHandler.populateSettlementFxRate(payload);
                     dbOps.push({
                         sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -59,6 +57,7 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'split':
+                 // ... (此 case 邏輯不變) ...
                  if (operation === 'CREATE') {
                     const newId = uuidv4();
                     tempIdMap.set(payload.id, newId);
@@ -69,6 +68,7 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'user_dividend':
+                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE' || operation === 'UPDATE') {
                     const dividendId = operation === 'CREATE' ? uuidv4() : payload.id;
                     if(operation === 'CREATE') tempIdMap.set(payload.id, dividendId);
@@ -84,7 +84,7 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
             
             case 'stock_note':
-                // Note 操作比較簡單，直接執行
+                // ... (此 case 邏輯不變) ...
                 dbOps.push({
                     sql: `INSERT OR REPLACE INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES ((SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?), ?, ?, ?, ?, ?, ?)`,
                     params: [uid, payload.symbol, uid, payload.symbol, payload.target_price, payload.stop_loss_price, payload.notes, new Date().toISOString()]
@@ -92,6 +92,7 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'group':
+                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE' || operation === 'UPDATE') {
                     const groupId = (operation === 'CREATE') ? uuidv4() : resolveId(payload.id);
                     if(operation === 'CREATE') tempIdMap.set(payload.id, groupId);
@@ -102,7 +103,7 @@ exports.syncOperations = async (uid, data, res) => {
                         payload.transactionIds.forEach(txId => {
                             dbOps.push({
                                 sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)',
-                                params: [uid, groupId, resolveId(txId)] // 解析 txId，以處理同時新增交易與群組的情況
+                                params: [uid, groupId, resolveId(txId)]
                             });
                         });
                     }
@@ -113,19 +114,51 @@ exports.syncOperations = async (uid, data, res) => {
                     dbOps.push({ sql: 'DELETE FROM groups WHERE id = ? AND uid = ?', params: [groupId, uid] });
                 }
                 break;
+            
+            // ========================= 【核心修改 - 開始】 =========================
+            case 'transaction_group_membership':
+                if (operation === 'UPDATE') {
+                    const { transactionId, groupIds } = payload;
+                    
+                    // 1. 找出這筆交易 "之前" 所屬的群組
+                    const oldGroupsResult = await d1Client.query('SELECT group_id FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?', [uid, transactionId]);
+                    oldGroupsResult.forEach(row => groupsToMarkDirty.add(row.group_id));
+
+                    // 2. 將新舊所有相關的群組都加入待更新列表
+                    groupIds.forEach(gid => groupsToMarkDirty.add(gid));
+
+                    // 3. 安排資料庫操作：先刪後增
+                    dbOps.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?', params: [uid, transactionId] });
+                    if (groupIds && groupIds.length > 0) {
+                        groupIds.forEach(groupId => {
+                            dbOps.push({
+                                sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)',
+                                params: [uid, groupId, transactionId]
+                            });
+                        });
+                    }
+                }
+                break;
+            // ========================= 【核心修改 - 結束】 =========================
         }
     }
     
-    // 批次執行所有資料庫操作
+    // 將所有需要標記為 dirty 的群組加入操作隊列
+    if (groupsToMarkDirty.size > 0) {
+        const groupIds = Array.from(groupsToMarkDirty);
+        const placeholders = groupIds.map(() => '?').join(',');
+        dbOps.push({
+            sql: `UPDATE groups SET is_dirty = 1 WHERE uid = ? AND id IN (${placeholders})`,
+            params: [uid, ...groupIds]
+        });
+    }
+
     if (dbOps.length > 0) {
         await d1Client.batch(dbOps);
     }
     
-    // 所有操作完成後，觸發一次全局重算
-    // 這裡我們暫時不傳入 modifiedDate，強制進行一次完整的快照檢查與重算，確保數據一致性
     await performRecalculation(uid, null, false);
     
-    // 重算後，獲取最新的完整數據返回給前端
     const portfolioData = await require('./portfolio.handler').getData(uid, null);
 
     console.log(`[${uid}] [Sync] ${op_queue.length} 筆操作處理完成。`);
@@ -133,6 +166,6 @@ exports.syncOperations = async (uid, data, res) => {
     return res.status(200).send({
         success: true,
         message: '同步成功！',
-        data: portfolioData.data // getData 回傳的結構是 { success, data }
+        data: portfolioData.data
     });
 };
