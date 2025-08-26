@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 同步操作處理模組 (sync.handler.js) - v1.1.0 (支援群組歸屬更新)
+// == 同步操作處理模組 (sync.handler.js) - v1.2.0 (支援複合式交易建立)
 // == 職責：接收並處理前端的操作隊列，執行批次資料庫操作，並觸發一次性的重算。
 // =========================================================================================
 
@@ -22,7 +22,7 @@ exports.syncOperations = async (uid, data, res) => {
     const dbOps = [];
     const tempIdMap = new Map(); 
     let modifiedDate = null; 
-    const groupsToMarkDirty = new Set(); // 【新增】用來收集所有需要標記為 dirty 的群組 ID
+    const groupsToMarkDirty = new Set();
 
     for (const op of op_queue) {
         const { op: operation, entity, payload } = op;
@@ -35,15 +35,43 @@ exports.syncOperations = async (uid, data, res) => {
 
         switch (entity) {
             case 'transaction':
-                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE') {
-                    const newId = uuidv4();
-                    tempIdMap.set(payload.id, newId); 
-                    const txData = await transactionHandler.populateSettlementFxRate(payload);
+                    const newTxId = uuidv4();
+                    // 注意：前端發送的 payload 可能包含 isTemporary, id 等臨時屬性，這裡只取 txData
+                    const txData = await transactionHandler.populateSettlementFxRate(payload.txData);
+                    
                     dbOps.push({
                         sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                        params: [newId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                        params: [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
                     });
+
+                    // ========================= 【核心修改 - 開始】 =========================
+                    // 處理伴隨交易而來的新群組和歸屬關係
+                    const newGroupIdMap = new Map();
+                    if (payload.newGroups && payload.newGroups.length > 0) {
+                        payload.newGroups.forEach(group => {
+                            const newGroupId = uuidv4();
+                            newGroupIdMap.set(group.tempId, newGroupId);
+                            groupsToMarkDirty.add(newGroupId); // 新群組本身不需要標記
+                            dbOps.push({
+                                sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`,
+                                params: [newGroupId, uid, group.name, '']
+                            });
+                        });
+                    }
+
+                    if (payload.groupInclusions && payload.groupInclusions.length > 0) {
+                        payload.groupInclusions.forEach(groupId => {
+                            const finalGroupId = newGroupIdMap.has(groupId) ? newGroupIdMap.get(groupId) : groupId;
+                            groupsToMarkDirty.add(finalGroupId);
+                            dbOps.push({
+                                sql: `INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)`,
+                                params: [uid, finalGroupId, newTxId]
+                            });
+                        });
+                    }
+                    // ========================= 【核心修改 - 結束】 =========================
+
                 } else if (operation === 'UPDATE') {
                     const txData = await transactionHandler.populateSettlementFxRate(payload.txData);
                     dbOps.push({
@@ -57,7 +85,6 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'split':
-                 // ... (此 case 邏輯不變) ...
                  if (operation === 'CREATE') {
                     const newId = uuidv4();
                     tempIdMap.set(payload.id, newId);
@@ -68,7 +95,6 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'user_dividend':
-                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE' || operation === 'UPDATE') {
                     const dividendId = operation === 'CREATE' ? uuidv4() : payload.id;
                     if(operation === 'CREATE') tempIdMap.set(payload.id, dividendId);
@@ -84,7 +110,6 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
             
             case 'stock_note':
-                // ... (此 case 邏輯不變) ...
                 dbOps.push({
                     sql: `INSERT OR REPLACE INTO user_stock_notes (id, uid, symbol, target_price, stop_loss_price, notes, last_updated) VALUES ((SELECT id FROM user_stock_notes WHERE uid = ? AND symbol = ?), ?, ?, ?, ?, ?, ?)`,
                     params: [uid, payload.symbol, uid, payload.symbol, payload.target_price, payload.stop_loss_price, payload.notes, new Date().toISOString()]
@@ -92,7 +117,6 @@ exports.syncOperations = async (uid, data, res) => {
                 break;
 
             case 'group':
-                // ... (此 case 邏輯不變) ...
                 if (operation === 'CREATE' || operation === 'UPDATE') {
                     const groupId = (operation === 'CREATE') ? uuidv4() : resolveId(payload.id);
                     if(operation === 'CREATE') tempIdMap.set(payload.id, groupId);
@@ -115,19 +139,15 @@ exports.syncOperations = async (uid, data, res) => {
                 }
                 break;
             
-            // ========================= 【核心修改 - 開始】 =========================
             case 'transaction_group_membership':
                 if (operation === 'UPDATE') {
                     const { transactionId, groupIds } = payload;
                     
-                    // 1. 找出這筆交易 "之前" 所屬的群組
                     const oldGroupsResult = await d1Client.query('SELECT group_id FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?', [uid, transactionId]);
                     oldGroupsResult.forEach(row => groupsToMarkDirty.add(row.group_id));
 
-                    // 2. 將新舊所有相關的群組都加入待更新列表
                     groupIds.forEach(gid => groupsToMarkDirty.add(gid));
 
-                    // 3. 安排資料庫操作：先刪後增
                     dbOps.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?', params: [uid, transactionId] });
                     if (groupIds && groupIds.length > 0) {
                         groupIds.forEach(groupId => {
@@ -139,11 +159,9 @@ exports.syncOperations = async (uid, data, res) => {
                     }
                 }
                 break;
-            // ========================= 【核心修改 - 結束】 =========================
         }
     }
     
-    // 將所有需要標記為 dirty 的群組加入操作隊列
     if (groupsToMarkDirty.size > 0) {
         const groupIds = Array.from(groupsToMarkDirty);
         const placeholders = groupIds.map(() => '?').join(',');
