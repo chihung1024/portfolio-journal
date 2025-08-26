@@ -1,10 +1,9 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.1 - Bug Fix)
-// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
+// == 檔案：js/events/group.events.js (v3.2 - Bug Fix - Interaction Flow)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, applyGroupView, submitBatch } from '../api.js'; // applyGroupView & submitBatch 導入
+import { apiRequest, applyGroupView, submitBatch } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
@@ -18,6 +17,7 @@ async function handleStagingSuccess() {
 }
 
 /**
+
  * 載入所有群組並更新 UI
  */
 async function loadGroups() {
@@ -25,7 +25,7 @@ async function loadGroups() {
         const result = await apiRequest('get_groups', {});
         if (result.success) {
             setState({ groups: result.data });
-            await renderGroupsTab(); // 改為 await
+            await renderGroupsTab();
             updateGroupSelector();
         }
     } catch (error) {
@@ -108,15 +108,14 @@ export function initializeGroupEventListeners() {
 
     groupSelector.addEventListener('change', async (e) => {
         const selectedGroupId = e.target.value;
-        const previousGroupId = getState().selectedGroupId; // 【核心修正】儲存舊的ID
+        const previousGroupId = getState().selectedGroupId;
         const stagedActions = await stagingService.getStagedActions();
 
         if (stagedActions.length > 0) {
-            const { showConfirm, hideConfirm } = await import('../ui/modals.js');
+            const { showConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
-                async () => { // 確認後的回呼
-                    hideConfirm(); // 手動關閉確認窗
+                async () => { // 確認回呼
                     const netActions = await stagingService.getNetActions();
                     await submitBatch(netActions);
                     await stagingService.clearActions();
@@ -124,12 +123,12 @@ export function initializeGroupEventListeners() {
                     applyGroupView(selectedGroupId);
                 },
                 '提交並切換檢視？',
-                () => { // 【核心修正】新增取消後的回呼
+                () => { // 取消回呼
                     e.target.value = previousGroupId; // 將選擇器的值還原
-                    hideConfirm();
                 }
             );
         } else {
+            // 【核心修正】只有在沒有暫存項目的情況下，才直接執行切換
             setState({ selectedGroupId });
             applyGroupView(selectedGroupId);
         }
@@ -149,8 +148,9 @@ export function initializeGroupEventListeners() {
         if (editBtn) {
             const groupId = editBtn.dataset.groupId;
             const { groups } = getState();
-            // 【修正】同時檢查暫存區的新群組
-            const allGroups = [...groups, ...(await stagingService.getStagedEntities('group'))];
+            const stagedActions = await stagingService.getStagedActions();
+            const stagedGroups = stagedActions.filter(a => a.entity === 'group').map(a => a.payload);
+            const allGroups = [...groups, ...stagedGroups];
             const groupToEdit = allGroups.find(g => g.id === groupId);
 
             if (groupToEdit) {
