@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.2 - Bug Fix - Interaction Flow)
+// == 檔案：js/events/group.events.js (v3.3 - Final Bug Fix - Interaction Flow)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -17,7 +17,6 @@ async function handleStagingSuccess() {
 }
 
 /**
-
  * 載入所有群組並更新 UI
  */
 async function loadGroups() {
@@ -111,7 +110,7 @@ export function initializeGroupEventListeners() {
         const previousGroupId = getState().selectedGroupId;
         const stagedActions = await stagingService.getStagedActions();
 
-        if (stagedActions.length > 0) {
+        if (stagedActions.length > 0 && selectedGroupId !== previousGroupId) {
             const { showConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
@@ -128,7 +127,7 @@ export function initializeGroupEventListeners() {
                 }
             );
         } else {
-            // 【核心修正】只有在沒有暫存項目的情況下，才直接執行切換
+            // 只有在沒有暫存項目的情況下，才直接執行切換
             setState({ selectedGroupId });
             applyGroupView(selectedGroupId);
         }
@@ -150,8 +149,18 @@ export function initializeGroupEventListeners() {
             const { groups } = getState();
             const stagedActions = await stagingService.getStagedActions();
             const stagedGroups = stagedActions.filter(a => a.entity === 'group').map(a => a.payload);
-            const allGroups = [...groups, ...stagedGroups];
-            const groupToEdit = allGroups.find(g => g.id === groupId);
+            
+            let combined = [...groups];
+            stagedGroups.forEach(stagedGroup => {
+                const index = combined.findIndex(g => g.id === stagedGroup.id);
+                if(index > -1) {
+                    combined[index] = {...combined[index], ...stagedGroup};
+                } else {
+                    combined.push(stagedGroup);
+                }
+            });
+
+            const groupToEdit = combined.find(g => g.id === groupId);
 
             if (groupToEdit) {
                  const { openModal } = await import('../ui/modals.js');
