@@ -1,17 +1,44 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - 【新檔案】
-// == 職責：處理暫存區頂部按鈕、彈出視窗的 UI 互動與事件監聽。
+// == 暫存區事件處理模組 (staging.events.js) - v2.1 (Bug Fix - UI Refresh)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
 import { submitBatch } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 動態導入
+import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
+import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
+import { renderSplitsTable } from '../ui/components/splits.ui.js';
+import { renderGroupsTab } from '../ui/components/groups.ui.js';
+import { getState } from '../state.js';
+
+/**
+ * 【新增】一個輔助函式，用於刷新當前可見的分頁視圖
+ */
+async function refreshCurrentView() {
+    const activeTab = document.querySelector('.tab-content:not(.hidden)');
+    if (!activeTab) return;
+
+    switch (activeTab.id) {
+        case 'transactions-tab':
+            await renderTransactionsTable();
+            break;
+        case 'dividends-tab':
+            const { pendingDividends, confirmedDividends } = getState();
+            await renderDividendsManagementTab(pendingDividends, confirmedDividends);
+            break;
+        case 'splits-tab':
+            await renderSplitsTable();
+            break;
+        case 'groups-tab':
+            await renderGroupsTab();
+            break;
+        // holdings-tab 不需要，因為它的操作是從其他地方觸發的
+    }
+}
+
 
 /**
  * 格式化單個暫存操作，以便在 UI 中顯示
- * @param {object} action - 來自 stagingService 的操作物件
- * @returns {string} - 用於顯示的 HTML 字串
  */
 function formatActionForDisplay(action) {
     const { type, entity, payload } = action;
@@ -88,15 +115,9 @@ async function submitAllActions() {
             showNotification('info', '沒有需要提交的操作。');
             return;
         }
-
-        // 呼叫 api.js 中的 submitBatch
         await submitBatch(netActions);
-        
-        // 成功後清空暫存區
         await stagingService.clearActions();
-
     } catch (error) {
-        // 錯誤通知已在 submitBatch 中處理
         console.error("提交暫存區時發生錯誤:", error);
     }
 }
@@ -110,7 +131,6 @@ export function initializeStagingEventListeners() {
     const submitAllBtn = document.getElementById('submit-all-btn');
     const stagingModal = document.getElementById('staging-modal');
 
-    // 監聽來自 stagingService 的全局更新事件
     document.addEventListener('staging-area-updated', (e) => {
         const count = e.detail.count;
         const badge = document.getElementById('staging-count-badge');
@@ -126,7 +146,6 @@ export function initializeStagingEventListeners() {
         }
     });
 
-    // 頂部按鈕事件
     editBtn.addEventListener('click', async () => {
         const { openModal } = await import('../ui/modals.js');
         await renderStagingModal();
@@ -135,36 +154,33 @@ export function initializeStagingEventListeners() {
 
     submitAllBtn.addEventListener('click', submitAllActions);
 
-    // Modal 內部事件
     if (stagingModal) {
         stagingModal.addEventListener('click', async (e) => {
             const { closeModal, showConfirm } = await import('../ui/modals.js');
-            // 關閉按鈕
             if (e.target.closest('#close-staging-modal-btn')) {
                 closeModal('staging-modal');
                 return;
             }
 
-            // 移除單個操作
             const removeBtn = e.target.closest('.remove-staged-action-btn');
             if (removeBtn) {
                 const actionId = parseInt(removeBtn.dataset.actionId, 10);
                 await stagingService.removeAction(actionId);
-                await renderStagingModal(); // 重新渲染列表
+                await renderStagingModal();
                 return;
             }
 
-            // 全部提交
             if (e.target.closest('#submit-from-staging-btn')) {
                 submitAllActions();
                 return;
             }
 
-            // 清空所有
             if (e.target.closest('#clear-staging-btn')) {
                 showConfirm('您確定要清空所有暫存的操作嗎？此操作無法復原。', async () => {
                     await stagingService.clearActions();
                     await renderStagingModal();
+                    // 【核心修正】清空後，刷新當前視圖
+                    await refreshCurrentView(); 
                     showNotification('info', '暫存區已清空。');
                 });
                 return;
