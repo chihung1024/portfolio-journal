@@ -1,10 +1,14 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v4.3.0 - 條件式輪詢 (優化後)
+// == 主程式進入點 (main.js) v5.0.0 - 整合暫存區服務
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
+// 【核心修改】引入暫存區相關模組
+import { stagingService } from './staging.service.js';
+import { initializeStagingEventListeners } from './events/staging.events.js';
+
 
 // --- UI Module Imports ---
 import { initializeAssetChart, updateAssetChart } from './ui/charts/assetChart.js';
@@ -15,7 +19,6 @@ import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
-// import { hideConfirm, toggleOptionalFields } from './ui/modals.js'; // 移除靜態導入
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
@@ -58,19 +61,16 @@ export function startLiveRefresh() {
     stopLiveRefresh(); 
 
     const poll = async () => {
-        // 【核心修改】增加條件判斷，若正在檢視自訂群組，則不刷新
         const { selectedGroupId } = getState();
         if (selectedGroupId !== 'all') {
             console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
             return;
         }
         
-        // 動態導入 modals 模組來檢查是否有 modal 開啟
         const { openModal } = await import('./ui/modals.js');
         const isModalOpen = document.querySelector('#transaction-modal:not(.hidden)') ||
                             document.querySelector('#split-modal:not(.hidden)') ||
                             document.querySelector('#dividend-modal:not(.hidden)') ||
-                            document.querySelector('#notes-modal:not(.hidden)') ||
                             document.querySelector('#details-modal:not(.hidden)') ||
                             document.querySelector('#group-modal:not(.hidden)');
 
@@ -107,12 +107,9 @@ export function stopLiveRefresh() {
 }
 
 
-/**
- * 【新函式】第一階段：僅載入儀表板摘要
- */
 export async function loadInitialDashboard() {
     try {
-        const result = await apiRequest('get_dashboard_summary', {}); // <-- 呼叫新的超輕量 API
+        const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
         const { summary, stockNotes } = result.data;
@@ -122,37 +119,30 @@ export async function loadInitialDashboard() {
         }, {});
 
         setState({
-            // 先用空的 holdings 初始化，避免錯誤
             holdings: {},
             stockNotes: stockNotesMap,
             summary: summary
         });
 
-        // 核心：立即更新儀表板，並顯示一個空的持股表格
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-        renderHoldingsTable({}); // 傳入空物件，會顯示 "沒有持股紀錄..." 的訊息
+        renderHoldingsTable({});
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
     } catch (error) {
         showNotification('error', `讀取核心數據失敗: ${error.message}`);
     } finally {
-        // 完成後，無論成功或失敗，都隱藏主讀取畫面
         document.getElementById('loading-overlay').style.display = 'none';
-        // 立即在背景啟動後續數據的載入
         setTimeout(() => {
-            loadHoldingsInBackground(); // 載入持股
-            loadChartDataInBackground(); // 載入圖表
-        }, 100); // 短暫延遲確保 UI 渲染完成
+            loadHoldingsInBackground();
+            loadChartDataInBackground();
+        }, 100);
     }
 }
 
-/**
- * 【新函式】第二階段：在背景載入持股列表
- */
 async function loadHoldingsInBackground() {
     try {
         console.log("正在背景載入持股數據...");
-        const result = await apiRequest('get_holdings', {}); // <-- 呼叫新的持股專用 API
+        const result = await apiRequest('get_holdings', {});
         if (result.success) {
             const { holdings } = result.data;
             const holdingsObject = (holdings || []).reduce((obj, item) => {
@@ -161,7 +151,6 @@ async function loadHoldingsInBackground() {
             
             setState({ holdings: holdingsObject });
             
-            // 數據回來後，重新渲染儀表板和持股表格
             const { summary } = getState();
             updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
             renderHoldingsTable(holdingsObject);
@@ -351,17 +340,13 @@ function setupMainAppEventListeners() {
     });
 
     const groupSelector = document.getElementById('group-selector');
-
-    // 【核心修改】簡化事件監聽器邏輯
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
         setState({ selectedGroupId });
         if (selectedGroupId === 'all') {
-            // 切換回「全部股票」視圖
             document.getElementById('loading-overlay').style.display = 'flex';
             loadInitialDashboard(); 
         } else {
-            // 直接計算並顯示選定的群組視圖
             applyGroupView(selectedGroupId);
         }
     });
@@ -374,6 +359,9 @@ export function initializeAppUI() {
     }
     console.log("Initializing Main App UI...");
     
+    // 【核心修改】初始化暫存區服務
+    stagingService.init();
+
     initializeAssetChart();
     initializeTwrChart();
     initializeNetProfitChart();
@@ -386,6 +374,9 @@ export function initializeAppUI() {
     initializeDividendEventListeners();
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
+    // 【核心修改】初始化暫存區相關的事件監聽
+    initializeStagingEventListeners();
+    
     lucide.createIcons();
 
     setState({ isAppInitialized: true });

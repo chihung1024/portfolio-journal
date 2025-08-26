@@ -1,65 +1,40 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v2.2 - 支援鍵盤操作
+// == 交易事件處理模組 (transaction.events.js) v3.0 - 整合暫存區
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction } from '../api.js';
+import { stagingService } from '../staging.service.js'; // 【核心修改】
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-// import { openModal, closeModal, showConfirm, openGroupAttributionModal } from '../ui/modals.js'; // 移除靜態導入
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-import { updateDashboard } from '../ui/dashboard.js';
-import { updateAssetChart } from '../ui/charts/assetChart.js';
-import { updateTwrChart } from '../ui/charts/twrChart.js';
-import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
-import { loadGroups } from './group.events.js'; // 【BUG FIX】導入 loadGroups 函式
-
 
 // --- Private Functions (內部函式) ---
 
 async function handleEdit(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
-    const transaction = transactions.find(t => t.id === txId);
+    // 【優化】同時檢查暫存區，確保能編輯尚未提交的新項目
+    const allTxs = [...transactions, ...(await stagingService.getStagedEntities('transaction'))];
+    const transaction = allTxs.find(t => t.id === txId);
     if (!transaction) return;
-    
-    // 確保標題正確
-    const titleEl = document.getElementById('modal-title');
-    if(titleEl) titleEl.textContent = '編輯交易紀錄';
     
     const { openModal } = await import('../ui/modals.js');
     openModal('transaction-modal', true, transaction);
 }
 
-function handleSuccessfulUpdate(result) {
-    if (!result || !result.data) {
-        console.error("handleSuccessfulUpdate 收到的結果無效:", result);
-        return;
-    }
+/**
+ * 【核心修改】操作成功存入暫存區後，更新 UI
+ */
+function handleStagingSuccess() {
+    showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
     
-    const { holdings, summary, history, twrHistory, netProfitHistory, benchmarkHistory } = result.data;
-
-    const holdingsObject = (holdings || []).reduce((obj, item) => {
-        obj[item.symbol] = item; return obj;
-    }, {});
-
-    setState({
-        holdings: holdingsObject,
-        portfolioHistory: history || {},
-        twrHistory: twrHistory || {},
-        netProfitHistory: netProfitHistory || {},
-        benchmarkHistory: benchmarkHistory || {}
-    });
-
-    renderHoldingsTable(holdingsObject);
-    updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
-
-    updateAssetChart();
-    updateNetProfitChart();
-    const benchmarkSymbol = summary?.benchmarkSymbol || 'SPY';
-    updateTwrChart(benchmarkSymbol);
-    
+    // 立即重新渲染交易列表以顯示暫存狀態
     renderTransactionsTable();
+
+    // 注意：此處暫不重新計算儀表板，因為這只是前端暫存。
+    // 也可以選擇性地觸發一個輕量級的前端預覽更新。
+    const { holdings } = getState();
+    renderHoldingsTable(holdings); 
 }
 
 
@@ -67,21 +42,13 @@ async function handleDelete(button) {
     const txId = button.dataset.id;
     
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這筆交易紀錄嗎？此操作將同時移除此交易在所有群組中的紀錄。', () => {
-        executeApiAction('delete_transaction', { txId }, {
-            loadingText: '正在刪除交易紀錄...',
-            successMessage: '交易紀錄已成功刪除！',
-            shouldRefreshData: false 
-        }).then(result => {
-            const { transactions } = getState();
-            const updatedTransactions = transactions.filter(t => t.id !== txId);
-            setState({ transactions: updatedTransactions });
-            
-            handleSuccessfulUpdate(result);
-            loadGroups(); // 【BUG FIX】在刪除成功後，手動刷新群組列表
-        }).catch(error => {
-            console.error("刪除交易最終失敗:", error);
-        });
+    showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
+        try {
+            await stagingService.addAction('DELETE', 'transaction', { id: txId });
+            handleStagingSuccess();
+        } catch (error) {
+            showNotification('error', `暫存刪除操作失敗: ${error.message}`);
+        }
     });
 }
 
@@ -108,32 +75,24 @@ async function handleNextStep() {
     closeModal('transaction-modal');
 
     if (isEditing) {
-        // 【核心修改】如果是編輯模式，直接儲存，不再進入第二步
-        const payloadForApi = { txId: txId, txData: transactionData };
-        executeApiAction('edit_transaction', payloadForApi, {
-            loadingText: '正在儲存變更...',
-            successMessage: '交易已成功更新！',
-            shouldRefreshData: false
-        }).then(result => {
-             // 編輯成功後，需要手動更新 state 中的 transactions 陣列
-            const { transactions } = getState();
-            const updatedTransactions = transactions.map(t => t.id === txId ? { ...t, ...transactionData } : t);
-            setState({ transactions: updatedTransactions });
-            handleSuccessfulUpdate(result);
-            loadGroups(); // 【BUG FIX】手動刷新群組列表
-        }).catch(error => {
-            console.error("編輯交易最終失敗:", error);
-        });
+        // 【核心修改】編輯模式下，將更新操作加入暫存區
+        try {
+            await stagingService.addAction('UPDATE', 'transaction', { id: txId, ...transactionData });
+            handleStagingSuccess();
+        } catch (error) {
+             showNotification('error', `暫存更新操作失敗: ${error.message}`);
+        }
     } else {
-        // 【維持不變】如果是新增模式，則進入第二步的群組歸屬流程
+        // 新增模式，進入第二步的群組歸屬流程 (最終也會存入暫存區)
+        const tempId = `temp_${Date.now()}`;
         setState({ tempTransactionData: {
-            isEditing,
-            txId,
-            data: transactionData
+            isEditing: false,
+            txId: tempId, // 使用臨時ID
+            data: { id: tempId, ...transactionData } // 將臨時ID也加入payload
         }});
 
         setTimeout(() => {
-            openGroupAttributionModal();
+            openGroupAttattributionModal();
         }, 150);
     }
 }
@@ -143,7 +102,6 @@ async function handleNextStep() {
 export function initializeTransactionEventListeners() {
     document.getElementById('add-transaction-btn').addEventListener('click', async () => {
         setState({ tempTransactionData: null });
-        
         const { openModal } = await import('../ui/modals.js');
         openModal('transaction-modal');
     });
@@ -155,17 +113,14 @@ export function initializeTransactionEventListeners() {
         closeModal('transaction-modal');
     });
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 為交易表單增加 Enter 鍵監聽
     document.getElementById('transaction-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             document.getElementById('confirm-transaction-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 
-    document.getElementById('transactions-tab').addEventListener('click', async (e) => { // 【修改】將整個監聽器改為 async
+    document.getElementById('transactions-tab').addEventListener('click', async (e) => {
         const editButton = e.target.closest('.edit-btn');
         if (editButton) {
             e.preventDefault();
