@@ -1,9 +1,9 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.0 - 整合暫存區
+// == 交易事件處理模組 (transaction.events.js) v3.1 - Bug Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { stagingService } from '../staging.service.js'; // 【核心修改】
+import { stagingService } from '../staging.service.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
@@ -13,28 +13,41 @@ import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 async function handleEdit(button) {
     const { transactions } = getState();
     const txId = button.dataset.id;
-    // 【優化】同時檢查暫存區，確保能編輯尚未提交的新項目
-    const allTxs = [...transactions, ...(await stagingService.getStagedEntities('transaction'))];
-    const transaction = allTxs.find(t => t.id === txId);
-    if (!transaction) return;
+    
+    // 【核心修正】從 state 和 staging area 合併數據源，確保能編輯尚未提交的項目
+    const stagedActions = await stagingService.getStagedActions();
+    const stagedTransactions = stagedActions
+        .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
+        .map(a => a.payload);
+
+    const combined = [...transactions];
+    stagedTransactions.forEach(stagedTx => {
+        const index = combined.findIndex(t => t.id === stagedTx.id);
+        if (index > -1) {
+            combined[index] = { ...combined[index], ...stagedTx }; // Update existing
+        } else {
+            combined.push(stagedTx); // Add new
+        }
+    });
+
+    const transaction = combined.find(t => t.id === txId);
+    if (!transaction) {
+        showNotification('error', '找不到要編輯的交易紀錄。');
+        return;
+    }
     
     const { openModal } = await import('../ui/modals.js');
     openModal('transaction-modal', true, transaction);
 }
 
 /**
- * 【核心修改】操作成功存入暫存區後，更新 UI
+ * 操作成功存入暫存區後，更新 UI
  */
-function handleStagingSuccess() {
+async function handleStagingSuccess() {
     showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
-    
-    // 立即重新渲染交易列表以顯示暫存狀態
-    renderTransactionsTable();
-
-    // 注意：此處暫不重新計算儀表板，因為這只是前端暫存。
-    // 也可以選擇性地觸發一個輕量級的前端預覽更新。
+    await renderTransactionsTable();
     const { holdings } = getState();
-    renderHoldingsTable(holdings); 
+    await renderHoldingsTable(holdings); 
 }
 
 
@@ -45,7 +58,7 @@ async function handleDelete(button) {
     showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
         try {
             await stagingService.addAction('DELETE', 'transaction', { id: txId });
-            handleStagingSuccess();
+            await handleStagingSuccess();
         } catch (error) {
             showNotification('error', `暫存刪除操作失敗: ${error.message}`);
         }
@@ -75,24 +88,22 @@ async function handleNextStep() {
     closeModal('transaction-modal');
 
     if (isEditing) {
-        // 【核心修改】編輯模式下，將更新操作加入暫存區
         try {
             await stagingService.addAction('UPDATE', 'transaction', { id: txId, ...transactionData });
-            handleStagingSuccess();
+            await handleStagingSuccess();
         } catch (error) {
              showNotification('error', `暫存更新操作失敗: ${error.message}`);
         }
     } else {
-        // 新增模式，進入第二步的群組歸屬流程 (最終也會存入暫存區)
         const tempId = `temp_${Date.now()}`;
         setState({ tempTransactionData: {
             isEditing: false,
-            txId: tempId, // 使用臨時ID
-            data: { id: tempId, ...transactionData } // 將臨時ID也加入payload
+            txId: tempId,
+            data: { id: tempId, ...transactionData }
         }});
 
         setTimeout(() => {
-            openGroupAttattributionModal();
+            openGroupAttributionModal();
         }, 150);
     }
 }
