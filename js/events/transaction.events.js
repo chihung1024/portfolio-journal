@@ -1,20 +1,11 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.0.0 - 整合操作隊列
+// == 交易事件處理模組 (transaction.events.js) v3.1.0 - 恢復兩步驟新增流程
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
+import { addToQueue } from '../op_queue_manager.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { showNotification } from '../ui/notifications.js';
-import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
-// 【移除】不再需要直接與後端溝通的模組
-// import { apiRequest, executeApiAction } from '../api.js';
-// import { updateDashboard } from '../ui/dashboard.js';
-// import { updateAssetChart } from '../ui/charts/assetChart.js';
-// import { updateTwrChart } from '../ui/charts/twrChart.js';
-// import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
-// import { loadGroups } from './group.events.js';
-
 
 // --- Private Functions (內部函式) ---
 
@@ -36,17 +27,18 @@ async function handleDelete(button) {
     
     const { showConfirm } = await import('../ui/modals.js');
     showConfirm('確定要刪除這筆交易紀錄嗎？此操作將被暫存，點擊「同步變更」後才會生效。', () => {
-        // 【核心修改】將操作加入隊列，而不是直接呼叫 API
         const success = addToQueue('DELETE', 'transaction', { txId });
         
         if (success) {
             showNotification('info', '交易已標記為刪除。點擊同步按鈕以儲存變更。');
-            // 立即使用更新後的 state 重新渲染 UI
             renderTransactionsTable();
         }
     });
 }
 
+/**
+ * 【核心修改】處理交易表單的第一步（或編輯時的儲存）
+ */
 async function handleNextStep() {
     const txId = document.getElementById('transaction-id').value;
     const isEditing = !!txId;
@@ -66,11 +58,11 @@ async function handleNextStep() {
         return;
     }
     
-    const { closeModal } = await import('../ui/modals.js');
+    const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
     closeModal('transaction-modal');
 
-    // 【核心修改】將新增或編輯操作加入隊列
     if (isEditing) {
+        // 編輯模式：維持單一步驟，直接加入隊列
         const payload = { txId: txId, txData: transactionData };
         const success = addToQueue('UPDATE', 'transaction', payload);
         if (success) {
@@ -78,11 +70,18 @@ async function handleNextStep() {
             renderTransactionsTable();
         }
     } else {
-        const success = addToQueue('CREATE', 'transaction', transactionData);
-        if (success) {
-            showNotification('info', '新交易已暫存。點擊同步按鈕以儲存。');
-            renderTransactionsTable();
-        }
+        // 新增模式：恢復兩步驟流程
+        // 1. 將交易資料暫存
+        setState({ tempTransactionData: {
+            isEditing,
+            txId,
+            data: transactionData
+        }});
+
+        // 2. 開啟第二步的群組歸屬彈窗
+        setTimeout(() => {
+            openGroupAttributionModal();
+        }, 150);
     }
 }
 
