@@ -1,157 +1,70 @@
-// =========================================================================================
-// == GCP Cloud Function 主入口 (v5.2.1 - Cloud Run 相容性修正)
-// =========================================================================================
+const { Router } = require('itty-router');
+const { withDurables } = require('itty-durable');
+const { withContent, withParams } = require('itty-router-extras');
 
-// 【核心修改】移除 'firebase-functions' 的依賴
-const admin = require('firebase-admin');
-const { z } = require("zod");
+const { handleScheduled } = require('./worker.js');
+const { auth, resolveUser, adminOnly } = require('./middleware.js');
 
-const { d1Client } = require('./d1.client');
-const { performRecalculation } = require('./performRecalculation');
-const { verifyFirebaseToken } = require('./middleware');
+const portfolioHandler = require('./api_handlers/portfolio.handler.js');
+const transactionHandler = require('./api_handlers/transaction.handler.js');
+const dividendHandler = require('./api_handlers/dividend.handler.js');
+const groupHandler = require('./api_handlers/group.handler.js');
+const splitHandler = require('./api_handlers/split.handler.js');
+const detailsHandler = require('./api_handlers/details.handler.js');
+const batchHandler = require('./api_handlers/batch.handler.js');
 
-// 引入所有 handlers
-const transactionHandlers = require('./api_handlers/transaction.handler');
-const dividendHandlers = require('./api_handlers/dividend.handler');
-const splitHandlers = require('./api_handlers/split.handler');
-const noteHandlers = require('./api_handlers/note.handler');
-const portfolioHandlers = require('./api_handlers/portfolio.handler');
-const groupHandlers = require('./api_handlers/group.handler');
-const detailsHandlers = require('./api_handlers/details.handler');
+const router = Router();
 
-try {
-    admin.initializeApp();
-} catch (e) {
-    // Firebase Admin SDK already initialized
-}
+router.all('*', withDurables(), withContent(), withParams, resolveUser);
 
-// 【核心修改】直接導出一個處理 (req, res) 的標準 Node.js 函式
-exports.unifiedPortfolioHandler = async (req, res) => {
-    // CORS and OPTIONS request handling - 邏輯完全不變
-    const allowedOrigins = [
-        'https://portfolio-journal.pages.dev',
-        'https://dev.portfolio-journal.pages.dev',
-        'https://portfolio-journal-467915.firebaseapp.com'
-    ];
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-        res.set('Access-Control-Allow-Origin', origin);
-    }
-    if (req.method === 'OPTIONS') {
-        res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Service-Account-Key, X-API-KEY');
-        res.set('Access-Control-Max-Age', '3600');
-        res.status(204).send('');
-        return;
-    }
-    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+// Portfolio
+router.get('/api/portfolio', auth, portfolioHandler.getPortfolio);
+router.post('/api/portfolio/recalculate', auth, portfolioHandler.recalculatePortfolio);
+router.post('/api/portfolio/settings', auth, portfolioHandler.updateSettings);
+router.get('/api/portfolio/export', auth, portfolioHandler.exportPortfolio);
+router.post('/api/portfolio/import', auth, portfolioHandler.importPortfolio);
 
-    // Service Account request handling - 邏輯完全不變
-    const serviceAccountKey = req.headers['x-service-account-key'];
-    if (serviceAccountKey) {
-        if (serviceAccountKey !== process.env.SERVICE_ACCOUNT_KEY) {
-            return res.status(403).send({ success: false, message: 'Invalid Service Account Key' });
-        }
-        if (req.body.action === 'recalculate_all_users') {
-            try {
-                const createSnapshot = req.body.createSnapshot || false;
-                console.log(`收到批次重算請求，是否建立快照: ${createSnapshot}`);
+// Transactions
+// Note: These routes are now superseded by the batch submission but kept for potential individual use or testing.
+router.post('/api/transactions', auth, transactionHandler.createTransaction);
+router.put('/api/transactions/:id', auth, transactionHandler.updateTransaction);
+router.delete('/api/transactions/:id', auth, transactionHandler.deleteTransaction);
+router.put('/api/transactions/group/:id', auth, transactionHandler.updateTransactionGroup);
 
-                const allUidsResult = await d1Client.query('SELECT DISTINCT uid FROM transactions');
-                for (const row of allUidsResult) {
-                    await performRecalculation(row.uid, null, createSnapshot);
-                }
-                return res.status(200).send({ success: true, message: '所有使用者重算成功。' });
-            } catch (error) { return res.status(500).send({ success: false, message: `重算過程中發生錯誤: ${error.message}` }); }
-        } else if (req.body.action === '_internal_run_migration_v3') {
-            try {
-                await migrationHandlers.runMigration(req, res);
-                return;
-            } catch (error) {
-                return res.status(500).send({ success: false, message: `遷移過程中發生錯誤: ${error.message}` });
-            }
-        }
-        return res.status(400).send({ success: false, message: '無效的服務操作。' });
-    }
+// Dividends
+// Note: These routes are now superseded by the batch submission.
+router.get('/api/dividends', auth, dividendHandler.getDividends);
+router.post('/api/dividends', auth, dividendHandler.createDividend);
+router.put('/api/dividends/:id', auth, dividendHandler.updateDividend);
+router.delete('/api/dividends/:id', auth, dividendHandler.deleteDividend);
+router.post('/api/dividends/confirm', auth, dividendHandler.confirmDividend);
 
-    // Main request routing - 邏輯完全不變
-    await verifyFirebaseToken(req, res, async () => {
-        try {
-            const uid = req.user.uid;
-            const { action, data } = req.body;
-            if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
+// Splits
+// Note: These routes are now superseded by the batch submission.
+router.get('/api/splits', auth, splitHandler.getSplits);
+router.post('/api/splits', auth, splitHandler.createSplit);
+router.delete('./api/splits/:id', auth, splitHandler.deleteSplit);
 
-            // 【100%完整】所有的 switch case 邏輯
-            switch (action) {
-                // Portfolio
-                case 'get_data':
-                    return await portfolioHandlers.getData(uid, res);
-                case 'update_benchmark':
-                    return await portfolioHandlers.updateBenchmark(uid, data, res);
-                case 'get_dashboard_and_holdings':
-                    return await portfolioHandlers.getDashboardAndHoldings(uid, res);
-                case 'get_dashboard_summary':
-                    return await portfolioHandlers.getDashboardSummary(uid, res);
-                case 'get_holdings':
-                    return await portfolioHandlers.getHoldings(uid, res);
-                case 'get_transactions_and_splits':
-                    return await portfolioHandlers.getTransactionsAndSplits(uid, res);
-                case 'get_chart_data':
-                    return await portfolioHandlers.getChartData(uid, res);
-                case 'get_symbol_details':
-                    return await detailsHandlers.getSymbolDetails(uid, data, res);
+// Groups
+// Note: These routes are now superseded by the batch submission.
+router.get('/api/groups', auth, groupHandler.getGroups);
+router.post('/api/groups', auth, groupHandler.createGroup);
+router.put('/api/groups/:id', auth, groupHandler.updateGroup);
+router.delete('/api/groups/:id', auth, groupHandler.deleteGroup);
 
-                // Transactions
-                case 'add_transaction':
-                    return await transactionHandlers.addTransaction(uid, data, res);
-                case 'edit_transaction':
-                    return await transactionHandlers.editTransaction(uid, data, res);
-                case 'delete_transaction':
-                    return await transactionHandlers.deleteTransaction(uid, data, res);
+// Details
+router.get('/api/details/:symbol', auth, detailsHandler.getDetails);
 
-                // Splits
-                case 'add_split':
-                    return await splitHandlers.addSplit(uid, data, res);
-                case 'delete_split':
-                    return await splitHandlers.deleteSplit(uid, data, res);
+// Batch Submission
+router.post('/api/submit-batch', auth, batchHandler.submitBatch);
 
-                // Dividends
-                case 'get_dividends_for_management':
-                    return await dividendHandlers.getDividendsForManagement(uid, res);
-                case 'save_user_dividend':
-                    return await dividendHandlers.saveUserDividend(uid, data, res);
-                case 'bulk_confirm_all_dividends':
-                    return await dividendHandlers.bulkConfirmAllDividends(uid, data, res);
-                case 'delete_user_dividend':
-                    return await dividendHandlers.deleteUserDividend(uid, data, res);
-                
-                // Notes
-                case 'save_stock_note':
-                    return await noteHandlers.saveStockNote(uid, data, res);
+// Admin
+router.get('/api/admin/users', auth, adminOnly, portfolioHandler.getAllUsers);
 
-                // Groups
-                case 'get_groups':
-                    return await groupHandlers.getGroups(uid, res);
-                case 'get_group_details':
-                    return await groupHandlers.getGroupDetails(uid, data, res);
-                case 'get_transaction_memberships':
-                    return await groupHandlers.getTransactionMemberships(uid, data, res);
-                case 'save_group':
-                    return await groupHandlers.saveGroup(uid, data, res);
-                case 'delete_group':
-                    return await groupHandlers.deleteGroup(uid, data, res);
-                case 'calculate_group_on_demand':
-                    return await groupHandlers.calculateGroupOnDemand(uid, data, res);
-                case 'update_transaction_group_membership':
-                    return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
+// 404
+router.all('*', () => new Response('Not Found.', { status: 404 }));
 
-                default:
-                    return res.status(400).send({ success: false, message: '未知的操作' });
-            }
-        } catch (error) {
-            console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
-            if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });
-            res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
-        }
-    });
+module.exports = {
+  fetch: router.handle,
+  scheduled: handleScheduled,
 };

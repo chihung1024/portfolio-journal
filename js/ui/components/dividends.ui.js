@@ -1,19 +1,97 @@
 // =========================================================================================
-// == 配息管理 UI 模組 (dividends.ui.js)
-// == 職責：處理配息管理分頁的渲染。
+// == 配息管理 UI 模組 (dividends.ui.js) v2.0 - 整合暫存區
 // =========================================================================================
 
 import { getState } from '../../state.js';
 import { isTwStock, formatNumber } from '../utils.js';
+import { stagingService } from '../../staging.service.js';
 
-export function renderDividendsManagementTab(pending, confirmed) {
-    const { dividendFilter } = getState();
+export async function renderDividendsManagementTab() {
+    const { pendingDividends, confirmedDividends, dividendFilter } = getState();
     const container = document.getElementById('dividends-tab');
-    const pendingHtml = `<div class="mb-8"><div class="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4"><h3 class="text-lg font-semibold text-gray-800">待確認配息</h3>${pending.length > 0 ? `<button id="bulk-confirm-dividends-btn" class="btn bg-teal-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-teal-700 flex items-center space-x-2"><i data-lucide="check-check" class="h-5 w-5"></i><span>一鍵全部以預設值確認</span></button>` : ''}</div><div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">除息日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">當時股數</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">每股配息</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${pending.length > 0 ? pending.map((p, index) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4 font-medium">${p.symbol}</td><td class="px-4 py-4">${p.ex_dividend_date}</td><td class="px-4 py-4">${formatNumber(p.quantity_at_ex_date, isTwStock(p.symbol) ? 0 : 2)}</td><td class="px-4 py-4">${formatNumber(p.amount_per_share, 4)} <span class="text-xs text-gray-500">${p.currency}</span></td><td class="px-4 py-4 text-center"><button data-index="${index}" class="confirm-dividend-btn text-indigo-600 hover:text-indigo-900 font-medium">確認入帳</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有待處理的配息。</td></tr>`}</tbody></table></div></div>`;
-    const confirmedSymbols = ['all', ...Array.from(new Set(confirmed.map(c => c.symbol)))];
-    const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="dividend-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="dividend-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${confirmedSymbols.map(s => `<option value="${s}" ${dividendFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
-    const filteredConfirmed = dividendFilter === 'all' ? confirmed : confirmed.filter(c => c.symbol === dividendFilter);
-    const confirmedHtml = `<div><h3 class="text-lg font-semibold text-gray-800 mb-4">已確認 / 歷史配息</h3>${filterHtml}<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">發放日</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">實收總額</th><th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備註</th><th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => `<tr class="hover:bg-gray-50"><td class="px-4 py-4">${c.pay_date.split('T')[0]}</td><td class="px-4 py-4 font-medium">${c.symbol}</td><td class="px-4 py-4">${formatNumber(c.total_amount, c.currency === 'TWD' ? 0 : 2)} <span class="text-xs text-gray-500">${c.currency}</span></td><td class="px-4 py-4 text-sm text-gray-600 truncate max-w-xs">${c.notes || ''}</td><td class="px-4 py-4 text-center"><button data-id="${c.id}" class="edit-dividend-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button><button data-id="${c.id}" class="delete-dividend-btn text-red-600 hover:text-red-900">刪除</button></td></tr>`).join('') : `<tr><td colspan="5" class="text-center py-10 text-gray-500">沒有符合條件的已確認配息紀錄。</td></tr>`}</tbody></table></div></div>`;
+    if (!container) return;
+
+    // 1. 獲取所有配息相關的暫存操作
+    const stagedActions = (await stagingService.getActions()).filter(a => a.entity === 'DIVIDEND');
+    const stagedCreates = stagedActions.filter(a => a.type === 'CREATE').map(a => a.payload);
+    const stagedUpdates = new Map(stagedActions.filter(a => a.type === 'UPDATE').map(a => [a.payload.id, a.payload]));
+    const stagedDeletes = new Set(stagedActions.filter(a => a.type === 'DELETE').map(a => a.payload.id));
+
+    // 建立一個查找表，用於快速判斷某個「待確認配息」是否已被暫存
+    const stagedPendingIds = new Set(stagedCreates.map(c => `${c.symbol}|${c.ex_dividend_date}`));
+
+    // 2. 渲染「待確認配息」表格
+    const pendingHtml = `
+        <div class="mb-5">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3 class="h5 mb-0">待確認配息</h3>
+                ${pendingDividends.length > 0 ? `<button id="bulk-confirm-dividends-btn" class="btn btn-info">一鍵全部確認</button>` : ''}
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead><tr><th>代碼</th><th>除息日</th><th>當時股數</th><th>每股配息</th><th class="text-center">操作</th></tr></thead>
+                    <tbody>
+                        ${pendingDividends.length > 0 ? pendingDividends.map((p, index) => {
+                            const isStaged = stagedPendingIds.has(`${p.symbol}|${p.ex_dividend_date}`);
+                            return `<tr class="${isStaged ? 'opacity-50' : ''}">
+                                <td class="fw-bold">${p.symbol}</td>
+                                <td>${p.ex_dividend_date}</td>
+                                <td>${formatNumber(p.quantity_at_ex_date, isTwStock(p.symbol) ? 0 : 2)}</td>
+                                <td>${formatNumber(p.amount_per_share, 4)} <span class="text-muted small">${p.currency}</span></td>
+                                <td class="text-center">
+                                    <button data-index="${index}" class="btn btn-sm btn-outline-primary confirm-dividend-btn" ${isStaged ? 'disabled' : ''}>確認入帳</button>
+                                </td>
+                            </tr>`;
+                        }).join('') : `<tr><td colspan="5" class="text-center py-5 text-muted">沒有待處理的配息。</td></tr>`}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+
+    // 3. 準備「已確認配息」的資料
+    const combinedConfirmed = [
+        ...confirmedDividends.map(c => stagedUpdates.has(c.id) ? { ...c, ...stagedUpdates.get(c.id) } : c),
+        ...stagedCreates
+    ].sort((a, b) => new Date(b.pay_date || b.date) - new Date(a.pay_date || a.date));
+
+    const filteredConfirmed = dividendFilter === 'all' || !dividendFilter
+        ? combinedConfirmed
+        : combinedConfirmed.filter(c => c.symbol.toLowerCase().includes(dividendFilter.toLowerCase()));
+
+    // 4. 渲染「已確認配息」表格
+    const confirmedHtml = `
+        <div>
+            <h3 class="h5 mb-3">已確認 / 歷史配息</h3>
+            <!-- Filter UI here -->
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead><tr><th>發放日</th><th>代碼</th><th>實收總額</th><th class="text-center">操作</th></tr></thead>
+                    <tbody>
+                        ${filteredConfirmed.length > 0 ? filteredConfirmed.map((c) => {
+                            let rowClass = '';
+                            let isDeleted = false;
+                            if (stagedDeletes.has(c.id)) {
+                                rowClass = 'table-danger opacity-75';
+                                isDeleted = true;
+                            } else if (stagedUpdates.has(c.id)) {
+                                rowClass = 'table-warning';
+                            } else if (c.id.startsWith('temp_')) {
+                                rowClass = 'table-success';
+                            }
+                            return `<tr class="${rowClass}">
+                                <td>${(c.pay_date || c.date).split('T')[0]}</td>
+                                <td class="fw-bold">${c.symbol}</td>
+                                <td>${formatNumber(c.total_amount || c.amount, c.currency === 'TWD' ? 0 : 2)} <span class="text-muted small">${c.currency}</span></td>
+                                <td class="text-center">
+                                    <button data-id="${c.id}" class="btn btn-sm btn-outline-primary edit-dividend-btn me-1" ${isDeleted ? 'disabled' : ''}>編輯</button>
+                                    <button data-id="${c.id}" class="btn btn-sm btn-outline-danger delete-dividend-btn" ${isDeleted ? 'disabled' : ''}>刪除</button>
+                                </td>
+                            </tr>`;
+                        }).join('') : `<tr><td colspan="4" class="text-center py-5 text-muted">沒有符合條件的已確認配息紀錄。</td></tr>`}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+
     container.innerHTML = pendingHtml + confirmedHtml;
-    lucide.createIcons();
 }
