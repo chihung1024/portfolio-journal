@@ -1,4 +1,2 @@
-# Serve asset files as they are
-/js/* /js/:splat 200
-# SPA fallback
+# SPA fallback rule. This should be the only rule in this file.
 /* /index.html 200
