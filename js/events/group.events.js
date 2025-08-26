@@ -1,20 +1,19 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.0 - 整合暫存區)
+// == 檔案：js/events/group.events.js (v3.1 - Bug Fix)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, applyGroupView } from '../api.js'; // applyGroupView 仍需保留
-import { stagingService } from '../staging.service.js'; // 【核心修改】
+import { apiRequest, applyGroupView, submitBatch } from '../api.js'; // applyGroupView & submitBatch 導入
+import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
 
 /**
- * 【新增】操作成功存入暫存區後，更新 UI
+ * 操作成功存入暫存區後，更新 UI
  */
 async function handleStagingSuccess() {
     showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
-    // 立即重新渲染列表以顯示暫存狀態
     await loadGroups();
 }
 
@@ -26,7 +25,7 @@ async function loadGroups() {
         const result = await apiRequest('get_groups', {});
         if (result.success) {
             setState({ groups: result.data });
-            renderGroupsTab();
+            await renderGroupsTab(); // 改為 await
             updateGroupSelector();
         }
     } catch (error) {
@@ -64,7 +63,6 @@ async function handleGroupFormSubmit(e) {
         id: document.getElementById('group-id').value || null,
         name: document.getElementById('group-name').value.trim(),
         description: document.getElementById('group-description').value.trim(),
-        // 注意：暫存區模式下，我們不直接處理 transactionIds，後端批次處理時會處理關係
     };
 
     if (!groupData.name) {
@@ -74,10 +72,8 @@ async function handleGroupFormSubmit(e) {
 
     try {
         if (groupData.id) {
-            // 編輯模式
             await stagingService.addAction('UPDATE', 'group', groupData);
         } else {
-            // 新增模式
             groupData.id = `temp_group_${Date.now()}`;
             await stagingService.addAction('CREATE', 'group', groupData);
         }
@@ -110,27 +106,29 @@ async function handleDeleteGroup(button) {
 export function initializeGroupEventListeners() {
     const groupSelector = document.getElementById('group-selector');
 
-    // 【核心修改】為群組選擇器增加暫存區檢查邏輯
     groupSelector.addEventListener('change', async (e) => {
         const selectedGroupId = e.target.value;
+        const previousGroupId = getState().selectedGroupId; // 【核心修正】儲存舊的ID
         const stagedActions = await stagingService.getStagedActions();
 
         if (stagedActions.length > 0) {
-            const { showConfirm } = await import('../ui/modals.js');
+            const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
-                async () => {
-                    const { submitBatch } = await import('../api.js');
+                async () => { // 確認後的回呼
+                    hideConfirm(); // 手動關閉確認窗
                     const netActions = await stagingService.getNetActions();
                     await submitBatch(netActions);
                     await stagingService.clearActions();
                     setState({ selectedGroupId });
                     applyGroupView(selectedGroupId);
                 },
-                '提交並切換檢視？'
+                '提交並切換檢視？',
+                () => { // 【核心修正】新增取消後的回呼
+                    e.target.value = previousGroupId; // 將選擇器的值還原
+                    hideConfirm();
+                }
             );
-            // 還原選擇，等待用戶確認
-            e.target.value = getState().selectedGroupId; 
         } else {
             setState({ selectedGroupId });
             applyGroupView(selectedGroupId);
@@ -142,7 +140,7 @@ export function initializeGroupEventListeners() {
         const addBtn = e.target.closest('#add-group-btn');
         if (addBtn) {
             const { openModal } = await import('../ui/modals.js');
-            renderGroupModal(null); // 傳入 null 表示新增
+            await renderGroupModal(null);
             openModal('group-modal');
             return;
         }
@@ -151,10 +149,13 @@ export function initializeGroupEventListeners() {
         if (editBtn) {
             const groupId = editBtn.dataset.groupId;
             const { groups } = getState();
-            const groupToEdit = groups.find(g => g.id === groupId);
+            // 【修正】同時檢查暫存區的新群組
+            const allGroups = [...groups, ...(await stagingService.getStagedEntities('group'))];
+            const groupToEdit = allGroups.find(g => g.id === groupId);
+
             if (groupToEdit) {
                  const { openModal } = await import('../ui/modals.js');
-                 renderGroupModal(groupToEdit);
+                 await renderGroupModal(groupToEdit);
                  openModal('group-modal');
             }
             return;
