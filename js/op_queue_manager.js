@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 操作隊列管理器 (op_queue_manager.js) - 【新檔案】
+// == 操作隊列管理器 (op_queue_manager.js) - v1.1.0 (支援群組歸屬更新)
 // == 職責：統一管理 CUD 操作，執行前端預更新 (Optimistic Update)，並維護隊列狀態。
 // =========================================================================================
 
@@ -36,7 +36,6 @@ function applyOptimisticUpdate(op) {
             case 'transaction': {
                 let transactions = [...state.transactions];
                 if (operation === 'CREATE') {
-                    // 為新交易分配一個臨時的前端 ID
                     const tempId = `temp_${Date.now()}`;
                     transactions.unshift({ ...payload, id: tempId, isTemporary: true });
                 } else if (operation === 'UPDATE') {
@@ -90,6 +89,14 @@ function applyOptimisticUpdate(op) {
                  setState({ groups });
                  break;
             }
+            // ========================= 【核心修改 - 開始】 =========================
+            case 'transaction_group_membership': {
+                // 對於此操作，前端沒有直接的 state 可以預先更新 (群組歸屬關係存於後端)。
+                // 我們只需確保此操作能被正確加入隊列即可。
+                // 未來若有需要在 UI 上顯示交易歸屬的即時變化，可在此處添加邏輯。
+                break;
+            }
+            // ========================= 【核心修改 - 結束】 =========================
         }
         return true;
     } catch (error) {
@@ -109,11 +116,9 @@ function applyOptimisticUpdate(op) {
 export function addToQueue(op, entity, payload) {
     const { op_queue } = getState();
     
-    // 執行前端預更新
     const optimisticUpdateSuccess = applyOptimisticUpdate({ op, entity, payload });
     
     if (optimisticUpdateSuccess) {
-        // 只有在前端更新成功時，才將操作加入隊列
         const new_op_queue = [...op_queue, { op, entity, payload }];
         setState({ 
             op_queue: new_op_queue,
