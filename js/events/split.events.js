@@ -1,23 +1,27 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v2.1 - 支援鍵盤操作
+// == 拆股事件處理模組 (split.events.js) v3.0.0 - 整合操作隊列
 // =========================================================================================
 
-import { executeApiAction } from '../api.js';
-// import { openModal, closeModal, showConfirm } from '../ui/modals.js'; // 移除靜態導入
+import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
 import { showNotification } from '../ui/notifications.js';
+import { renderSplitsTable } from '../ui/components/splits.ui.js'; // 【新增】引入渲染函式
+// 【移除】不再需要直接呼叫後端
+// import { executeApiAction } from '../api.js';
 
 // --- Private Functions ---
 
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
-    showConfirm('確定要刪除這個拆股事件嗎？', () => {
-        executeApiAction('delete_split', { splitId }, {
-            loadingText: '正在刪除拆股事件...',
-            successMessage: '拆股事件已成功刪除！'
-        }).catch(error => {
-            console.error("刪除拆股事件最終失敗:", error);
-        });
+    showConfirm('確定要刪除這個拆股事件嗎？此操作將被暫存，點擊「同步變更」後才會生效。', () => {
+        // 【核心修改】將操作加入隊列
+        const success = addToQueue('DELETE', 'split', { splitId });
+        
+        if (success) {
+            showNotification('info', '拆股事件已標記為刪除。點擊同步按鈕以儲存變更。');
+            // 立即使用更新後的 state 重新渲染 UI
+            renderSplitsTable();
+        }
     });
 }
 
@@ -37,29 +41,28 @@ async function handleSplitFormSubmit(e) {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('split-modal');
     
-    executeApiAction('add_split', splitData, {
-        loadingText: '正在新增拆股事件...',
-        successMessage: '拆股事件已成功新增！'
-    }).catch(error => {
-        console.error("新增拆股事件最終失敗:", error);
-    });
+    // 【核心修改】將操作加入隊列
+    const success = addToQueue('CREATE', 'split', splitData);
+
+    if (success) {
+        showNotification('info', '新拆股事件已暫存。點擊同步按鈕以儲存。');
+        // 立即使用更新後的 state 重新渲染 UI
+        renderSplitsTable();
+    }
 }
 
 // --- Public Function ---
 
 export function initializeSplitEventListeners() {
-    // 【修改】將事件監聽器綁定到更具體的父元素上
     const splitsTab = document.getElementById('splits-tab');
     if (splitsTab) {
         splitsTab.addEventListener('click', async (e) => { 
-            // 監聽 "新增拆股" 按鈕
             const addBtn = e.target.closest('#add-split-btn');
             if (addBtn) {
                 const { openModal } = await import('../ui/modals.js');
                 openModal('split-modal');
                 return;
             }
-            // 監聽 "刪除" 按鈕
             const deleteBtn = e.target.closest('.delete-split-btn');
             if(deleteBtn) {
                 handleDeleteSplit(deleteBtn);
@@ -73,13 +76,10 @@ export function initializeSplitEventListeners() {
         closeModal('split-modal');
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
-    // 為拆股表單增加 Enter 鍵監聽
     document.getElementById('split-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
             document.getElementById('save-split-btn').click();
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 }

@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.0.0 - 支援引導式流程
+// == 狀態管理模組 (state.js) v4.1.0 - 支援操作隊列
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -20,7 +20,11 @@ let state = {
 
     isSyncing: false,
 
-    // 【新增】用於引導式流程的暫存數據
+    // 【新增】用於 CUD 操作的暫存區 (操作隊列)
+    op_queue: [], // 儲存 { op: 'CREATE'|'UPDATE'|'DELETE', entity: string, payload: object }
+    hasUnsyncedChanges: false, // 是否有未同步的變更
+
+    // 【舊有】用於引導式流程的暫存數據
     tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
     tempMembershipEdit: null, // 儲存 { txId }
 

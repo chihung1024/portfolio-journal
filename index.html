@@ -36,8 +36,22 @@
                         <span id="auth-status"></span>
                         <p id="user-id" class="truncate max-w-[150px] sm:max-w-xs"></p>
                     </div>
-                    <button id="logout-btn" class="hidden btn bg-red-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-red-600">登出</button>
-                </div>
+                    
+                    <div id="user-actions" class="hidden items-center space-x-4">
+                        <div id="sync-indicator" class="relative hidden">
+                            <span class="flex h-3 w-3">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                            </span>
+                            <span class="ml-2 text-sm font-medium text-red-600">未儲存</span>
+                        </div>
+                        <button id="sync-changes-btn" class="btn bg-green-600 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-green-700 flex items-center space-x-2 disabled:opacity-50" disabled>
+                            <i data-lucide="save" class="h-4 w-4"></i>
+                            <span>同步變更</span>
+                        </button>
+                        <button id="logout-btn" class="btn bg-red-500 text-white font-bold py-1 px-3 rounded-lg shadow-md hover:bg-red-600">登出</button>
+                    </div>
+                    </div>
             </div>
         </header>
 
