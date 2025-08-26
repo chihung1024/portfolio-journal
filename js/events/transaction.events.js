@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.2 - Bug Fix (Delete Payload)
+// == 交易事件處理模組 (transaction.events.js) v3.2 (Final Bug Fix - Delete Payload)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -19,7 +19,7 @@ async function handleEdit(button) {
         .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
         .map(a => a.payload);
 
-    const combined = [...transactions];
+    let combined = [...transactions];
     stagedTransactions.forEach(stagedTx => {
         const index = combined.findIndex(t => t.id === stagedTx.id);
         if (index > -1) {
@@ -54,9 +54,19 @@ async function handleDelete(button) {
     // 【核心修正】在暫存刪除操作前，先找到完整的交易物件
     const { transactions } = getState();
     const stagedActions = await stagingService.getStagedActions();
-    const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction').map(a => a.payload);
-    const allTxs = [...transactions, ...stagedTransactions];
-    const txToDelete = allTxs.find(t => t.id === txId);
+    const stagedTransactions = stagedActions
+        .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
+        .map(a => a.payload);
+        
+    let combined = [...transactions];
+    stagedTransactions.forEach(stagedTx => {
+        const index = combined.findIndex(t => t.id === stagedTx.id);
+        if (index === -1) {
+            combined.push(stagedTx);
+        }
+    });
+
+    const txToDelete = combined.find(t => t.id === txId);
 
     if (!txToDelete) {
         showNotification('error', '找不到要刪除的交易紀錄。');
