@@ -1,18 +1,19 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v3.3 - 支援鍵盤操作
+// == 彈出視窗模組 (modals.js) v4.0.0 - 整合操作隊列
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
-import { apiRequest, executeApiAction } from '../api.js';
+import { apiRequest } from '../api.js'; // 【修改】移除 executeApiAction
 import { loadGroups } from '../events/group.events.js';
+import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
 
 
 // --- Helper Functions ---
 
 /**
- * 【核心修改】渲染群組歸屬嚮導視窗的內容，並根據傳入的 ID 預先勾選
+ * 渲染群組歸屬嚮導視窗的內容，並根據傳入的 ID 預先勾選
  * @param {Set<string>} includedGroupIds - 一個包含該交易已有所屬的群組 ID 的 Set
  */
 function renderGroupAttributionContent(includedGroupIds = new Set()) {
@@ -58,49 +59,14 @@ function renderGroupAttributionContent(includedGroupIds = new Set()) {
 }
 
 /**
- * 提交歸因選擇並儲存交易
+ * 提交歸因選擇並儲存交易 (此函式已被 transaction.events.js 取代，但暫時保留以防萬一)
  */
 async function submitAttributionAndSaveTransaction() {
-    const { tempTransactionData } = getState();
-    if (!tempTransactionData) return;
-
-    const selectedGroupIds = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked'))
-                                  .map(cb => cb.value);
-
-    const newGroups = Array.from(document.querySelectorAll('input[name="attribution_group"][data-new-name]:checked'))
-                           .map(cb => ({ tempId: cb.value, name: cb.dataset.newName }));
-
-    const finalPayload = {
-        txData: tempTransactionData.data, // 【核心修正】將 'transactionData' 改為 'txData'
-        groupInclusions: selectedGroupIds,
-        newGroups: newGroups,
-    };
-    
-    closeModal('group-attribution-modal');
-
-    const action = tempTransactionData.isEditing ? 'edit_transaction' : 'add_transaction';
-    const payloadForApi = tempTransactionData.isEditing 
-        ? { txId: tempTransactionData.txId, txData: finalPayload.txData, groupInclusions: finalPayload.groupInclusions, newGroups: finalPayload.newGroups }
-        : finalPayload;
-    const successMessage = tempTransactionData.isEditing ? '交易已成功更新！' : '交易已成功新增！';
-
-    executeApiAction(action, payloadForApi, {
-        loadingText: '正在儲存交易與群組設定...',
-        successMessage: successMessage,
-        shouldRefreshData: true
-    }).then(() => {
-        // 【BUG FIX】在核心數據刷新後，手動觸發一次群組列表的刷新
-        // 這樣可以確保新增的群組能夠立刻顯示在UI上
-        if (action === 'add_transaction' && (newGroups.length > 0 || selectedGroupIds.length > 0)) {
-            loadGroups();
-        }
-    }).catch(error => {
-        console.error("儲存交易最終失敗:", error);
-    });
+    console.warn("DEPRECATED: submitAttributionAndSaveTransaction in modals.js was called.");
 }
 
 /**
- * 為微觀編輯視窗儲存變更，並在成功後刷新
+ * 【核心修改】為微觀編輯視窗儲存變更，改為加入操作隊列
  */
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -110,16 +76,17 @@ async function handleMembershipSave() {
 
     closeModal('membership-editor-modal');
     
-    executeApiAction('update_transaction_group_membership', {
+    // 將操作加入隊列，而不是直接發送 API
+    const success = addToQueue('UPDATE', 'transaction_group_membership', {
         transactionId: tempMembershipEdit.txId,
         groupIds: selectedGroupIds
-    }, {
-        loadingText: '正在更新群組歸屬...',
-        successMessage: '群組歸屬已更新！',
-        shouldRefreshData: false
-    }).then(() => {
-        loadGroups();
-    }).catch(err => console.error("更新群組歸屬失敗:", err));
+    });
+    
+    if (success) {
+        showNotification('info', '群組歸屬變更已暫存。');
+        // 注意：此處不需要手動刷新群組列表，因為 optimistic update 應由 op_queue_manager 處理
+        // 或者在相關的 UI 元件中重新渲染
+    }
 }
 
 // --- Exported Functions ---
@@ -148,8 +115,9 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
-            document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
-            if(confirmBtn) confirmBtn.textContent = '下一步';
+            // 在新架構下，不再有步驟 1/2
+            document.getElementById('modal-title').textContent = '新增交易紀錄';
+            if(confirmBtn) confirmBtn.textContent = '加入暫存';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
@@ -238,43 +206,10 @@ export async function openModal(modalId, isEdit = false, data = null) {
     }
 }
 
-/**
- * 【核心修改】重寫此函式，使其能夠處理編輯模式
- */
+
 export async function openGroupAttributionModal() {
-    const { tempTransactionData } = getState();
-    if (!tempTransactionData) return;
-
-    // 步驟 1: 動態設定標題
-    const modalTitle = document.getElementById('attribution-modal-title');
-    modalTitle.textContent = tempTransactionData.isEditing 
-        ? '編輯交易紀錄 (步驟 2/2)' 
-        : '新增交易紀錄 (步驟 2/2)';
-
-    let includedGroupIds = new Set();
-    const container = document.getElementById('attribution-groups-container');
-    container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取群組狀態...</p>';
-
-    // 步驟 2: 如果是編輯模式，異步獲取該交易的群組歸屬
-    if (tempTransactionData.isEditing && tempTransactionData.txId) {
-        try {
-            const result = await apiRequest('get_transaction_memberships', { transactionId: tempTransactionData.txId });
-            if (result.success) {
-                includedGroupIds = new Set(result.data.groupIds);
-            }
-        } catch (error) {
-            console.error("讀取交易歸屬失敗:", error);
-            showNotification('error', '讀取現有群組歸屬失敗。');
-        }
-    }
-
-    // 步驟 3: 使用獲取到的 (或空的) 群組 ID 集合來渲染內容
-    renderGroupAttributionContent(includedGroupIds);
-    
-    const modalElement = document.getElementById('group-attribution-modal');
-    modalElement.classList.remove('hidden');
-    document.getElementById('confirm-attribution-btn').onclick = submitAttributionAndSaveTransaction;
-    document.getElementById('cancel-attribution-btn').onclick = () => closeModal('group-attribution-modal');
+    // 此函式在新架構下已不再需要，因為新增交易不再有第二步驟
+    console.warn("DEPRECATED: openGroupAttributionModal was called, but this flow is obsolete.");
 }
 
 
@@ -304,17 +239,12 @@ export function toggleOptionalFields() {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
-// 為 document 增加一次性的全域 Enter 鍵監聽
-// 這樣可以處理那些沒有標準 form 標籤的彈窗
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
 
-    // 處理群組歸屬設定彈窗
     const attributionModal = document.getElementById('group-attribution-modal');
-    if (!attributionModal.classList.contains('hidden')) {
+    if (attributionModal && !attributionModal.classList.contains('hidden')) {
         e.preventDefault();
-        // 如果焦點在新增群組的輸入框，則觸發新增按鈕，否則觸發確認按鈕
         if (document.activeElement === document.getElementById('new-group-name-input')) {
             document.getElementById('add-new-group-btn').click();
         } else {
@@ -323,12 +253,10 @@ document.addEventListener('keydown', (e) => {
         return;
     }
 
-    // 處理編輯群組歸屬彈窗
     const membershipModal = document.getElementById('membership-editor-modal');
-    if (!membershipModal.classList.contains('hidden')) {
+    if (membershipModal && !membershipModal.classList.contains('hidden')) {
         e.preventDefault();
         document.getElementById('save-membership-btn').click();
         return;
     }
 });
-// ========================= 【核心修改 - 結束】 =========================
