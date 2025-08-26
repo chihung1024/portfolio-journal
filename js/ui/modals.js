@@ -1,72 +1,34 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v4.0.0 - 整合操作隊列
+// == 彈出視窗模組 (modals.js) v4.1.0 - 整合操作隊列 (最終修正)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
 import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
-import { apiRequest } from '../api.js'; // 【修改】移除 executeApiAction
+import { apiRequest } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
-import { addToQueue } from '../op_queue_manager.js'; // 【新增】引入操作隊列管理器
+import { addToQueue } from '../op_queue_manager.js';
+import { showNotification } from '../ui/notifications.js';
 
 
 // --- Helper Functions ---
 
 /**
- * 渲染群組歸屬嚮導視窗的內容，並根據傳入的 ID 預先勾選
- * @param {Set<string>} includedGroupIds - 一個包含該交易已有所屬的群組 ID 的 Set
+ * 【已廢棄】渲染群組歸屬嚮導視窗的內容
  */
 function renderGroupAttributionContent(includedGroupIds = new Set()) {
-    const { tempTransactionData, groups } = getState();
-    if (!tempTransactionData) return;
-
-    const symbol = tempTransactionData.data.symbol;
-    document.getElementById('attribution-symbol-placeholder').textContent = symbol;
-
-    const container = document.getElementById('attribution-groups-container');
-    container.innerHTML = groups.length > 0
-        ? groups.map(g => `
-            <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
-                <input type="checkbox" name="attribution_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
-                <span class="font-medium text-gray-700">${g.name}</span>
-            </label>
-        `).join('')
-        : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
-
-    const newGroupContainer = document.getElementById('attribution-new-group-container');
-    newGroupContainer.innerHTML = `
-        <div class="relative">
-            <input type="text" id="new-group-name-input" placeholder="+ 建立新群組並加入" class="w-full pl-3 pr-10 py-2 text-sm border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-            <button type="button" id="add-new-group-btn" class="absolute inset-y-0 right-0 px-3 flex items-center text-indigo-600 hover:text-indigo-800">建立</button>
-        </div>
-    `;
-
-    document.getElementById('add-new-group-btn').addEventListener('click', () => {
-        const input = document.getElementById('new-group-name-input');
-        const newGroupName = input.value.trim();
-        if (newGroupName && !groups.some(g => g.name === newGroupName)) {
-            const tempId = `temp_${Date.now()}`;
-            const newGroupCheckbox = `
-                <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer bg-indigo-50">
-                    <input type="checkbox" name="attribution_group" value="${tempId}" data-new-name="${newGroupName}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" checked>
-                    <span class="font-medium text-indigo-700">${newGroupName} (新)</span>
-                </label>
-            `;
-            container.insertAdjacentHTML('beforeend', newGroupCheckbox);
-            input.value = '';
-        }
-    });
+    // This function is deprecated as the two-step transaction add is removed.
 }
 
 /**
- * 提交歸因選擇並儲存交易 (此函式已被 transaction.events.js 取代，但暫時保留以防萬一)
+ * 【已廢棄】提交歸因選擇並儲存交易
  */
 async function submitAttributionAndSaveTransaction() {
     console.warn("DEPRECATED: submitAttributionAndSaveTransaction in modals.js was called.");
 }
 
 /**
- * 【核心修改】為微觀編輯視窗儲存變更，改為加入操作隊列
+ * 為微觀編輯視窗儲存變更，改為加入操作隊列
  */
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -84,8 +46,6 @@ async function handleMembershipSave() {
     
     if (success) {
         showNotification('info', '群組歸屬變更已暫存。');
-        // 注意：此處不需要手動刷新群組列表，因為 optimistic update 應由 op_queue_manager 處理
-        // 或者在相關的 UI 元件中重新渲染
     }
 }
 
@@ -103,7 +63,7 @@ export async function openModal(modalId, isEdit = false, data = null) {
         
         if (isEdit && data) {
             document.getElementById('modal-title').textContent = '編輯交易紀錄';
-            if(confirmBtn) confirmBtn.textContent = '儲存變更';
+            if(confirmBtn) confirmBtn.textContent = '暫存變更';
             
             document.getElementById('transaction-id').value = data.id;
             document.getElementById('transaction-date').value = data.date.split('T')[0];
@@ -115,7 +75,6 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('exchange-rate').value = data.exchangeRate || '';
             document.getElementById('total-cost').value = data.totalCost || '';
         } else {
-            // 在新架構下，不再有步驟 1/2
             document.getElementById('modal-title').textContent = '新增交易紀錄';
             if(confirmBtn) confirmBtn.textContent = '加入暫存';
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
@@ -208,7 +167,6 @@ export async function openModal(modalId, isEdit = false, data = null) {
 
 
 export async function openGroupAttributionModal() {
-    // 此函式在新架構下已不再需要，因為新增交易不再有第二步驟
     console.warn("DEPRECATED: openGroupAttributionModal was called, but this flow is obsolete.");
 }
 
@@ -241,17 +199,6 @@ export function toggleOptionalFields() {
 
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-
-    const attributionModal = document.getElementById('group-attribution-modal');
-    if (attributionModal && !attributionModal.classList.contains('hidden')) {
-        e.preventDefault();
-        if (document.activeElement === document.getElementById('new-group-name-input')) {
-            document.getElementById('add-new-group-btn').click();
-        } else {
-            document.getElementById('confirm-attribution-btn').click();
-        }
-        return;
-    }
 
     const membershipModal = document.getElementById('membership-editor-modal');
     if (membershipModal && !membershipModal.classList.contains('hidden')) {
