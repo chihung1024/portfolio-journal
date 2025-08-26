@@ -59,76 +59,6 @@ export async function apiRequest(action, data) {
 }
 
 /**
- * Submits a batch of staged actions to the backend.
- * @param {Array<object>} actions - The array of net actions to submit.
- * @returns {Promise<object>}
- */
-export async function submitBatch(actions) {
-    const auth = getAuth();
-    const user = auth.currentUser;
-
-    if (!user) {
-        showNotification('error', '請先登入再執行操作。');
-        throw new Error('User not logged in');
-    }
-
-    try {
-        const token = await user.getIdToken();
-        const url = '/api/submit-batch';
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-            },
-            body: JSON.stringify(actions)
-        });
-        
-        const result = await response.json();
-        if (!response.ok) {
-            if (response.status === 401 || response.status === 403) {
-                 throw new Error(result.message || '認證失敗，您的登入可能已過期，請嘗試重新整理頁面。');
-            }
-            throw new Error(result.message || '伺服器發生錯誤');
-        }
-        return result;
-
-    } catch (error) {
-        console.error('API 請求失敗:', error);
-        throw error;
-    }
-}
-
-export async function getPortfolioTimestamp() {
-    const auth = getAuth();
-    const user = auth.currentUser;
-    if (!user) throw new Error('User not logged in');
-
-    try {
-        const token = await user.getIdToken();
-        const url = '/api/portfolio/timestamp';
-
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-            },
-        });
-        
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result.message || 'Failed to fetch portfolio timestamp.');
-        }
-        return result;
-
-    } catch (error) {
-        console.error('API 請求失敗:', error);
-        throw error;
-    }
-}
-
-/**
  * 高階 API 執行器，封裝了載入狀態、通知和數據刷新邏輯
  */
 export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
@@ -180,7 +110,6 @@ function updateAppWithData(portfolioData) {
     }, {});
     
     setState({
-        dataTimestamp: portfolioData.timestamp || null,
         stockNotes: stockNotesMap,
         holdings: holdingsObject,
         portfolioHistory: portfolioData.history || {},

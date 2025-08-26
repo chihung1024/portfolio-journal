@@ -1,10 +1,9 @@
 // =========================================================================================
-// == 交易紀錄 UI 模組 (transactions.ui.js) v3.0 - 整合暫存區
+// == 交易紀錄 UI 模組 (transactions.ui.js) v2.1 - 支援微觀編輯入口
 // =========================================================================================
 
 import { getState } from '../../state.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
-import { stagingService } from '../../staging.service.js';
 
 /**
  * 產生智慧型自適應分頁控制項的 HTML
@@ -15,133 +14,73 @@ import { stagingService } from '../../staging.service.js';
  */
 function renderPaginationControls(totalItems, itemsPerPage, currentPage) {
     const totalPages = Math.ceil(totalItems / itemsPerPage);
-    if (totalPages <= 1) return '';
+    if (totalPages <= 1) return ''; // 如果只有一頁或沒有，則不顯示分頁
 
-    let paginationHtml = '<nav aria-label="Page navigation"><ul class="pagination justify-content-center flex-wrap">';
+    let paginationHtml = '<div class="flex flex-wrap justify-center items-center gap-2 mt-4 transaction-pagination">';
     
-    paginationHtml += `<li class="page-item ${currentPage === 1 ? 'disabled' : ''}"><a class="page-link" href="#" data-page="${currentPage - 1}">上一頁</a></li>`;
+    // 上一頁按鈕
+    paginationHtml += `<button data-page="${currentPage - 1}" class="page-btn px-3 py-1 rounded-md text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}" ${currentPage === 1 ? 'disabled' : ''}>上一頁</button>`;
 
     let lastPageRendered = 0;
     for (let i = 1; i <= totalPages; i++) {
         const isFirstPage = i === 1;
         const isLastPage = i === totalPages;
-        const isInContext = Math.abs(i - currentPage) <= 1;
+        const isInContext = Math.abs(i - currentPage) <= 1; // 顯示當前頁的前後1頁
 
         if (isFirstPage || isLastPage || isInContext) {
+            // 如果當前頁與上一頁之間有間隔，則插入省略號
             if (i > lastPageRendered + 1) {
-                paginationHtml += '<li class="page-item disabled"><span class="page-link">...</span></li>';
+                paginationHtml += `<span class="px-3 py-1 text-sm text-gray-500">...</span>`;
             }
+            
             const isActive = i === currentPage;
-            paginationHtml += `<li class="page-item ${isActive ? 'active' : ''}"><a class="page-link" href="#" data-page="${i}">${i}</a></li>`;
+            paginationHtml += `<button data-page="${i}" class="page-btn px-3 py-1 rounded-md text-sm font-medium border ${isActive ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}">${i}</button>`;
             lastPageRendered = i;
         }
     }
 
-    paginationHtml += `<li class="page-item ${currentPage === totalPages ? 'disabled' : ''}"><a class="page-link" href="#" data-page="${currentPage + 1}">下一頁</a></li>`;
-    paginationHtml += '</ul></nav>';
+    // 下一頁按鈕
+    paginationHtml += `<button data-page="${currentPage + 1}" class="page-btn px-3 py-1 rounded-md text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}" ${currentPage === totalPages ? 'disabled' : ''}>下一頁</button>`;
+
+    paginationHtml += '</div>';
     return paginationHtml;
 }
 
 
-export async function renderTransactionsTable() {
+export function renderTransactionsTable() {
     const { transactions, transactionFilter, transactionsPerPage, transactionsCurrentPage } = getState();
-    const container = document.getElementById('transactions-content');
-    if (!container) return;
+    const container = document.getElementById('transactions-tab');
 
-    // 1. 獲取暫存的操作
-    const stagedActions = await stagingService.getActions();
-    const transactionActions = stagedActions.filter(a => a.entity === 'TRANSACTION');
+    const uniqueSymbols = ['all', ...Array.from(new Set(transactions.map(t => t.symbol)))];
+    const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="transaction-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="transaction-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${uniqueSymbols.map(s => `<option value="${s}" ${transactionFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
 
-    const stagedUpdates = new Map(
-        transactionActions.filter(a => a.type === 'UPDATE').map(a => [a.payload.id, a.payload])
-    );
-    const stagedDeletes = new Set(
-        transactionActions.filter(a => a.type === 'DELETE').map(a => a.payload.id)
-    );
-    const stagedCreates = transactionActions
-        .filter(a => a.type === 'CREATE')
-        .map(a => a.payload);
-
-    // 2. 結合 state 中的交易與暫存區中的新交易
-    const baseTransactions = transactions.map(t => {
-        if (stagedUpdates.has(t.id)) {
-            return { ...t, ...stagedUpdates.get(t.id) }; // 合併更新後的資料
-        }
-        return t;
-    });
-
-    let displayTransactions = [...baseTransactions, ...stagedCreates]
-        .sort((a, b) => new Date(b.date) - new Date(a.date)); // 按日期排序
-
-    // 3. 篩選交易
-    const uniqueSymbols = ['all', ...Array.from(new Set(displayTransactions.map(t => t.symbol)))];
-    const filterHtml = `
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <div class="flex-grow-1 me-3">
-                <label for="transaction-symbol-filter" class="form-label">篩選股票</label>
-                <input type="text" id="transaction-symbol-filter" class="form-control" list="symbol-datalist" placeholder="輸入或選擇代碼..." value="${transactionFilter === 'all' ? '' : transactionFilter}">
-                <datalist id="symbol-datalist">
-                    ${uniqueSymbols.map(s => `<option value="${s === 'all' ? '' : s}"></option>`).join('')}
-                </datalist>
-            </div>
-            <div class="align-self-end">
-                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#transaction-modal">新增交易</button>
-            </div>
-        </div>`;
-
-    const filteredTransactions = transactionFilter === 'all' || !transactionFilter 
-        ? displayTransactions 
-        : displayTransactions.filter(t => t.symbol.toLowerCase().includes(transactionFilter.toLowerCase()));
+    const filteredTransactions = transactionFilter === 'all' ? transactions : transactions.filter(t => t.symbol === transactionFilter);
     
-    // 4. 分頁
     const startIndex = (transactionsCurrentPage - 1) * transactionsPerPage;
     const endIndex = startIndex + transactionsPerPage;
     const paginatedTransactions = filteredTransactions.slice(startIndex, endIndex);
 
-    // 5. 渲染帶有視覺提示的表格
-    const tableHtml = `
-    <div class="table-responsive">
-        <table class="table table-hover align-middle">
-            <thead class="table-light">
-                <tr>
-                    <th>日期</th><th>代碼</th><th>類型</th><th>股數</th><th>價格(原幣)</th><th>總金額(TWD)</th><th class="text-center">操作</th>
-                </tr>
-            </thead>
-            <tbody id="transactions-table-body">
-                ${paginatedTransactions.length > 0 ? paginatedTransactions.map(t => {
-                    let rowClass = '';
-                    let isDeleted = false;
-                    if (stagedDeletes.has(t.id)) {
-                        rowClass = 'table-danger opacity-75';
-                        isDeleted = true;
-                    } else if (stagedUpdates.has(t.id)) {
-                        rowClass = 'table-warning';
-                    } else if (t.id.startsWith('temp_')) {
-                        rowClass = 'table-success';
-                    }
-
-                    const transactionDate = t.date.split('T')[0];
-                    const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
-                    const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
-                    
-                    return `<tr class="${rowClass}">
-                        <td>${transactionDate}</td>
-                        <td class="fw-bold">${t.symbol.toUpperCase()}</td>
-                        <td class="fw-semibold ${t.type === 'buy' ? 'text-danger' : 'text-success'}">${t.type === 'buy' ? '買入' : '賣出'}</td>
-                        <td>${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
-                        <td>${formatNumber(t.price)} <span class="text-muted small">${t.currency || ''}</span></td>
-                        <td>${formatNumber(totalAmountTWD, 0)}</td>
-                        <td class="text-center">
-                            <button data-id="${t.id}" class="btn btn-sm btn-outline-primary edit-btn me-1" ${isDeleted ? 'disabled' : ''}>編輯</button>
-                            <button data-id="${t.id}" class="btn btn-sm btn-outline-danger delete-btn" ${isDeleted ? 'disabled' : ''}>刪除</button>
-                        </td>
-                    </tr>`;
-                }).join('') : `<tr><td colspan="7" class="text-center py-5 text-muted">沒有符合條件的交易紀錄。</td></tr>`}
-            </tbody>
-        </table>
-    </div>`;
+    const tableHtml = `<div class="overflow-x-auto"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">代碼</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">類型</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">股數</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">價格(原幣)</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">總金額(TWD)</th><th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th></tr></thead><tbody id="transactions-table-body" class="bg-white divide-y divide-gray-200">${paginatedTransactions.length > 0 ? paginatedTransactions.map(t => {
+        const transactionDate = t.date.split('T')[0];
+        const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
+        const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
+        // 【核心修改】在操作欄位中新增 "編輯群組" 按鈕
+        return `<tr class="hover:bg-gray-50">
+            <td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td>
+            <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
+            <td class="px-6 py-4 whitespace-nowrap font-semibold ${t.type === 'buy' ? 'text-red-500' : 'text-green-500'}">${t.type === 'buy' ? '買入' : '賣出'}</td>
+            <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
+            <td class="px-6 py-4 whitespace-nowrap">${formatNumber(t.price)} <span class="text-xs text-gray-500">${t.currency}</span></td>
+            <td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
+                <button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
+                <button data-id="${t.id}" class="edit-membership-btn text-teal-600 hover:text-teal-900 mr-3">編輯群組</button>
+                <button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button>
+            </td>
+        </tr>`;
+    }).join('') : `<tr><td colspan="7" class="text-center py-10 text-gray-500">沒有符合條件的交易紀錄。</td></tr>`}</tbody></table></div>`;
     
     const paginationControls = renderPaginationControls(filteredTransactions.length, transactionsPerPage, transactionsCurrentPage);
 
-    container.innerHTML = filterHtml + tableHtml + `<div id="transactions-pagination" class="mt-3">${paginationControls}</div>`;
+    container.innerHTML = filterHtml + tableHtml + paginationControls;
 }

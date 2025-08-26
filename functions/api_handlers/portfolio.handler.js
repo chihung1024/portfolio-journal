@@ -26,12 +26,10 @@ exports.getData = async (uid, res) => {
     const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
-    const dataTimestamp = summaryRow.updated_at; // Extract timestamp
 
     return res.status(200).send({
         success: true,
         data: {
-            timestamp: dataTimestamp,
             summary: summaryData,
             holdings,
             transactions: txs,
@@ -142,23 +140,4 @@ exports.updateBenchmark = async (uid, data, res) => {
     // 更新 Benchmark 會觸發對 'all' 群組的重算
     await performRecalculation(uid, null, false);
     return res.status(200).send({ success: true, message: '基準已更新。' });
-};
-
-/**
- * 【新增】API：獲取投組最後更新時間戳
- */
-exports.getPortfolioTimestamp = async (uid, res) => {
-    try {
-        const result = await d1Client.query('SELECT updated_at FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']);
-        const timestamp = result[0] ? result[0].updated_at : new Date(0).toISOString();
-
-        return res.status(200).send({
-            success: true,
-            timestamp: timestamp
-        });
-
-    } catch (error) {
-        console.error('Failed to get portfolio timestamp:', error);
-        return res.status(500).send({ success: false, message: 'Failed to get portfolio timestamp.' });
-    }
 };
