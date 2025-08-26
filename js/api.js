@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.1 - Bug Fix (ID 同步)
+// == API 通訊模組 (api.js) v5.2 (Final Bug Fix - ID Sync)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -66,7 +66,6 @@ export async function submitBatch(actions) {
     try {
         const result = await apiRequest('submit_batch', { actions });
         if (result.success) {
-            // 【核心修正】將後端回傳的 tempIdMap 傳入更新函式
             updateAppWithData(result.data, result.data.tempIdMap);
             showNotification('success', '所有變更已成功提交並同步！');
             return result.data;
@@ -114,7 +113,7 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 /**
- * 【核心修正】統一的函式，用來接收計算結果並更新整個 App 的 UI (增加 tempIdMap 處理)
+ * 統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
 function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (!portfolioData) {
@@ -124,23 +123,27 @@ function updateAppWithData(portfolioData, tempIdMap = {}) {
 
     // 【核心修正】在更新 state 之前，先處理 ID 映射
     if (Object.keys(tempIdMap).length > 0) {
-        const { transactions, userSplits } = getState(); // 可擴充到其他實體
-        const updateEntities = (entities) => {
+        let { transactions, userSplits, confirmedDividends } = getState();
+        
+        const updateEntityIds = (entities) => {
             return entities.map(entity => {
-                if (tempIdMap[entity.id]) {
-                    return { ...entity, id: tempIdMap[entity.id] };
+                const permanentId = tempIdMap[entity.id];
+                if (permanentId) {
+                    console.log(`ID Mapped: ${entity.id} -> ${permanentId}`);
+                    return { ...entity, id: permanentId };
                 }
                 return entity;
             });
         };
+        
+        // 更新 state 中可能包含臨時 ID 的地方
         setState({
-            transactions: updateEntities(transactions),
-            userSplits: updateEntities(userSplits)
-            // ... 其他需要更新 ID 的 state
+            transactions: updateEntityIds(transactions),
+            userSplits: updateEntityIds(userSplits),
+            confirmedDividends: updateEntityIds(confirmedDividends)
         });
     }
     
-    // 現在使用後端回傳的、帶有永久 ID 的數據來更新 state
     setState({
         transactions: portfolioData.transactions || [],
         userSplits: portfolioData.splits || [],
@@ -161,7 +164,6 @@ function updateAppWithData(portfolioData, tempIdMap = {}) {
         netProfitDateRange: { type: 'all', start: null, end: null }
     });
 
-    // 後續的 UI 渲染邏輯不變...
     renderHoldingsTable(holdingsObject);
     renderTransactionsTable();
     renderSplitsTable();
@@ -197,12 +199,53 @@ function updateAppWithData(portfolioData, tempIdMap = {}) {
  * 從後端載入所有「全部股票」的投資組合資料並更新畫面
  */
 export async function loadPortfolioData() {
-    // ... 此函式內容不變 ...
+    const { currentUserId } = getState();
+    if (!currentUserId) {
+        console.log("未登入，無法載入資料。");
+        return;
+    }
+    document.getElementById('loading-overlay').style.display = 'flex';
+    try {
+        const result = await apiRequest('get_data', {});
+        updateAppWithData(result.data);
+
+    } catch (error) {
+        console.error('Failed to load portfolio data:', error);
+        showNotification('error', `讀取資料失敗: ${error.message}`);
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
 }
 
 /**
  * 請求後端按需計算特定群組的數據，並更新畫面
  */
 export async function applyGroupView(groupId) {
-    // ... 此函式內容不變 ...
+    if (!groupId || groupId === 'all') {
+        // 【修正】切換回 all 時，應使用輕量級的 API
+        const { loadInitialDashboard } = await import('../main.js');
+        document.getElementById('loading-overlay').style.display = 'flex';
+        await loadInitialDashboard();
+        return;
+    }
+
+    const loadingText = document.getElementById('loading-text');
+    document.getElementById('loading-overlay').style.display = 'flex';
+    loadingText.textContent = '正在為您即時計算群組績效...';
+
+    try {
+        const result = await apiRequest('calculate_group_on_demand', { groupId });
+        if (result.success) {
+            updateAppWithData(result.data);
+            showNotification('success', '群組績效計算完成！');
+        }
+    } catch (error) {
+        showNotification('error', `計算群組績效失敗: ${error.message}`);
+        document.getElementById('group-selector').value = 'all';
+        const { loadInitialDashboard } = await import('../main.js');
+        await loadInitialDashboard();
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+        loadingText.textContent = '正在從雲端同步資料...';
+    }
 }
