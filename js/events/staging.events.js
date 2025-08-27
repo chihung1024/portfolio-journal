@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.2 (Final Bug Fix - UI Refresh)
+// == 暫存區事件處理模組 (staging.events.js) - v2.3 (Fix UI Refresh Flow)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
-import { submitBatch } from '../api.js';
+// 【核心修改】引入 submitBatch 和 updateAppWithData
+import { submitBatch, updateAppWithData } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
@@ -12,13 +13,12 @@ import { renderGroupsTab } from '../ui/components/groups.ui.js';
 import { getState } from '../state.js';
 
 /**
- * 【新增】一個輔助函式，用於刷新當前可見的分頁視圖
+ * 輔助函式，用於刷新當前可見的分頁視圖
  */
 async function refreshCurrentView() {
     const activeTab = document.querySelector('.tab-content:not(.hidden)');
     if (!activeTab) return;
 
-    // 延遲一小段時間確保DOM更新
     await new Promise(resolve => setTimeout(resolve, 50));
 
     switch (activeTab.id) {
@@ -104,25 +104,39 @@ async function renderStagingModal() {
     lucide.createIcons();
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 處理提交所有暫存操作
+ * 【重構】處理提交所有暫存操作的完整流程
  */
 async function submitAllActions() {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('staging-modal');
 
     try {
+        // 1. 從暫存區獲取淨操作
         const netActions = await stagingService.getNetActions();
         if (netActions.length === 0) {
             showNotification('info', '沒有需要提交的操作。');
             return;
         }
-        await submitBatch(netActions);
-        await stagingService.clearActions();
+        
+        // 2. 呼叫 API 提交，並等待後端回傳最新的完整數據
+        const result = await submitBatch(netActions);
+        
+        if (result.success) {
+            // 3. 提交成功後，清空前端的暫存區
+            await stagingService.clearActions();
+            
+            // 4. 使用後端回傳的最新、最完整的數據來更新整個 App 的 UI
+            updateAppWithData(result.data, result.data.tempIdMap);
+        }
+
     } catch (error) {
-        console.error("提交暫存區時發生錯誤:", error);
+        // submitBatch 內部已經處理了錯誤通知，這裡只需記錄日誌
+        console.error("提交暫存區時發生最終錯誤:", error);
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -169,7 +183,7 @@ export function initializeStagingEventListeners() {
                 const actionId = parseInt(removeBtn.dataset.actionId, 10);
                 await stagingService.removeAction(actionId);
                 await renderStagingModal();
-                await refreshCurrentView(); // 【核心修正】移除單項後也要刷新
+                await refreshCurrentView();
                 return;
             }
 
