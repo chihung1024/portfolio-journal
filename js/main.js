@@ -1,9 +1,11 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v6.2 - Robust Initialization
+// == 主程式進入點 (main.js) v6.2 - Event-Driven & Robust Initialization
+// == 職責：作為應用主控制器，監聽認證事件並協調所有模組的初始化。
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, applyGroupView, fetchAllCoreData } from './api.js';
+// 【核心修改】從 auth.js 導入的函式現在只包含認證相關操作
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { stagingService } from './staging.service.js';
 import { initializeStagingEventListeners } from './events/staging.events.js';
@@ -279,8 +281,6 @@ export function initializeAppUI() {
     initializeGroupEventListeners();
     initializeStagingEventListeners();
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 對外部函式庫的呼叫進行防禦性處理
     try {
         if (window.lucide) {
             lucide.createIcons();
@@ -289,52 +289,62 @@ export function initializeAppUI() {
         }
     } catch (error) {
         console.error("Error creating Lucide icons:", error);
-        // 即使圖示出錯，也不應中斷整個應用的初始化
     }
-    // ========================= 【核心修改 - 結束】 =========================
 
     setState({ isAppInitialized: true });
 }
 
-function handleLoginSuccess(user) {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingText = document.getElementById('loading-text');
-
-    document.getElementById('auth-container').style.display = 'none';
-    document.querySelector('main').classList.remove('hidden');
-    document.getElementById('logout-btn').style.display = 'block';
-    document.getElementById('user-info').classList.remove('hidden');
-    document.getElementById('user-id').textContent = user.email;
-    document.getElementById('auth-status').textContent = '已連線';
-    
-    initializeAppUI();
-    
-    loadingText.textContent = '正在讀取核心資產數據...';
-    loadingOverlay.style.display = 'flex';
-    loadInitialData();
-
-    startLiveRefresh();
-}
-
-function handleLogoutSuccess() {
-    const loadingOverlay = document.getElementById('loading-overlay');
-
-    document.getElementById('auth-container').classList.remove('hidden'); 
-    document.querySelector('main').classList.add('hidden');
-    document.getElementById('logout-btn').style.display = 'none';
-    document.getElementById('user-info').classList.add('hidden');
-
-    if (loadingOverlay) {
-        loadingOverlay.style.display = 'none';
-    }
-    
-    stopLiveRefresh();
-}
-
+// ========================= 【核心修改 - 開始】 =========================
 document.addEventListener('DOMContentLoaded', () => {
+    // 監聽通用按鈕（如登入/註冊），這些按鈕在登入前後都存在
     setupCommonEventListeners();
-    initializeAuth({
-        onLogin: handleLoginSuccess,
-        onLogout: handleLogoutSuccess,
-    }); 
+    
+    // 監聽由 auth.js 廣播的登入成功事件
+    document.addEventListener('auth:loggedIn', (e) => {
+        const { user } = e.detail;
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+
+        // 更新 UI
+        document.getElementById('auth-container').style.display = 'none';
+        document.querySelector('main').classList.remove('hidden');
+        document.getElementById('logout-btn').style.display = 'block';
+        document.getElementById('user-info').classList.remove('hidden');
+        document.getElementById('user-id').textContent = user.email;
+        document.getElementById('auth-status').textContent = '已連線';
+        
+        // 初始化主應用的 UI 和所有事件監聽器
+        initializeAppUI();
+        
+        // 載入初始數據
+        loadingText.textContent = '正在讀取核心資產數據...';
+        loadingOverlay.style.display = 'flex';
+        loadInitialData();
+
+        // 啟動自動刷新
+        startLiveRefresh();
+    });
+
+    // 監聽由 auth.js 廣播的登出成功事件
+    document.addEventListener('auth:loggedOut', () => {
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        // 更新 UI
+        document.getElementById('auth-container').classList.remove('hidden'); 
+        document.querySelector('main').classList.add('hidden');
+        document.getElementById('logout-btn').style.display = 'none';
+        document.getElementById('user-info').classList.add('hidden');
+
+        // 確保隱藏讀取畫面
+        if (loadingOverlay) {
+            loadingOverlay.style.display = 'none';
+        }
+        
+        // 停止自動刷新
+        stopLiveRefresh();
+    });
+
+    // 最後，啟動認證模組，讓它開始監聽 Firebase 狀態並廣播事件
+    initializeAuth(); 
 });
+// ========================= 【核心修改 - 結束】 =========================
