@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v4.2.0 - 支援圖表動態命名
+// == API 通訊模組 (api.js) v5.2 (Final Bug Fix - ID Sync)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -16,7 +16,6 @@ import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
-import { renderDividendsManagementTab } from "./ui/components/dividends.ui.js";
 
 /**
  * 統一的後端 API 請求函式
@@ -45,9 +44,6 @@ export async function apiRequest(action, data) {
         
         const result = await response.json();
         if (!response.ok) {
-            if (response.status === 401 || response.status === 403) {
-                 throw new Error(result.message || '認證失敗，您的登入可能已過期，請嘗試重新整理頁面。');
-            }
             throw new Error(result.message || '伺服器發生錯誤');
         }
         return result;
@@ -59,7 +55,34 @@ export async function apiRequest(action, data) {
 }
 
 /**
- * 高階 API 執行器，封裝了載入狀態、通知和數據刷新邏輯
+ * 提交暫存區的批次操作
+ */
+export async function submitBatch(actions) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTextElement = document.getElementById('loading-text');
+    loadingTextElement.textContent = '正在提交所有變更並同步數據...';
+    loadingOverlay.style.display = 'flex';
+
+    try {
+        const result = await apiRequest('submit_batch', { actions });
+        if (result.success) {
+            updateAppWithData(result.data, result.data.tempIdMap);
+            showNotification('success', '所有變更已成功提交並同步！');
+            return result.data;
+        } else {
+            throw new Error(result.message || '批次提交時發生未知錯誤');
+        }
+    } catch (error) {
+        showNotification('error', `提交失敗: ${error.message}`);
+        throw error;
+    } finally {
+        loadingOverlay.style.display = 'none';
+        loadingTextElement.textContent = '正在從雲端同步資料...';
+    }
+}
+
+/**
+ * 高階 API 執行器 (主要用於非暫存區的單一操作)
  */
 export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -71,7 +94,8 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         const result = await apiRequest(action, payload);
         
         if (shouldRefreshData) {
-            await loadPortfolioData();
+            const fullData = await apiRequest('get_data', {});
+            updateAppWithData(fullData.data);
         }
         
         if (successMessage) {
@@ -88,29 +112,48 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     }
 }
 
-
 /**
  * 統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
-function updateAppWithData(portfolioData) {
-    // 【BUG FIX】將交易與拆股的狀態更新移至此處最前方
-    // 確保在所有渲染函式被呼叫前，狀態(state)已經是最新
+function updateAppWithData(portfolioData, tempIdMap = {}) {
+    if (!portfolioData) {
+        console.error("updateAppWithData 收到無效數據，已跳過更新。");
+        return;
+    }
+
+    // 【核心修正】在更新 state 之前，先處理 ID 映射
+    if (Object.keys(tempIdMap).length > 0) {
+        let { transactions, userSplits, confirmedDividends } = getState();
+        
+        const updateEntityIds = (entities) => {
+            return entities.map(entity => {
+                const permanentId = tempIdMap[entity.id];
+                if (permanentId) {
+                    console.log(`ID Mapped: ${entity.id} -> ${permanentId}`);
+                    return { ...entity, id: permanentId };
+                }
+                return entity;
+            });
+        };
+        
+        // 更新 state 中可能包含臨時 ID 的地方
+        setState({
+            transactions: updateEntityIds(transactions),
+            userSplits: updateEntityIds(userSplits),
+            confirmedDividends: updateEntityIds(confirmedDividends)
+        });
+    }
+    
     setState({
         transactions: portfolioData.transactions || [],
         userSplits: portfolioData.splits || [],
     });
-
-    const stockNotesMap = (portfolioData.stockNotes || []).reduce((map, note) => {
-        map[note.symbol] = note;
-        return map;
-    }, {});
 
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
     
     setState({
-        stockNotes: stockNotesMap,
         holdings: holdingsObject,
         portfolioHistory: portfolioData.history || {},
         twrHistory: portfolioData.twrHistory || {},
@@ -121,20 +164,8 @@ function updateAppWithData(portfolioData) {
         netProfitDateRange: { type: 'all', start: null, end: null }
     });
 
-    ['asset', 'twr', 'net-profit'].forEach(chartType => {
-        const controls = document.getElementById(`${chartType}-chart-controls`);
-        if (controls) {
-            controls.querySelectorAll('.chart-range-btn').forEach(btn => {
-                btn.classList.remove('active');
-                if (btn.dataset.range === 'all') {
-                    btn.classList.add('active');
-                }
-            });
-        }
-    });
-    
     renderHoldingsTable(holdingsObject);
-    renderTransactionsTable(); // 現在此函式會使用上面剛更新的 transaction 狀態
+    renderTransactionsTable();
     renderSplitsTable();
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
@@ -142,9 +173,7 @@ function updateAppWithData(portfolioData) {
     let seriesName = '投資組合'; 
     if (selectedGroupId && selectedGroupId !== 'all') {
         const selectedGroup = groups.find(g => g.id === selectedGroupId);
-        if (selectedGroup) {
-            seriesName = selectedGroup.name; 
-        }
+        if (selectedGroup) seriesName = selectedGroup.name; 
     }
     
     updateAssetChart(seriesName); 
@@ -166,7 +195,6 @@ function updateAppWithData(portfolioData) {
     document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
 }
 
-
 /**
  * 從後端載入所有「全部股票」的投資組合資料並更新畫面
  */
@@ -179,8 +207,6 @@ export async function loadPortfolioData() {
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
         const result = await apiRequest('get_data', {});
-        
-        // 此函式現在會處理所有必要的狀態更新和 UI 渲染
         updateAppWithData(result.data);
 
     } catch (error) {
@@ -196,7 +222,10 @@ export async function loadPortfolioData() {
  */
 export async function applyGroupView(groupId) {
     if (!groupId || groupId === 'all') {
-        await loadPortfolioData();
+        // 【修正】切換回 all 時，應使用輕量級的 API
+        const { loadInitialDashboard } = await import('../main.js');
+        document.getElementById('loading-overlay').style.display = 'flex';
+        await loadInitialDashboard();
         return;
     }
 
@@ -213,7 +242,8 @@ export async function applyGroupView(groupId) {
     } catch (error) {
         showNotification('error', `計算群組績效失敗: ${error.message}`);
         document.getElementById('group-selector').value = 'all';
-        await loadPortfolioData();
+        const { loadInitialDashboard } = await import('../main.js');
+        await loadInitialDashboard();
     } finally {
         document.getElementById('loading-overlay').style.display = 'none';
         loadingText.textContent = '正在從雲端同步資料...';
