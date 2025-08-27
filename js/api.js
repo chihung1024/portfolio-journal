@@ -1,11 +1,11 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.3 (Refactor for UI Sync)
+// == API 通訊模組 (api.js) v5.4 (Robust data handling)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
-import { loadGroups } from './events/group.events.js'; // 【新增】導入 loadGroups
+import { loadGroups } from './events/group.events.js'; 
 
 // --- UI Module Imports ---
 import { getDateRangeForPreset } from './ui/utils.js';
@@ -55,9 +55,8 @@ export async function apiRequest(action, data) {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】提交暫存區的批次操作 - 現在只負責發送請求並回傳結果
+ * 提交暫存區的批次操作 - 只負責發送請求並回傳結果
  */
 export async function submitBatch(actions) {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -69,19 +68,18 @@ export async function submitBatch(actions) {
         const result = await apiRequest('submit_batch', { actions });
         if (result.success) {
             showNotification('success', '所有變更已成功提交並同步！');
-            return result; // 直接回傳完整的成功結果
+            return result;
         } else {
             throw new Error(result.message || '批次提交時發生未知錯誤');
         }
     } catch (error) {
         showNotification('error', `提交失敗: ${error.message}`);
-        throw error; // 向上拋出錯誤，讓呼叫者處理
+        throw error;
     } finally {
         loadingOverlay.style.display = 'none';
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -97,7 +95,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         const result = await apiRequest(action, payload);
         
         if (shouldRefreshData) {
-            // 【修正】改為呼叫 get_data 獲取完整數據
             const fullData = await apiRequest('get_data', {});
             updateAppWithData(fullData.data);
         }
@@ -117,10 +114,8 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【增強】統一的函式，用來接收計算結果並更新整個 App 的 UI
- * 現在可以處理包含群組在內的更完整的數據結構
+ * 統一的函式，用來接收計算結果並更新整個 App 的 UI
  */
 export function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (!portfolioData) {
@@ -128,69 +123,71 @@ export function updateAppWithData(portfolioData, tempIdMap = {}) {
         return;
     }
     
-    // 1. 更新核心 State
-    setState({
-        transactions: portfolioData.transactions || [],
-        userSplits: portfolioData.splits || [],
-        // 【新增】更新群組列表
-        groups: portfolioData.groups || [],
-        portfolioHistory: portfolioData.history || {},
-        twrHistory: portfolioData.twrHistory || {},
-        benchmarkHistory: portfolioData.benchmarkHistory || {},
-        netProfitHistory: portfolioData.netProfitHistory || {},
-    });
-
-    // 2. 處理持股數據
+    // 建立一個更新物件，只更新 portfolioData 中存在的鍵
+    const newState = {};
+    if (portfolioData.transactions) newState.transactions = portfolioData.transactions;
+    if (portfolioData.splits) newState.userSplits = portfolioData.splits;
+    if (portfolioData.groups) newState.groups = portfolioData.groups;
+    if (portfolioData.history) newState.portfolioHistory = portfolioData.history;
+    if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
+    if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
+    if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
+    
+    // 如果是全局更新，重設圖表範圍
+    if (portfolioData.history) {
+        newState.assetDateRange = { type: 'all', start: null, end: null };
+        newState.twrDateRange = { type: 'all', start: null, end: null };
+        newState.netProfitDateRange = { type: 'all', start: null, end: null };
+    }
+    
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
-    setState({ holdings: holdingsObject });
+    newState.holdings = holdingsObject;
+    
+    setState(newState);
 
-    // 3. 重設圖表日期範圍 (通常在全局更新後)
-    if (Object.keys(portfolioData).length > 5) { // 簡單判斷是否為一次完整更新
-        setState({
-            assetDateRange: { type: 'all', start: null, end: null },
-            twrDateRange: { type: 'all', start: null, end: null },
-            netProfitDateRange: { type: 'all', start: null, end: null }
-        });
-    }
-
-    // 4. 重新渲染所有相關的 UI 元件
     renderHoldingsTable(holdingsObject);
-    renderTransactionsTable();
-    renderSplitsTable();
+    if (portfolioData.transactions) renderTransactionsTable();
+    if (portfolioData.splits) renderSplitsTable();
+    if (portfolioData.groups) loadGroups(); 
+    
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
-    // 【新增】重新載入並渲染群組相關 UI
-    loadGroups(); 
-    
-    const { selectedGroupId } = getState();
+    // ========================= 【核心修改 - 開始】 =========================
+    const { selectedGroupId, groups } = getState(); // 從全域 state 獲取最新的群組列表
     let seriesName = '投資組合'; 
     if (selectedGroupId && selectedGroupId !== 'all') {
-        const selectedGroup = portfolioData.groups.find(g => g.id === selectedGroupId);
+        // 使用從 state 中讀取的、保證存在的 groups 陣列
+        const selectedGroup = groups.find(g => g.id === selectedGroupId);
         if (selectedGroup) seriesName = selectedGroup.name; 
     }
+    // ========================= 【核心修改 - 結束】 =========================
     
     updateAssetChart(seriesName); 
     updateNetProfitChart(seriesName);
-    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || 'SPY';
+    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || getState().summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol, seriesName);
 
     document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
 
-    // 5. 更新圖表日期選擇器的顯示範圍
     const { portfolioHistory, twrHistory, netProfitHistory } = getState();
-    const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
-    document.getElementById('asset-start-date').value = assetDates.startDate;
-    document.getElementById('asset-end-date').value = assetDates.endDate;
-    const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
-    document.getElementById('twr-start-date').value = twrDates.startDate;
-    document.getElementById('twr-end-date').value = twrDates.endDate;
-    const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
-    document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
-    document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
+    if(portfolioHistory && Object.keys(portfolioHistory).length > 0) {
+        const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
+        document.getElementById('asset-start-date').value = assetDates.startDate;
+        document.getElementById('asset-end-date').value = assetDates.endDate;
+    }
+    if(twrHistory && Object.keys(twrHistory).length > 0) {
+        const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
+        document.getElementById('twr-start-date').value = twrDates.startDate;
+        document.getElementById('twr-end-date').value = twrDates.endDate;
+    }
+    if(netProfitHistory && Object.keys(netProfitHistory).length > 0) {
+        const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
+        document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
+        document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
+    }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -219,7 +216,6 @@ export async function loadPortfolioData() {
  * 請求後端按需計算特定群組的數據，並更新畫面
  */
 export async function applyGroupView(groupId) {
-    // 【修正】切換回 all 時，應使用更完整的 loadPortfolioData
     if (!groupId || groupId === 'all') {
         await loadPortfolioData();
         return;
@@ -237,7 +233,6 @@ export async function applyGroupView(groupId) {
         }
     } catch (error) {
         showNotification('error', `計算群組績效失敗: ${error.message}`);
-        // 如果失敗，安全地切換回 'all' 視圖
         document.getElementById('group-selector').value = 'all';
         setState({ selectedGroupId: 'all' });
         await loadPortfolioData();
