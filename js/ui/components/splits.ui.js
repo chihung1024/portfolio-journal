@@ -4,15 +4,38 @@
 
 import { getState } from '../../state.js';
 import { stagingService } from '../../staging.service.js'; // 【核心修改】
-import { selectCombinedSplits } from '../../selectors.js';
 
 export async function renderSplitsTable() {
     const { userSplits } = getState();
     const tableBody = document.getElementById('splits-table-body');
     if (!tableBody) return;
 
-    // 【核心修改】從 selector 獲取已合併的拆股事件列表
-    const combinedSplits = await selectCombinedSplits();
+    // 【核心修改】從暫存區獲取拆股相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const splitActions = stagedActions.filter(a => a.entity === 'split');
+    const stagedActionMap = new Map();
+    splitActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 結合 state 中的數據和暫存區的數據
+    let combinedSplits = [...userSplits];
+
+    stagedActionMap.forEach((action, splitId) => {
+        const existingIndex = combinedSplits.findIndex(s => s.id === splitId);
+        
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedSplits.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } 
+        // 拆股事件沒有更新(UPDATE)操作
+        else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedSplits[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
     
     // 按日期重新排序
     combinedSplits.sort((a, b) => new Date(b.date) - new Date(a.date));

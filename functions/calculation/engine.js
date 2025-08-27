@@ -11,15 +11,14 @@ const dataProvider = require('./data.provider');
 /**
  * 核心計算函式
  * @param {Array} txs - 用於計算的交易紀錄
- * @param {Array} splitsInScope - 已根據計算範圍過濾的拆股事件
- * @param {Array} dividendsInScope - 已根據計算範圍過濾的股利事件
+ * @param {Array} allUserSplits - 【修改】傳入使用者所有的拆股事件
+ * @param {Array} allUserDividends - 【修改】傳入使用者所有的股利事件
  * @param {string} benchmarkSymbol - 比較基準
- * @param {Object} market - 已準備好的市場數據 (股價、匯率)
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
  * @param {Object} [existingHistory=null] - (可選) 已有的歷史數據
  * @returns {Object} 包含所有計算結果的物件
  */
-async function runCalculationEngine(txs, splitsInScope, dividendsInScope, benchmarkSymbol, market, baseSnapshot = null, existingHistory = null) {
+async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchmarkSymbol, baseSnapshot = null, existingHistory = null) {
     if (txs.length === 0) {
         return {
             summaryData: {},
@@ -31,7 +30,21 @@ async function runCalculationEngine(txs, splitsInScope, dividendsInScope, benchm
         };
     }
     
-    // 步驟 1: 建立事件時間軸 (engine.js 作為純函式，不再進行數據篩選或 I/O)
+    // ========================= 【核心修正 - 開始】 =========================
+    // 步驟 1: 建立一個只包含當前計算範圍內股票代碼的 Set，以便高效查詢。
+    const symbolsInScope = new Set(txs.map(t => t.symbol.toUpperCase()));
+
+    // 步驟 2: 根據範圍內的股票代碼，過濾拆股和股利事件，確保數據純淨。
+    const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
+    const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
+    // ========================= 【核心修正 - 結束】 =========================
+
+
+    // 確保計算所需的市場數據都存在
+    await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
+    const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
+
+    // 【修改】將過濾後的、乾淨的數據傳遞下去
     const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
     if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
 

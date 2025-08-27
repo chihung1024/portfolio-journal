@@ -5,7 +5,6 @@
 
 import { getState } from '../../state.js';
 import { stagingService } from '../../staging.service.js'; // 【核心修改】
-import { selectCombinedGroups } from '../../selectors.js';
 
 /**
  * 渲染群組管理分頁的內容
@@ -15,9 +14,39 @@ export async function renderGroupsTab() {
     const container = document.getElementById('groups-content');
     if (!container) return;
 
-    // 【核心修改】從 selector 獲取已合併的群組列表
-    const combinedGroups = await selectCombinedGroups();
+    // 【核心修改】從暫存區獲取群組相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const groupActions = stagedActions.filter(a => a.entity === 'group');
+    const stagedActionMap = new Map();
+    groupActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 結合 state 中的數據和暫存區的數據
+    let combinedGroups = [...groups];
+
+    stagedActionMap.forEach((action, groupId) => {
+        const existingIndex = combinedGroups.findIndex(g => g.id === groupId);
+        
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedGroups.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } else if (action.type === 'UPDATE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex] = { ...combinedGroups[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            }
+        } else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
     
+    // 按創建時間排序 (假設 state 中有 created_at)
+    combinedGroups.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+
     if (combinedGroups.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">尚未建立任何群組。</p>`;
         return;

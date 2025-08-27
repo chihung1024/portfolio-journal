@@ -8,7 +8,6 @@ import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
-import { selectCombinedGroups } from '../selectors.js';
 
 /**
  * 操作成功存入暫存區後，更新 UI
@@ -181,9 +180,21 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const groupId = editBtn.dataset.groupId;
-            // 【核心修改】從 selector 獲取已合併的群組列表
-            const combinedGroups = await selectCombinedGroups();
-            const groupToEdit = combinedGroups.find(g => g.id === groupId);
+            const { groups } = getState();
+            const stagedActions = await stagingService.getStagedActions();
+            const stagedGroups = stagedActions.filter(a => a.entity === 'group').map(a => a.payload);
+            
+            let combined = [...groups];
+            stagedGroups.forEach(stagedGroup => {
+                const index = combined.findIndex(g => g.id === stagedGroup.id);
+                if(index > -1) {
+                    combined[index] = {...combined[index], ...stagedGroup};
+                } else {
+                    combined.push(stagedGroup);
+                }
+            });
+
+            const groupToEdit = combined.find(g => g.id === groupId);
 
             if (groupToEdit) {
                  const { openModal } = await import('../ui/modals.js');

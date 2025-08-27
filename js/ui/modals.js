@@ -4,13 +4,12 @@
 
 import { getState, setState } from '../state.js';
 import { stagingService } from '../staging.service.js';
-import { isTwStock, formatNumber } from '../utils.js';
+import { isTwStock, formatNumber } from './utils.js';
 import { renderDetailsModal } from './components/detailsModal.ui.js';
 import { apiRequest, executeApiAction } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
-import { showNotification } from '../ui/notifications.js';
+import { showNotification } from './notifications.js';
 import { renderTransactionsTable } from './components/transactions.ui.js';
-import { selectCombinedTransactions } from '../../selectors.js';
 
 // --- Helper Functions ---
 
@@ -203,9 +202,19 @@ export async function openModal(modalId, isEdit = false, data = null) {
     } else if (modalId === 'membership-editor-modal') {
         const { txId } = data;
         
-        // 【核心修改】從 selector 獲取已合併的交易紀錄
-        const combinedTransactions = await selectCombinedTransactions();
-        const tx = combinedTransactions.find(t => t.id === txId);
+        const stagedActions = await stagingService.getStagedActions();
+        const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction' && a.type !== 'DELETE').map(a => a.payload);
+        
+        let combined = [...transactions];
+        stagedTransactions.forEach(stagedTx => {
+            const index = combined.findIndex(t => t.id === stagedTx.id);
+            if (index > -1) {
+                combined[index] = { ...combined[index], ...stagedTx };
+            } else {
+                combined.push(stagedTx);
+            }
+        });
+        const tx = combined.find(t => t.id === txId);
         
         if (!tx) {
             showNotification('error', '找不到指定的交易紀錄來編輯群組。');

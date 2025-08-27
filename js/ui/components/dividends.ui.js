@@ -5,15 +5,39 @@
 import { getState } from '../../state.js';
 import { stagingService } from '../../staging.service.js'; // 【核心修改】
 import { isTwStock, formatNumber } from '../utils.js';
-import { selectCombinedConfirmedDividends } from '../../selectors.js';
 
 export async function renderDividendsManagementTab(pending, confirmed) {
     const { dividendFilter } = getState();
     const container = document.getElementById('dividends-tab');
 
-    // 【核心修改】從 selector 獲取已合併的已確認配息列表
-    const combinedConfirmed = await selectCombinedConfirmedDividends();
-    
+    // 【核心修改】從暫存區獲取配息相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const dividendActions = stagedActions.filter(a => a.entity === 'dividend');
+    const stagedActionMap = new Map();
+    dividendActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 結合 state 中的數據和暫存區的數據
+    let combinedConfirmed = [...confirmed];
+    stagedActionMap.forEach((action, dividendId) => {
+        const existingIndex = combinedConfirmed.findIndex(d => d.id === dividendId);
+
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedConfirmed.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } else if (action.type === 'UPDATE') {
+            if (existingIndex > -1) {
+                combinedConfirmed[existingIndex] = { ...combinedConfirmed[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            }
+        } else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedConfirmed[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
+
     // 重新按發放日排序
     combinedConfirmed.sort((a, b) => new Date(b.pay_date) - new Date(a.pay_date));
 

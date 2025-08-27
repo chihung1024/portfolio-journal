@@ -118,9 +118,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 步驟 1: 一次性抓取所有與全局計算相關的原始數據
-        const [allTxs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】一次性抓取所有需要的原始數據
+        const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
@@ -128,10 +128,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
-        await calculateAndCachePendingDividends(uid, allTxs, allUserDividends);
-        // ========================= 【核心修改 - 結束】 =========================
+        await calculateAndCachePendingDividends(uid, txs, allUserDividends);
+        // ========================= 【核心修正 - 結束】 =========================
 
-        if (allTxs.length === 0) {
+        if (txs.length === 0) {
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
@@ -143,6 +143,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
+        // ========================= 【核心修正 - 結束】 =========================
+        
         let oldHistory = {};
         let baseSnapshot = null;
         
@@ -167,22 +171,17 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修改 - 開始】 =========================
-        // 步驟 2: 確保計算所需的市場數據都存在，並從資料庫中讀取
-        await dataProvider.ensureAllSymbolsData(allTxs, benchmarkSymbol);
-        const market = await dataProvider.getMarketDataFromDb(allTxs, benchmarkSymbol);
-
-        // 步驟 3: 呼叫統一的計算引擎，傳入所有原始數據
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
         const result = await runCalculationEngine(
-            allTxs,
+            txs,
             allUserSplits,
             allUserDividends,
             benchmarkSymbol,
-            market,
             baseSnapshot,
             oldHistory
         );
-        // ========================= 【核心修改 - 結束】 =========================
+        // ========================= 【核心修正 - 結束】 =========================
 
 
         // 【修改】從引擎的回傳結果中獲取計算好的數據
@@ -194,10 +193,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             benchmarkHistory,
             netProfitHistory,
             evts,
-            market: finalMarket // 使用引擎回傳的 market
+            market
         } = result;
 
-        await maintainSnapshots(uid, newFullHistory, evts, finalMarket, createSnapshot, ALL_GROUP_ID);
+        await maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
