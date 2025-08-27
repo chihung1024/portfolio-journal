@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v7.0 - Atomic Routing)
+// == GCP Cloud Function 主入口 (v6.1 - Combined Action Route)
 // =========================================================================================
 
 const admin = require('firebase-admin');
@@ -72,13 +72,22 @@ exports.unifiedPortfolioHandler = async (req, res) => {
             const { action, data } = req.body;
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
-            // ========================= 【核心修改 - 開始】 =========================
             switch (action) {
                 // Batch
                 case 'submit_batch':
                     return await batchHandlers.submitBatch(uid, data, res);
+                // ========================= 【核心修改 - 開始】 =========================
+                case 'submit_batch_and_execute':
+                    return await batchHandlers.submitBatchAndExecute(uid, data, res);
+                // ========================= 【核心修改 - 結束】 =========================
                 
-                // Portfolio (Atomic Getters)
+                // Portfolio
+                case 'get_data':
+                    return await portfolioHandlers.getData(uid, res);
+                case 'update_benchmark':
+                    return await portfolioHandlers.updateBenchmark(uid, data, res);
+                case 'get_dashboard_and_holdings':
+                    return await portfolioHandlers.getDashboardAndHoldings(uid, res);
                 case 'get_dashboard_summary':
                     return await portfolioHandlers.getDashboardSummary(uid, res);
                 case 'get_holdings':
@@ -89,10 +98,8 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                     return await portfolioHandlers.getChartData(uid, res);
                 case 'get_symbol_details':
                     return await detailsHandlers.getSymbolDetails(uid, data, res);
-                case 'update_benchmark':
-                    return await portfolioHandlers.updateBenchmark(uid, data, res);
 
-                // Transactions (Legacy CUD, to be removed when fully on batch)
+                // Transactions
                 case 'add_transaction':
                     return await transactionHandlers.addTransaction(uid, data, res);
                 case 'edit_transaction':
@@ -100,7 +107,7 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 case 'delete_transaction':
                     return await transactionHandlers.deleteTransaction(uid, data, res);
 
-                // Splits (Legacy CUD)
+                // Splits
                 case 'add_split':
                     return await splitHandlers.addSplit(uid, data, res);
                 case 'delete_split':
@@ -135,7 +142,6 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
             }
-            // ========================= 【核心修改 - 結束】 =========================
         } catch (error) {
             console.error(`[${req.user?.uid || 'N/A'}] 執行 action: '${req.body?.action}' 時發生錯誤:`, error);
             if (error instanceof z.ZodError) return res.status(400).send({ success: false, message: "輸入資料格式驗證失敗", errors: error.errors });

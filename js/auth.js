@@ -1,6 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v4.0 (Event-Driven & Decoupled)
-// == 職責：純粹的認證狀態管理器，透過廣播全局事件來通知應用程式。
+// == 身份驗證模組 (auth.js) v2.9.0 (支援鍵盤操作)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -15,43 +14,80 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
+import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 
 /**
- * 【重構】初始化 Firebase 認證監聽器，使用事件廣播模式
+ * 初始化 Firebase 認證監聽器
  */
 export function initializeAuth() {
     onAuthStateChanged(auth, (user) => {
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+
         if (user) {
             // 使用者已登入
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // 【核心修改】廣播一個 'auth:loggedIn' 事件，並將 user 物件作為細節傳遞
-            const event = new CustomEvent('auth:loggedIn', { detail: { user } });
-            document.dispatchEvent(event);
+            // --- 【核心修改】---
+            // 1. 立即顯示 App 主 UI 介面
+            document.getElementById('auth-container').style.display = 'none';
+            document.querySelector('main').classList.remove('hidden');
+            document.getElementById('logout-btn').style.display = 'block';
+            document.getElementById('user-info').classList.remove('hidden');
+            document.getElementById('user-id').textContent = user.email;
+            document.getElementById('auth-status').textContent = '已連線';
+            
+            // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
+            initializeAppUI();
+            
+            // 3. 執行新的、更輕量的初始資料載入函式
+            loadingText.textContent = '正在讀取核心資產數據...';
+            loadingOverlay.style.display = 'flex';
+            
+            loadInitialDashboard(); // <--- 呼叫新的、超輕量級的載入函式
+
+            // 【新增】在初始資料載入後，啟動自動刷新
+            startLiveRefresh();
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
-            setState({ currentUserId: null, isAppInitialized: false });
-
-            // 【核心修改】廣播一個 'auth:loggedOut' 事件
-            const event = new CustomEvent('auth:loggedOut');
-            document.dispatchEvent(event);
+            // 登出時，重設 App 狀態
+            setState({ 
+                currentUserId: null,
+                isAppInitialized: false // 允許下次登入時重新初始化
+            });
+        
+            // 更新 UI
+            document.getElementById('auth-container').classList.remove('hidden'); 
+            document.querySelector('main').classList.add('hidden');
+            document.getElementById('logout-btn').style.display = 'none';
+            document.getElementById('user-info').classList.add('hidden');
+        
+            // 確保登出時隱藏讀取畫面
+            if (loadingOverlay) {
+                loadingOverlay.style.display = 'none';
+            }
+            
+            // 【新增】使用者登出時，停止自動刷新
+            stopLiveRefresh();
         }
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
     // 為登入表單增加 Enter 鍵監聽
     document.getElementById('auth-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('login-btn').click();
+            e.preventDefault(); // 防止表單預設提交行為
+            document.getElementById('login-btn').click(); // 觸發登入按鈕
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
@@ -90,6 +126,8 @@ export async function handleLogin() {
 export async function handleLogout() {
     try {
         await signOut(auth);
+        // 【新增】在登出前手動停止，確保計時器被清除
+        stopLiveRefresh();
         showNotification('info', '您已成功登出。');
     } catch (error) {
         console.error("登出失敗:", error);
