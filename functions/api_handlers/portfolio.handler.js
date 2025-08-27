@@ -1,17 +1,36 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (優化後)
+// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
 
-const ALL_GROUP_ID = 'all'; // 【核心修正】定義一個常量來代表 "全部股票"
+const ALL_GROUP_ID = 'all';
+
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】更新 Benchmark 的核心邏輯函式
+ * @param {string} uid - 使用者 ID
+ * @param {string} benchmarkSymbol - 新的 Benchmark 股票代碼
+ */
+async function updateBenchmarkCore(uid, benchmarkSymbol) {
+    await d1Client.query(
+        'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
+        [uid, 'benchmarkSymbol', benchmarkSymbol.toUpperCase()]
+    );
+    // 更新 Benchmark 會觸發對 'all' 群組的重算
+    await performRecalculation(uid, null, false);
+}
+
+// 將核心邏輯導出
+exports.updateBenchmarkCore = updateBenchmarkCore;
+// ========================= 【核心修改 - 結束】 =========================
+
 
 /**
  * 【舊 API - 保留】獲取使用者所有核心資料 (預設為 'all' 群組)
  */
 exports.getData = async (uid, res) => {
-    // 【核心修正】在查詢 holdings 和 portfolio_summary 時，明確篩選 group_id = 'all'
     const [txs, splits, holdings, summaryResult, stockNotes] = await Promise.all([
         d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
         d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
@@ -49,7 +68,7 @@ exports.getData = async (uid, res) => {
 exports.getDashboardSummary = async (uid, res) => {
     const [summaryResult, stockNotes] = await Promise.all([
         d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
-        d1Client.query('SELECT symbol, target_price, stop_loss_price FROM user_stock_notes WHERE uid = ?', [uid]) // 只拿筆記中的關鍵價格欄位
+        d1Client.query('SELECT symbol, target_price, stop_loss_price FROM user_stock_notes WHERE uid = ?', [uid])
     ]);
 
     const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
@@ -58,7 +77,7 @@ exports.getDashboardSummary = async (uid, res) => {
         success: true,
         data: {
             summary: summaryData,
-            stockNotes // 將筆記數據一併回傳，因為它很小且儀表板會用到
+            stockNotes
         }
     });
 };
@@ -73,7 +92,7 @@ exports.getHoldings = async (uid, res) => {
 
 
 /**
- * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據 (此函式現在可被拆分的 API 取代，但暫時保留以防萬一)
+ * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據
  */
 exports.getDashboardAndHoldings = async (uid, res) => {
     const [holdings, summaryResult, stockNotes] = await Promise.all([
@@ -95,7 +114,7 @@ exports.getDashboardAndHoldings = async (uid, res) => {
 };
 
 /**
- * 【新增】API：只獲取交易和拆股紀錄 (用於分頁按需載入)
+ * 【新增】API：只獲取交易和拆股紀錄
  */
 exports.getTransactionsAndSplits = async (uid, res) => {
     const [transactions, splits] = await Promise.all([
@@ -106,7 +125,7 @@ exports.getTransactionsAndSplits = async (uid, res) => {
 };
 
 /**
- * 【新增】API：只獲取所有圖表的歷史數據 (用於背景載入)
+ * 【新增】API：只獲取所有圖表的歷史數據
  */
 exports.getChartData = async (uid, res) => {
     const summaryResult = await d1Client.query('SELECT history, twrHistory, benchmarkHistory, netProfitHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
@@ -120,7 +139,7 @@ exports.getChartData = async (uid, res) => {
     return res.status(200).send({
         success: true,
         data: {
-            portfolioHistory: history, // <-- 為與前端 state 鍵名一致，此處改名
+            portfolioHistory: history,
             twrHistory,
             benchmarkHistory,
             netProfitHistory
@@ -130,14 +149,9 @@ exports.getChartData = async (uid, res) => {
 
 
 /**
- * 更新比較基準 (Benchmark)
+ * 【API 端點】更新比較基準 (Benchmark)
  */
 exports.updateBenchmark = async (uid, data, res) => {
-    await d1Client.query(
-        'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
-        [uid, 'benchmarkSymbol', data.benchmarkSymbol.toUpperCase()]
-    );
-    // 更新 Benchmark 會觸發對 'all' 群組的重算
-    await performRecalculation(uid, null, false);
+    await updateBenchmarkCore(uid, data.benchmarkSymbol);
     return res.status(200).send({ success: true, message: '基準已更新。' });
 };
