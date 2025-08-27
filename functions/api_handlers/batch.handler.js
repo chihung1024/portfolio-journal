@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v2.3 (Complex Action Handling)
+// == 批次操作處理模組 (batch.handler.js) - v2.4 (Fix New Group & Return Groups)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -13,7 +13,6 @@ const { populateSettlementFxRate } = require('./transaction.handler');
 const getQueryForAction = (uid, action, newId = null) => {
     const { type, entity, payload } = action;
     
-    // 【核心修正】對於帶有特殊動作的 payload，先過濾掉附加元數據
     const cleanPayload = { ...payload };
     delete cleanPayload.groupInclusions;
     delete cleanPayload.newGroups;
@@ -36,10 +35,11 @@ const getQueryForAction = (uid, action, newId = null) => {
             };
 
         case 'UPDATE': {
-            delete cleanPayload.id;
-            const fields = Object.keys(cleanPayload);
+            const updatePayload = { ...cleanPayload };
+            delete updatePayload.id;
+            const fields = Object.keys(updatePayload);
             const setClause = fields.map(f => `${f} = ?`).join(', ');
-            const params = [...fields.map(f => cleanPayload[f]), payload.id, uid];
+            const params = [...fields.map(f => updatePayload[f]), payload.id, uid];
             return {
                 sql: `UPDATE ${tableName} SET ${setClause} WHERE id = ? AND uid = ?`,
                 params
@@ -47,19 +47,15 @@ const getQueryForAction = (uid, action, newId = null) => {
         }
 
         case 'CREATE': {
-            const createPayload = { ...cleanPayload, uid, id: newId };
-            delete createPayload.id; // 從 payload 移除，因 id 在 SQL 中單獨處理
-            if (payload.id && String(payload.id).startsWith('temp_')) {
-                 // 確保臨時ID不被寫入
-            }
-             createPayload.id = newId;
-
-
-            const createFields = Object.keys(createPayload);
+            const createPayload = { ...cleanPayload };
+            delete createPayload.id; 
+            
+            const finalPayload = { id: newId, uid, ...createPayload };
+            const createFields = Object.keys(finalPayload);
             const placeholders = createFields.map(() => '?').join(', ');
             return {
                 sql: `INSERT INTO ${tableName} (${createFields.join(', ')}) VALUES (${placeholders})`,
-                params: Object.values(createPayload)
+                params: Object.values(finalPayload)
             };
         }
             
@@ -83,20 +79,17 @@ exports.submitBatch = async (uid, data, res) => {
         const statements = [];
 
         for (const action of actions) {
-            // ========================= 【核心修改 - 開始】 =========================
-            // 增加一個特殊處理分支來處理帶有群組歸因的新增交易
             if (action.entity === 'transaction' && action.payload._special_action === 'CREATE_TX_WITH_ATTRIBUTION') {
                 const { payload } = action;
                 const newTxId = uuidv4();
                 tempIdMap[payload.id] = newTxId;
 
-                // 1. (可選) 建立新群組
                 const newGroupIdMap = {};
                 if (payload.newGroups && payload.newGroups.length > 0) {
                     payload.newGroups.forEach(group => {
                         const newGroupId = uuidv4();
                         newGroupIdMap[group.tempId] = newGroupId;
-                        tempIdMap[group.tempId] = newGroupId; // 將新群組的 ID 映射也加入
+                        tempIdMap[group.tempId] = newGroupId;
                         statements.push({
                             sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`,
                             params: [newGroupId, uid, group.name, '']
@@ -104,11 +97,11 @@ exports.submitBatch = async (uid, data, res) => {
                     });
                 }
 
-                // 2. 準備並插入交易數據
                 let txData = { ...payload };
                 delete txData.groupInclusions;
                 delete txData.newGroups;
                 delete txData._special_action;
+                delete txData.id;
                 txData = await populateSettlementFxRate(txData);
                 
                 statements.push({
@@ -116,7 +109,6 @@ exports.submitBatch = async (uid, data, res) => {
                     params: [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
                 });
 
-                // 3. 建立交易與群組的關聯
                 if (payload.groupInclusions && payload.groupInclusions.length > 0) {
                     payload.groupInclusions.forEach(groupId => {
                         const finalGroupId = newGroupIdMap[groupId] || groupId;
@@ -127,7 +119,7 @@ exports.submitBatch = async (uid, data, res) => {
                     });
                 }
 
-            } else { // 對於所有其他常規操作
+            } else {
                 const { type } = action;
                 let permanentId = null;
 
@@ -139,14 +131,13 @@ exports.submitBatch = async (uid, data, res) => {
                     }
                 }
                 
-                if (action.entity === 'transaction') {
+                if (action.entity === 'transaction' && ['CREATE', 'UPDATE'].includes(type)) {
                     action.payload = await populateSettlementFxRate(action.payload);
                 }
 
                 const { sql, params } = getQueryForAction(uid, action, permanentId);
                 statements.push({ sql, params });
             }
-             // ========================= 【核心修改 - 結束】 =========================
         }
 
 
@@ -156,11 +147,13 @@ exports.submitBatch = async (uid, data, res) => {
 
         await performRecalculation(uid, null, false);
         
-        const [txs, splits, holdings, summaryResult] = await Promise.all([
+        // 【核心修改】提交並重算後，一次性獲取所有最新數據回傳給前端
+        const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
             d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
+            d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid]) // <-- 新增
         ]);
 
         const summaryRow = summaryResult[0] || {};
@@ -179,6 +172,7 @@ exports.submitBatch = async (uid, data, res) => {
                 holdings,
                 transactions: txs,
                 splits,
+                groups, // <-- 新增
                 history,
                 twrHistory,
                 benchmarkHistory,
