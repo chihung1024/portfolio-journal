@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v3.0 (Refactoring Fix)
+// == 身份驗證模組 (auth.js) v3.1 (Circular Dependency Fix)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -14,69 +14,41 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-// 【核心修改】將 loadInitialDashboard 更名為 loadInitialData 以匹配 main.js 的導出
-import { initializeAppUI, loadInitialData, startLiveRefresh, stopLiveRefresh } from './main.js';
+
+// 【核心修改】移除對 main.js 的導入，以解決循環依賴問題
+// import { initializeAppUI, loadInitialData, startLiveRefresh, stopLiveRefresh } from './main.js';
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 
 /**
- * 初始化 Firebase 認證監聽器
+ * 【重構】初始化 Firebase 認證監聽器，並接受回呼函式
+ * @param {object} callbacks - 包含 onLogin 和 onLogout 回呼的物件
+ * @param {function} callbacks.onLogin - 登入成功時執行的函式
+ * @param {function} callbacks.onLogout - 登出成功時執行的函式
  */
-export function initializeAuth() {
+export function initializeAuth(callbacks) {
     onAuthStateChanged(auth, (user) => {
-        const loadingOverlay = document.getElementById('loading-overlay');
-        const loadingText = document.getElementById('loading-text');
-
         if (user) {
             // 使用者已登入
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // 1. 立即顯示 App 主 UI 介面
-            document.getElementById('auth-container').style.display = 'none';
-            document.querySelector('main').classList.remove('hidden');
-            document.getElementById('logout-btn').style.display = 'block';
-            document.getElementById('user-info').classList.remove('hidden');
-            document.getElementById('user-id').textContent = user.email;
-            document.getElementById('auth-status').textContent = '已連線';
-            
-            // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
-            initializeAppUI();
-            
-            // 3. 執行新的、更輕量的初始資料載入函式
-            loadingText.textContent = '正在讀取核心資產數據...';
-            loadingOverlay.style.display = 'flex';
-            
-            // 【核心修改】呼叫正確的函式名稱
-            loadInitialData();
-
-            // 在初始資料載入後，啟動自動刷新
-            startLiveRefresh();
+            // 【核心修改】呼叫由 main.js 傳入的 onLogin 回呼函式
+            if (callbacks && typeof callbacks.onLogin === 'function') {
+                callbacks.onLogin(user);
+            }
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
-            // 登出時，重設 App 狀態
-            setState({ 
-                currentUserId: null,
-                isAppInitialized: false // 允許下次登入時重新初始化
-            });
-        
-            // 更新 UI
-            document.getElementById('auth-container').classList.remove('hidden'); 
-            document.querySelector('main').classList.add('hidden');
-            document.getElementById('logout-btn').style.display = 'none';
-            document.getElementById('user-info').classList.add('hidden');
-        
-            // 確保登出時隱藏讀取畫面
-            if (loadingOverlay) {
-                loadingOverlay.style.display = 'none';
+            setState({ currentUserId: null, isAppInitialized: false });
+
+            // 【核心修改】呼叫由 main.js 傳入的 onLogout 回呼函式
+            if (callbacks && typeof callbacks.onLogout === 'function') {
+                callbacks.onLogout();
             }
-            
-            // 使用者登出時，停止自動刷新
-            stopLiveRefresh();
         }
     });
 
@@ -125,7 +97,7 @@ export async function handleLogin() {
 export async function handleLogout() {
     try {
         await signOut(auth);
-        stopLiveRefresh();
+        // 【核心修改】登出成功後的 UI 操作和計時器停止，已移至 main.js 的回呼函式中
         showNotification('info', '您已成功登出。');
     } catch (error) {
         console.error("登出失敗:", error);
