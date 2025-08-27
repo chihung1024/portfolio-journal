@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v3.1 (Circular Dependency Fix)
+// == 身份驗證模組 (auth.js) v4.0 (Event-Driven & Decoupled)
+// == 職責：純粹的認證狀態管理器，透過廣播全局事件來通知應用程式。
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -15,48 +16,40 @@ import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
 
-// 【核心修改】移除對 main.js 的導入，以解決循環依賴問題
-// import { initializeAppUI, loadInitialData, startLiveRefresh, stopLiveRefresh } from './main.js';
-
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 
 /**
- * 【重構】初始化 Firebase 認證監聽器，並接受回呼函式
- * @param {object} callbacks - 包含 onLogin 和 onLogout 回呼的物件
- * @param {function} callbacks.onLogin - 登入成功時執行的函式
- * @param {function} callbacks.onLogout - 登出成功時執行的函式
+ * 【重構】初始化 Firebase 認證監聽器，使用事件廣播模式
  */
-export function initializeAuth(callbacks) {
+export function initializeAuth() {
     onAuthStateChanged(auth, (user) => {
         if (user) {
             // 使用者已登入
             console.log("使用者已登入:", user.uid);
             setState({ currentUserId: user.uid });
 
-            // 【核心修改】呼叫由 main.js 傳入的 onLogin 回呼函式
-            if (callbacks && typeof callbacks.onLogin === 'function') {
-                callbacks.onLogin(user);
-            }
+            // 【核心修改】廣播一個 'auth:loggedIn' 事件，並將 user 物件作為細節傳遞
+            const event = new CustomEvent('auth:loggedIn', { detail: { user } });
+            document.dispatchEvent(event);
 
         } else {
             // 使用者已登出或未登入
             console.log("使用者未登入。");
             setState({ currentUserId: null, isAppInitialized: false });
 
-            // 【核心修改】呼叫由 main.js 傳入的 onLogout 回呼函式
-            if (callbacks && typeof callbacks.onLogout === 'function') {
-                callbacks.onLogout();
-            }
+            // 【核心修改】廣播一個 'auth:loggedOut' 事件
+            const event = new CustomEvent('auth:loggedOut');
+            document.dispatchEvent(event);
         }
     });
 
     // 為登入表單增加 Enter 鍵監聽
     document.getElementById('auth-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
-            e.preventDefault(); // 防止表單預設提交行為
-            document.getElementById('login-btn').click(); // 觸發登入按鈕
+            e.preventDefault();
+            document.getElementById('login-btn').click();
         }
     });
 }
@@ -97,7 +90,6 @@ export async function handleLogin() {
 export async function handleLogout() {
     try {
         await signOut(auth);
-        // 【核心修改】登出成功後的 UI 操作和計時器停止，已移至 main.js 的回呼函式中
         showNotification('info', '您已成功登出。');
     } catch (error) {
         console.error("登出失敗:", error);
