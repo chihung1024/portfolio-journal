@@ -1,20 +1,53 @@
 // =========================================================================================
-// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - v1.1 (支援交易編輯)
+// == 持股詳情彈窗 UI 模組 (detailsModal.ui.js) - v1.2 (整合暫存區)
 // =========================================================================================
 
 import { getState } from '../../state.js';
+import { stagingService } from '../../staging.service.js'; // 【新增】導入暫存區服務
 import { formatNumber, isTwStock } from '../utils.js';
 
 /**
- * 渲染交易歷史分頁的內容
+ * 【核心修改】渲染交易歷史分頁的內容 (改為 async)
  * @param {string} symbol - 股票代碼
- * @returns {string} - HTML string
+ * @returns {Promise<string>} - HTML string
  */
-function renderDetailsTransactions(symbol) {
+async function renderDetailsTransactions(symbol) {
     const { transactions } = getState();
-    const symbolTransactions = transactions.filter(t => t.symbol.toUpperCase() === symbol.toUpperCase());
+    const upperSymbol = symbol.toUpperCase();
 
-    if (symbolTransactions.length === 0) {
+    // 1. 從暫存區獲取交易相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const transactionActions = stagedActions.filter(a => a.entity === 'transaction' && a.payload.symbol.toUpperCase() === upperSymbol);
+    const stagedActionMap = new Map();
+    transactionActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 2. 結合 state 中的數據和暫存區的數據
+    let combinedTransactions = transactions.filter(t => t.symbol.toUpperCase() === upperSymbol);
+
+    stagedActionMap.forEach((action, txId) => {
+        const existingIndex = combinedTransactions.findIndex(t => t.id === txId);
+        
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedTransactions.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } else if (action.type === 'UPDATE') {
+            if (existingIndex > -1) {
+                combinedTransactions[existingIndex] = { ...combinedTransactions[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            }
+        } else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedTransactions[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
+    
+    // 3. 按日期重新排序
+    combinedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    if (combinedTransactions.length === 0) {
         return `<p class="text-center py-6 text-gray-500">沒有此股票的交易紀錄。</p>`;
     }
 
@@ -29,12 +62,18 @@ function renderDetailsTransactions(symbol) {
             </tr>
         </thead>`;
     
-    const tableBody = symbolTransactions.map(t => {
+    const tableBody = combinedTransactions.map(t => {
+        // 【新增】根據暫存狀態決定背景色和樣式
+        let stagingClass = '';
+        if (t._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
+        else if (t._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
+        else if (t._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
+
         const typeClass = t.type === 'buy' ? 'text-red-500' : 'text-green-500';
         const typeText = t.type === 'buy' ? '買入' : '賣出';
-        // 【新增】編輯與刪除按鈕
+        
         return `
-            <tr class="border-b border-gray-200">
+            <tr class="border-b border-gray-200 ${stagingClass}">
                 <td class="px-4 py-2 whitespace-nowrap">${t.date.split('T')[0]}</td>
                 <td class="px-4 py-2 font-semibold ${typeClass}">${typeText}</td>
                 <td class="px-4 py-2 text-right">${formatNumber(t.quantity, isTwStock(t.symbol) ? 0 : 2)}</td>
@@ -49,7 +88,6 @@ function renderDetailsTransactions(symbol) {
     return `<div class="overflow-y-auto max-h-64"><table class="min-w-full">${tableHeader}<tbody class="bg-white">${tableBody}</tbody></table></div>`;
 }
 
-// ... (檔案中其他函式維持不變) ...
 
 /**
  * 渲染投資筆記分頁的內容
@@ -59,7 +97,6 @@ function renderDetailsTransactions(symbol) {
 function renderDetailsNotes(symbol) {
     const { stockNotes } = getState();
     const note = stockNotes[symbol] || {};
-    // 直接重用現有的 notes-modal 表單結構，但將其嵌入到分頁中
     return `
         <div class="p-4">
             <form id="details-notes-form">
@@ -121,10 +158,10 @@ function renderDetailsDividends(symbol) {
 
 
 /**
- * 渲染整個持股詳情彈出視窗
+ * 【核心修改】渲染整個持股詳情彈出視窗 (改為 async)
  * @param {string} symbol - 要顯示詳情的股票代碼
  */
-export function renderDetailsModal(symbol) {
+export async function renderDetailsModal(symbol) {
     const { holdings } = getState();
     const holding = holdings[symbol];
     if (!holding) return;
@@ -175,24 +212,25 @@ export function renderDetailsModal(symbol) {
     `;
     
     container.innerHTML = modalHtml;
-    lucide.createIcons(); // Re-render icons
+    lucide.createIcons();
 
-    // Load content for the default tab
     const tabContentContainer = document.getElementById('details-modal-tab-content');
-    tabContentContainer.innerHTML = renderDetailsTransactions(symbol);
+    // 【核心修改】等待異步函式完成並設置其回傳的 HTML
+    tabContentContainer.innerHTML = await renderDetailsTransactions(symbol);
 }
 
 /**
- * 處理詳情彈窗內部的分頁切換
+ * 【核心修改】處理詳情彈窗內部的分頁切換 (改為 async)
  * @param {string} tabName - 'transactions', 'notes', or 'dividends'
  * @param {string} symbol - 股票代碼
  */
-export function switchDetailsTab(tabName, symbol) {
+export async function switchDetailsTab(tabName, symbol) {
     const tabContentContainer = document.getElementById('details-modal-tab-content');
     
     // Switch content
     if (tabName === 'transactions') {
-        tabContentContainer.innerHTML = renderDetailsTransactions(symbol);
+        // 【核心修改】等待異步函式完成
+        tabContentContainer.innerHTML = await renderDetailsTransactions(symbol);
     } else if (tabName === 'notes') {
         tabContentContainer.innerHTML = renderDetailsNotes(symbol);
     } else if (tabName === 'dividends') {
