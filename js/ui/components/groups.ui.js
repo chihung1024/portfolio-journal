@@ -1,21 +1,51 @@
 // =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v4.0 - Selector-Driven)
+// == 檔案：js/ui/components/groups.ui.js (v3.0 - 整合暫存區狀態)
 // == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
 import { getState } from '../../state.js';
-// 【核心修改】直接從 selector 獲取最終數據
-import { selectCombinedGroups } from '../../selectors.js';
+import { stagingService } from '../../staging.service.js'; // 【核心修改】
 
 /**
  * 渲染群組管理分頁的內容
  */
 export async function renderGroupsTab() {
+    const { groups } = getState();
     const container = document.getElementById('groups-content');
     if (!container) return;
 
-    // 【核心修改】直接從 selector 獲取合併後的數據
-    const combinedGroups = await selectCombinedGroups();
+    // 【核心修改】從暫存區獲取群組相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const groupActions = stagedActions.filter(a => a.entity === 'group');
+    const stagedActionMap = new Map();
+    groupActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 結合 state 中的數據和暫存區的數據
+    let combinedGroups = [...groups];
+
+    stagedActionMap.forEach((action, groupId) => {
+        const existingIndex = combinedGroups.findIndex(g => g.id === groupId);
+        
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedGroups.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } else if (action.type === 'UPDATE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex] = { ...combinedGroups[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            }
+        } else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
+    
+    // 按創建時間排序 (假設 state 中有 created_at)
+    combinedGroups.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
 
     if (combinedGroups.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">尚未建立任何群組。</p>`;
@@ -23,7 +53,7 @@ export async function renderGroupsTab() {
     }
 
     container.innerHTML = combinedGroups.map(group => {
-        // 根據暫存狀態決定背景色
+        // 【核心修改】根據暫存狀態決定背景色
         let stagingClass = 'bg-gray-50'; // 預設
         if (group._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
         else if (group._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
@@ -55,16 +85,24 @@ export async function renderGroupsTab() {
 }
 
 /**
- * 渲染群組編輯/新增彈出視窗的內容
+ * 【核心修改】渲染群組編輯/新增彈出視窗的內容 (現在為 async)
  * @param {Object|null} groupToEdit - (可選) 要編輯的群組物件
  */
 export async function renderGroupModal(groupToEdit = null) {
+    const { transactions } = getState();
     const form = document.getElementById('group-form');
     form.reset();
-    
-    // 注意：此處的邏輯維持不變，因為編輯的對象是單一實體，
-    // 其最新狀態已由 handleEdit 事件處理器從 selector 獲取並傳入。
-    const finalGroupData = groupToEdit;
+
+    let finalGroupData = groupToEdit ? { ...groupToEdit } : null;
+
+    // 如果是編輯模式，檢查暫存區是否有更新的版本
+    if (groupToEdit) {
+        const stagedActions = await stagingService.getStagedActions();
+        const stagedUpdate = stagedActions.find(a => a.entity === 'group' && a.type === 'UPDATE' && a.payload.id === groupToEdit.id);
+        if (stagedUpdate) {
+            finalGroupData = { ...finalGroupData, ...stagedUpdate.payload };
+        }
+    }
 
     document.getElementById('group-id').value = finalGroupData ? finalGroupData.id : '';
     document.getElementById('group-modal-title').textContent = finalGroupData ? `編輯群組：${finalGroupData.name}` : '新增群組';

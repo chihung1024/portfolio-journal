@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v5.0 - Selector-Driven
+// == 彈出視窗模組 (modals.js) v4.3 - Staging-Aware Group Selection
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -10,8 +10,6 @@ import { apiRequest, executeApiAction } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
 import { showNotification } from './notifications.js';
 import { renderTransactionsTable } from './components/transactions.ui.js';
-// 【核心修改】直接從 selector 獲取最終數據
-import { selectCombinedTransactions } from '../selectors.js';
 
 // --- Helper Functions ---
 
@@ -204,9 +202,19 @@ export async function openModal(modalId, isEdit = false, data = null) {
     } else if (modalId === 'membership-editor-modal') {
         const { txId } = data;
         
-        // 【核心修改】直接從 selector 獲取合併後的數據
-        const combinedTransactions = await selectCombinedTransactions();
-        const tx = combinedTransactions.find(t => t.id === txId);
+        const stagedActions = await stagingService.getStagedActions();
+        const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction' && a.type !== 'DELETE').map(a => a.payload);
+        
+        let combined = [...transactions];
+        stagedTransactions.forEach(stagedTx => {
+            const index = combined.findIndex(t => t.id === stagedTx.id);
+            if (index > -1) {
+                combined[index] = { ...combined[index], ...stagedTx };
+            } else {
+                combined.push(stagedTx);
+            }
+        });
+        const tx = combined.find(t => t.id === txId);
         
         if (!tx) {
             showNotification('error', '找不到指定的交易紀錄來編輯群組。');

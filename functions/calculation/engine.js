@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.1 - Purity Refined & Corrected)
+// == 檔案：functions/calculation/engine.js (v2.0 - Purity Refined)
 // == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
@@ -9,45 +9,44 @@ const metrics = require('./metrics.calculator');
 const dataProvider = require('./data.provider');
 
 /**
- * 核心計算函式 (v2.1 - Refactored for Purity)
- * @param {Array} transactions - 【修改】用於計算的、已經被精確過濾的交易紀錄
- * @param {Array} splitsInScope - 【修改】只包含在當前計算範圍內的拆股事件
- * @param {Array} dividendsInScope - 【修改】只包含在當前計算範圍內的股利事件
+ * 核心計算函式
+ * @param {Array} txs - 用於計算的交易紀錄
+ * @param {Array} allUserSplits - 【修改】傳入使用者所有的拆股事件
+ * @param {Array} allUserDividends - 【修改】傳入使用者所有的股利事件
  * @param {string} benchmarkSymbol - 比較基準
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
  * @param {Object} [existingHistory=null] - (可選) 已有的歷史數據
  * @returns {Object} 包含所有計算結果的物件
  */
-async function runCalculationEngine(transactions, splitsInScope, dividendsInScope, benchmarkSymbol, baseSnapshot = null, existingHistory = null) {
-    if (transactions.length === 0) {
+async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchmarkSymbol, baseSnapshot = null, existingHistory = null) {
+    if (txs.length === 0) {
         return {
             summaryData: {},
             holdingsToUpdate: {},
             fullHistory: {},
             twrHistory: {},
             benchmarkHistory: {},
-            netProfitHistory: {},
-            evts: [],
-            market: {}
+            netProfitHistory: {}
         };
     }
+    
+    // ========================= 【核心修正 - 開始】 =========================
+    // 步驟 1: 建立一個只包含當前計算範圍內股票代碼的 Set，以便高效查詢。
+    const symbolsInScope = new Set(txs.map(t => t.symbol.toUpperCase()));
+
+    // 步驟 2: 根據範圍內的股票代碼，過濾拆股和股利事件，確保數據純淨。
+    const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
+    const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
+    // ========================= 【核心修正 - 結束】 =========================
+
 
     // 確保計算所需的市場數據都存在
-    await dataProvider.ensureAllSymbolsData(transactions, benchmarkSymbol);
-    const market = await dataProvider.getMarketDataFromDb(transactions, benchmarkSymbol);
+    await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
+    const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
-    // 【核心修正】現在直接使用由上層傳入的、已經過濾乾淨的數據，消除了數據污染的風險。
-    const { evts, firstBuyDate } = prepareEvents(transactions, splitsInScope, market, dividendsInScope);
-    if (!firstBuyDate) return {
-        summaryData: {},
-        holdingsToUpdate: {},
-        fullHistory: {},
-        twrHistory: {},
-        benchmarkHistory: {},
-        netProfitHistory: {},
-        evts: [],
-        market: {}
-    };
+    // 【修改】將過濾後的、乾淨的數據傳遞下去
+    const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
+    if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
 
     let calculationStartDate = firstBuyDate;
     let oldHistory = {};
@@ -102,8 +101,8 @@ async function runCalculationEngine(transactions, splitsInScope, dividendsInScop
         twrHistory,
         benchmarkHistory,
         netProfitHistory,
-        evts,
-        market
+        evts, // 回傳 evts 給快照使用
+        market // 【修正】將準備好的 market 物件一併回傳
     };
 }
 
