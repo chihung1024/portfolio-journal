@@ -12,6 +12,7 @@ import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
+import { selectCombinedTransactions } from '../selectors.js';
 
 // --- Private Functions ---
 
@@ -217,24 +218,9 @@ export function initializeGeneralEventListeners() {
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
-            const { transactions } = getState();
-            
-            const stagedActions = await stagingService.getStagedActions();
-            const stagedTransactions = stagedActions
-                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-                .map(a => a.payload);
-                
-            let combined = [...transactions];
-            stagedTransactions.forEach(stagedTx => {
-                const index = combined.findIndex(t => t.id === stagedTx.id);
-                if(index > -1) {
-                    combined[index] = {...combined[index], ...stagedTx};
-                } else {
-                    combined.push(stagedTx);
-                }
-            });
-            
-            const txToEdit = combined.find(t => t.id === txId);
+            // 【核心修改】從 selector 獲取已合併的交易紀錄
+            const combinedTransactions = await selectCombinedTransactions();
+            const txToEdit = combinedTransactions.find(t => t.id === txId);
 
             if (txToEdit) {
                 const { closeModal, openModal } = await import('../ui/modals.js');
@@ -249,13 +235,9 @@ export function initializeGeneralEventListeners() {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
             
-            const { transactions } = getState();
-            const stagedActions = await stagingService.getStagedActions();
-            const stagedTransactions = stagedActions
-                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-                .map(a => a.payload);
-            const combinedTxs = [...transactions, ...stagedTransactions];
-            const txToDelete = combinedTxs.find(t => t.id === txId);
+            // 【核心修改】從 selector 獲取已合併的交易紀錄
+            const combinedTransactions = await selectCombinedTransactions();
+            const txToDelete = combinedTransactions.find(t => t.id === txId);
 
             if (!txToDelete) {
                 showNotification('error', '找不到要刪除的交易紀錄。');

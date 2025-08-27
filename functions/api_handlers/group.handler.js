@@ -6,6 +6,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { runCalculationEngine } = require('../calculation/engine');
+const dataProvider = require('../calculation/data.provider');
 
 // ========================= 【核心修改 - 開始】 =========================
 /**
@@ -33,31 +34,29 @@ async function calculateGroupOnDemandCore(uid, groupId) {
 
     console.log(`[Cache MISS or DIRTY] for group ${groupId}. 執行完整計算...`);
 
-    const involvedSymbolsResult = await d1Client.query(
-        'SELECT DISTINCT t.symbol FROM transactions t JOIN group_transaction_inclusions g ON t.id = g.transaction_id WHERE g.uid = ? AND g.group_id = ?',
-        [uid, groupId]
-    );
-    const involvedSymbols = involvedSymbolsResult.map(r => r.symbol);
-
-    if (involvedSymbols.length === 0) {
-        const emptyData = { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {} };
-        await d1Client.query('UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?', [groupId, uid]);
-        return emptyData;
-    }
-
-    const placeholders = involvedSymbols.map(() => '?').join(',');
-    const allTxsForInvolvedSymbols = await d1Client.query(
-        `SELECT * FROM transactions WHERE uid = ? AND symbol IN (${placeholders}) ORDER BY date ASC`,
-        [uid, ...involvedSymbols]
-    );
-
     const inclusionIdsResult = await d1Client.query(
         'SELECT transaction_id FROM group_transaction_inclusions WHERE uid = ? AND group_id = ?',
         [uid, groupId]
     );
     const inclusionTxIds = new Set(inclusionIdsResult.map(r => r.transaction_id));
-    const txsForEngine = allTxsForInvolvedSymbols.filter(tx => inclusionTxIds.has(tx.id));
+    
+    // 步驟 1: 找出此群組中涉及的所有股票代碼，並過濾出對應的交易
+    const txsResult = await d1Client.query(
+        `SELECT * FROM transactions WHERE uid = ?`,
+        [uid]
+    );
+    const txsForEngine = txsResult.filter(tx => inclusionTxIds.has(tx.id));
 
+    // 如果沒有交易紀錄，直接回傳空數據
+    if (txsForEngine.length === 0) {
+        const emptyData = { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {} };
+        await d1Client.query('UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?', [groupId, uid]);
+        return emptyData;
+    }
+
+    // 步驟 2: 找出所有相關的股票代碼，以獲取市場數據
+    const symbolsInScope = [...new Set(txsForEngine.map(t => t.symbol.toUpperCase()))];
+    
     const [allUserSplits, allUserDividends, controlsData] = await Promise.all([
         d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
         d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
@@ -65,12 +64,22 @@ async function calculateGroupOnDemandCore(uid, groupId) {
     ]);
 
     const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+    
+    // 步驟 3: 根據篩選出的股票代碼，過濾拆股和股利事件
+    const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
+    const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
 
+    // 步驟 4: 確保市場數據已備妥，並從資料庫中讀取
+    await dataProvider.ensureAllSymbolsData(txsForEngine, benchmarkSymbol);
+    const market = await dataProvider.getMarketDataFromDb(txsForEngine, benchmarkSymbol);
+
+    // 步驟 5: 呼叫純粹的計算引擎
     const result = await runCalculationEngine(
         txsForEngine,
-        allUserSplits,
-        allUserDividends,
-        benchmarkSymbol
+        splitsInScope,
+        dividendsInScope,
+        benchmarkSymbol,
+        market
     );
 
     const responseData = {

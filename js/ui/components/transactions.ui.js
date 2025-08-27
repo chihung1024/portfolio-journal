@@ -5,6 +5,7 @@
 import { getState } from '../../state.js';
 import { stagingService } from '../../staging.service.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
+import { selectCombinedTransactions } from '../../selectors.js';
 
 /**
  * 產生智慧型自適應分頁控制項的 HTML
@@ -44,39 +45,9 @@ export async function renderTransactionsTable() {
     const { transactions, transactionFilter, transactionsPerPage, transactionsCurrentPage } = getState();
     const container = document.getElementById('transactions-tab');
 
-    const stagedActions = await stagingService.getStagedActions();
-    const transactionActions = stagedActions.filter(a => a.entity === 'transaction');
+    // 【核心修改】從 selector 獲取已合併的交易紀錄
+    const combinedTransactions = await selectCombinedTransactions();
     
-    const stagedActionMap = new Map();
-    transactionActions.forEach(action => {
-        stagedActionMap.set(action.payload.id, action);
-    });
-
-    let combinedTransactions = [...transactions];
-    
-    stagedActionMap.forEach((action, txId) => {
-        const existingIndex = combinedTransactions.findIndex(t => t.id === txId);
-        
-        if (action.type === 'CREATE') {
-            if (existingIndex === -1) {
-                combinedTransactions.push({ ...action.payload, _staging_status: 'CREATE' });
-            }
-        } else if (action.type === 'UPDATE') {
-            if (existingIndex > -1) {
-                combinedTransactions[existingIndex] = { ...combinedTransactions[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
-            } else {
-                // 如果是對一個僅存在於暫存區的項目進行更新，也將其加入列表
-                combinedTransactions.push({ ...action.payload, _staging_status: 'CREATE' });
-            }
-        } else if (action.type === 'DELETE') {
-            if (existingIndex > -1) {
-                combinedTransactions[existingIndex]._staging_status = 'DELETE';
-            }
-        }
-    });
-    
-    combinedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-
     const uniqueSymbols = ['all', ...Array.from(new Set(combinedTransactions.map(t => t.symbol)))];
     const filterHtml = `<div class="mb-4 flex items-center space-x-2"><label for="transaction-symbol-filter" class="text-sm font-medium text-gray-700">篩選股票:</label><select id="transaction-symbol-filter" class="block w-40 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">${uniqueSymbols.map(s => `<option value="${s}" ${transactionFilter === s ? 'selected' : ''}>${s === 'all' ? '顯示全部' : s}</option>`).join('')}</select></div>`;
 
