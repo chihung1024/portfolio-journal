@@ -1,10 +1,9 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v5.0 - Combined API Call
+// == 通用事件處理模組 (general.events.js) v4.3 - Group Context Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// 【核心修改】引入 updateAppWithData
-import { apiRequest, executeApiAction, submitBatch, updateAppWithData } from '../api.js';
+import { apiRequest, executeApiAction, submitBatch } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
@@ -17,10 +16,17 @@ import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsMo
 // --- Private Functions ---
 
 async function handleShowDetails(symbol) {
-    const { transactions } = getState();
+    const { transactions, selectedGroupId } = getState(); // 【新增】獲取 selectedGroupId
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     const { openModal } = await import('../ui/modals.js');
 
+    // 當處於群組檢視時，我們假設數據已完全載入，不再觸發後備的 API 請求
+    if (selectedGroupId !== 'all') {
+        await openModal('details-modal', false, { symbol });
+        return;
+    }
+    
+    // 只有在全局檢視 ('all') 且本地數據不完整時，才觸發後備 API
     if (hasDataLocally) {
         await openModal('details-modal', false, { symbol });
     } else {
@@ -30,7 +36,11 @@ async function handleShowDetails(symbol) {
         loadingOverlay.style.display = 'flex';
         
         try {
-            const result = await apiRequest('get_symbol_details', { symbol });
+            // ========================= 【核心修改 - 開始】 =========================
+            // 將當前的 groupId 傳遞給後端，以便後端能回傳正確範圍的數據
+            const result = await apiRequest('get_symbol_details', { symbol, groupId: selectedGroupId });
+            // ========================= 【核心修改 - 結束】 =========================
+
             if (result.success) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
@@ -57,7 +67,6 @@ async function handleShowDetails(symbol) {
     }
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) {
@@ -66,40 +75,19 @@ async function handleUpdateBenchmark() {
     }
 
     const stagedActions = await stagingService.getStagedActions();
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingText = document.getElementById('loading-text');
-
-    // 定義後續操作
-    const nextAction = {
-        type: 'UPDATE_BENCHMARK',
-        payload: { benchmarkSymbol: newBenchmark }
-    };
-
     if (stagedActions.length > 0) {
         const { showConfirm, hideConfirm } = await import('../ui/modals.js');
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
             async () => {
                 hideConfirm();
-                loadingText.textContent = '正在提交變更並更新 Benchmark...';
-                loadingOverlay.style.display = 'flex';
-                try {
-                    const netActions = await stagingService.getNetActions();
-                    // 呼叫新的合併 API
-                    const result = await apiRequest('submit_batch_and_execute', {
-                        actions: netActions,
-                        nextAction: nextAction
-                    });
-                    if (result.success) {
-                        await stagingService.clearActions();
-                        updateAppWithData(result.data, result.data.tempIdMap);
-                        showNotification('success', 'Benchmark 已成功更新！');
-                    }
-                } catch (error) {
-                    console.error("提交並更新 Benchmark 失敗:", error);
-                } finally {
-                    loadingOverlay.style.display = 'none';
-                }
+                const netActions = await stagingService.getNetActions();
+                await submitBatch(netActions);
+                await stagingService.clearActions();
+                await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
+                    loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
+                    successMessage: 'Benchmark 已成功更新！'
+                });
             },
             '提交並更新 Benchmark？',
             () => { 
@@ -107,7 +95,6 @@ async function handleUpdateBenchmark() {
             }
         );
     } else {
-        // 如果沒有暫存，則呼叫舊的獨立 API
         executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
             loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
             successMessage: 'Benchmark 已成功更新！'
@@ -116,7 +103,6 @@ async function handleUpdateBenchmark() {
         });
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
