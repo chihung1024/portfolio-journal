@@ -1,10 +1,9 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v6.1 - Circular Dependency Fix
+// == 主程式進入點 (main.js) v6.2 - Robust Initialization
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, applyGroupView, fetchAllCoreData } from './api.js';
-// 【核心修改】從 auth.js 導入的函式現在只包含認證相關操作
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { stagingService } from './staging.service.js';
 import { initializeStagingEventListeners } from './events/staging.events.js';
@@ -280,20 +279,27 @@ export function initializeAppUI() {
     initializeGroupEventListeners();
     initializeStagingEventListeners();
     
-    lucide.createIcons();
+    // ========================= 【核心修改 - 開始】 =========================
+    // 對外部函式庫的呼叫進行防禦性處理
+    try {
+        if (window.lucide) {
+            lucide.createIcons();
+        } else {
+            console.warn("Lucide icon library not loaded.");
+        }
+    } catch (error) {
+        console.error("Error creating Lucide icons:", error);
+        // 即使圖示出錯，也不應中斷整個應用的初始化
+    }
+    // ========================= 【核心修改 - 結束】 =========================
 
     setState({ isAppInitialized: true });
 }
 
-// ========================= 【核心修改 - 開始】 =========================
-/**
- * 【新增】處理登入成功後的所有操作
- */
 function handleLoginSuccess(user) {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
 
-    // 更新 UI
     document.getElementById('auth-container').style.display = 'none';
     document.querySelector('main').classList.remove('hidden');
     document.getElementById('logout-btn').style.display = 'block';
@@ -301,45 +307,34 @@ function handleLoginSuccess(user) {
     document.getElementById('user-id').textContent = user.email;
     document.getElementById('auth-status').textContent = '已連線';
     
-    // 初始化 UI 元件和事件監聽
     initializeAppUI();
     
-    // 載入初始數據
     loadingText.textContent = '正在讀取核心資產數據...';
     loadingOverlay.style.display = 'flex';
     loadInitialData();
 
-    // 啟動自動刷新
     startLiveRefresh();
 }
 
-/**
- * 【新增】處理登出成功後的所有操作
- */
 function handleLogoutSuccess() {
     const loadingOverlay = document.getElementById('loading-overlay');
 
-    // 更新 UI
     document.getElementById('auth-container').classList.remove('hidden'); 
     document.querySelector('main').classList.add('hidden');
     document.getElementById('logout-btn').style.display = 'none';
     document.getElementById('user-info').classList.add('hidden');
 
-    // 確保隱藏讀取畫面
     if (loadingOverlay) {
         loadingOverlay.style.display = 'none';
     }
     
-    // 停止自動刷新
     stopLiveRefresh();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
-    // 【修改】將回呼函式傳遞給 initializeAuth
     initializeAuth({
         onLogin: handleLoginSuccess,
         onLogout: handleLogoutSuccess,
     }); 
 });
-// ========================= 【核心修改 - 結束】 =========================
