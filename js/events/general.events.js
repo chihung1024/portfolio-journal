@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.2 - Staging Area Integration Fix
+// == 通用事件處理模組 (general.events.js) v5.0 - Combined API Call
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction, submitBatch } from '../api.js';
+// 【核心修改】引入 updateAppWithData
+import { apiRequest, executeApiAction, submitBatch, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
@@ -17,15 +18,12 @@ import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsMo
 
 async function handleShowDetails(symbol) {
     const { transactions } = getState();
-    // 判斷本地 state 是否已有此股票的交易，以決定是否需要向後端請求
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     const { openModal } = await import('../ui/modals.js');
 
     if (hasDataLocally) {
-        // 【核心修改】呼叫 async 版本的 renderDetailsModal
         await openModal('details-modal', false, { symbol });
     } else {
-        // 如果本地沒有數據，則向後端請求
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
         loadingText.textContent = `正在讀取 ${symbol} 的詳細資料...`;
@@ -34,7 +32,6 @@ async function handleShowDetails(symbol) {
         try {
             const result = await apiRequest('get_symbol_details', { symbol });
             if (result.success) {
-                // 將新獲取的數據加入 state
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
                 const txIds = new Set(currentState.transactions.map(t => t.id));
@@ -60,6 +57,7 @@ async function handleShowDetails(symbol) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) {
@@ -68,19 +66,40 @@ async function handleUpdateBenchmark() {
     }
 
     const stagedActions = await stagingService.getStagedActions();
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+
+    // 定義後續操作
+    const nextAction = {
+        type: 'UPDATE_BENCHMARK',
+        payload: { benchmarkSymbol: newBenchmark }
+    };
+
     if (stagedActions.length > 0) {
         const { showConfirm, hideConfirm } = await import('../ui/modals.js');
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
             async () => {
                 hideConfirm();
-                const netActions = await stagingService.getNetActions();
-                await submitBatch(netActions);
-                await stagingService.clearActions();
-                await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-                    loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-                    successMessage: 'Benchmark 已成功更新！'
-                });
+                loadingText.textContent = '正在提交變更並更新 Benchmark...';
+                loadingOverlay.style.display = 'flex';
+                try {
+                    const netActions = await stagingService.getNetActions();
+                    // 呼叫新的合併 API
+                    const result = await apiRequest('submit_batch_and_execute', {
+                        actions: netActions,
+                        nextAction: nextAction
+                    });
+                    if (result.success) {
+                        await stagingService.clearActions();
+                        updateAppWithData(result.data, result.data.tempIdMap);
+                        showNotification('success', 'Benchmark 已成功更新！');
+                    }
+                } catch (error) {
+                    console.error("提交並更新 Benchmark 失敗:", error);
+                } finally {
+                    loadingOverlay.style.display = 'none';
+                }
             },
             '提交並更新 Benchmark？',
             () => { 
@@ -88,6 +107,7 @@ async function handleUpdateBenchmark() {
             }
         );
     } else {
+        // 如果沒有暫存，則呼叫舊的獨立 API
         executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
             loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
             successMessage: 'Benchmark 已成功更新！'
@@ -96,6 +116,7 @@ async function handleUpdateBenchmark() {
         });
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
@@ -207,13 +228,11 @@ export function initializeGeneralEventListeners() {
             return;
         }
         
-        // ========================= 【核心修改 - 開始】 =========================
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
             const { transactions } = getState();
             
-            // 1. 合併 state 和 staging area 的數據
             const stagedActions = await stagingService.getStagedActions();
             const stagedTransactions = stagedActions
                 .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
@@ -229,13 +248,11 @@ export function initializeGeneralEventListeners() {
                 }
             });
             
-            // 2. 從合併後的數據中尋找要編輯的最新版本
             const txToEdit = combined.find(t => t.id === txId);
 
             if (txToEdit) {
                 const { closeModal, openModal } = await import('../ui/modals.js');
                 closeModal('details-modal');
-                // 3. 將最新的數據傳給編輯視窗
                 await openModal('transaction-modal', true, txToEdit);
             }
             return;
@@ -246,7 +263,6 @@ export function initializeGeneralEventListeners() {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
             
-            // 1. 為了能將完整物件存入暫存區，先合併數據找到它
             const { transactions } = getState();
             const stagedActions = await stagingService.getStagedActions();
             const stagedTransactions = stagedActions
@@ -262,11 +278,9 @@ export function initializeGeneralEventListeners() {
 
             showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
                 try {
-                    // 2. 將完整的交易物件寫入暫存區
                     await stagingService.addAction('DELETE', 'transaction', txToDelete);
                     showNotification('info', '刪除操作已暫存。');
                     
-                    // 3. 異步刷新詳情視窗內容，以顯示刪除狀態
                     const symbol = document.querySelector('#details-modal-content h2').textContent;
                     await switchDetailsTab('transactions', symbol);
 
@@ -277,10 +291,8 @@ export function initializeGeneralEventListeners() {
             });
             return;
         }
-        // ========================= 【核心修改 - 結束】 =========================
     });
 
-    // Chart controls listeners (unchanged)
     const twrControls = document.getElementById('twr-chart-controls');
     if (twrControls) {
         twrControls.addEventListener('click', (e) => {
