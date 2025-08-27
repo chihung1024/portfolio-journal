@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v5.0 - Selector-Driven
+// == 通用事件處理模組 (general.events.js) v5.1 - API Refactoring Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction, submitBatch } from '../api.js';
+// 【核心修改】移除對 executeApiAction 的導入，引入新的 fetchAllCoreData
+import { apiRequest, submitBatch, fetchAllCoreData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
@@ -12,7 +13,6 @@ import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
-// 【核心修改】直接從 selector 獲取最終數據
 import { selectCombinedTransactions } from '../selectors.js';
 
 // --- Private Functions ---
@@ -64,6 +64,10 @@ async function handleShowDetails(symbol) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】更新 Benchmark 的事件處理器，以適應新的 API 模式
+ */
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) {
@@ -72,19 +76,48 @@ async function handleUpdateBenchmark() {
     }
 
     const stagedActions = await stagingService.getStagedActions();
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+
+    const performUpdate = async () => {
+        loadingText.textContent = `正在更新 Benchmark 為 ${newBenchmark}...`;
+        loadingOverlay.style.display = 'flex';
+        try {
+            // 步驟 1: 直接呼叫基礎 apiRequest
+            await apiRequest('update_benchmark', { benchmarkSymbol: newBenchmark });
+            
+            // 步驟 2: 成功後，呼叫 fetchAllCoreData 來刷新整個應用
+            await fetchAllCoreData(false); // false 表示不重複顯示 loading
+            
+            showNotification('success', 'Benchmark 已成功更新！');
+        } catch (error) {
+            showNotification('error', `操作失敗: ${error.message}`);
+        } finally {
+            loadingOverlay.style.display = 'none';
+            loadingText.textContent = '正在從雲端同步資料...';
+        }
+    };
+
     if (stagedActions.length > 0) {
         const { showConfirm, hideConfirm } = await import('../ui/modals.js');
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
             async () => {
                 hideConfirm();
-                const netActions = await stagingService.getNetActions();
-                await submitBatch(netActions);
-                await stagingService.clearActions();
-                await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-                    loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-                    successMessage: 'Benchmark 已成功更新！'
-                });
+                loadingText.textContent = '正在提交暫存區...';
+                loadingOverlay.style.display = 'flex';
+                try {
+                    const netActions = await stagingService.getNetActions();
+                    const submitResult = await submitBatch(netActions);
+                    if (submitResult.success) {
+                        await stagingService.clearActions();
+                        await performUpdate(); // 提交成功後，執行更新 Benchmark
+                    }
+                } catch (error) {
+                    // submitBatch 內部已有錯誤提示，此處只需確保 loading 畫面關閉
+                    loadingOverlay.style.display = 'none';
+                    loadingText.textContent = '正在從雲端同步資料...';
+                }
             },
             '提交並更新 Benchmark？',
             () => { 
@@ -92,14 +125,10 @@ async function handleUpdateBenchmark() {
             }
         );
     } else {
-        executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-            loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-            successMessage: 'Benchmark 已成功更新！'
-        }).catch(error => {
-            console.error("更新 Benchmark 最終失敗:", error);
-        });
+        await performUpdate();
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
@@ -214,7 +243,6 @@ export function initializeGeneralEventListeners() {
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
-            // 【核心修改】直接從 selector 獲取合併後的數據
             const combinedTransactions = await selectCombinedTransactions();
             const txToEdit = combinedTransactions.find(t => t.id === txId);
 
@@ -231,7 +259,6 @@ export function initializeGeneralEventListeners() {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
             
-            // 【核心修改】直接從 selector 獲取合併後的數據
             const combinedTransactions = await selectCombinedTransactions();
             const txToDelete = combinedTransactions.find(t => t.id === txId);
 
