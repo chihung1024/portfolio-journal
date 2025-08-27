@@ -1,11 +1,11 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v2.1 (Final Bug Fix - 匯率 & ID 同步)
+// == 批次操作處理模組 (batch.handler.js) - v2.2 (Fix Module Import)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-// 【核心修正】從 transaction.handler 導入匯率計算函式
+// 【核心修正】從 transaction.handler 解構導入匯率計算函式
 const { populateSettlementFxRate } = require('./transaction.handler'); 
 
 /**
@@ -99,10 +99,15 @@ exports.submitBatch = async (uid, data, res) => {
             statements.push({ sql, params });
         }
         
-        [...updates, ...deletes].forEach(action => {
-             const { sql, params } = getQueryForAction(uid, action);
-             statements.push({ sql, params });
-        });
+        // 批次處理更新與刪除
+        for (const action of [...updates, ...deletes]) {
+            // 對於交易更新，也要檢查並填充匯率
+            if (action.entity === 'transaction' && action.type === 'UPDATE') {
+                 action.payload = await populateSettlementFxRate(action.payload);
+            }
+            const { sql, params } = getQueryForAction(uid, action);
+            statements.push({ sql, params });
+        }
 
         if (statements.length > 0) {
             await d1Client.batch(statements);
@@ -120,6 +125,11 @@ exports.submitBatch = async (uid, data, res) => {
 
         const summaryRow = summaryResult[0] || {};
         const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+        const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+        const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+        const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+        const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+
         
         return res.status(200).send({ 
             success: true, 
@@ -129,7 +139,10 @@ exports.submitBatch = async (uid, data, res) => {
                 holdings,
                 transactions: txs,
                 splits,
-                // 【核心修正】回傳 ID 對照表給前端
+                history,
+                twrHistory,
+                benchmarkHistory,
+                netProfitHistory,
                 tempIdMap: tempIdMap 
             }
         });
