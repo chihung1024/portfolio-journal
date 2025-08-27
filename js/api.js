@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.5 (Async UI Update)
+// == API 通訊模組 (api.js) v6.0 (Context-Aware Submission)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -56,7 +56,7 @@ export async function apiRequest(action, data) {
 }
 
 /**
- * 提交暫存區的批次操作 - 只負責發送請求並回傳結果
+ * 【舊版】提交暫存區的批次操作 - 只負責發送請求並回傳結果 (用於全局提交)
  */
 export async function submitBatch(actions) {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -80,6 +80,37 @@ export async function submitBatch(actions) {
         loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
+
+
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】提交暫存區並執行後續動作 (用於情境感知提交)
+ * @param {Array} actions - 要提交的淨操作
+ * @param {Object} nextAction - 提交後要執行的下一個動作 { type, payload }
+ */
+export async function submitBatchAndExecute(actions, nextAction) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTextElement = document.getElementById('loading-text');
+    loadingTextElement.textContent = '正在提交變更並為您計算...';
+    loadingOverlay.style.display = 'flex';
+
+    try {
+        const result = await apiRequest('submit_batch_and_execute', { actions, nextAction });
+        if (result.success) {
+            showNotification('success', '操作已成功提交並完成計算！');
+            return result;
+        } else {
+            throw new Error(result.message || '組合操作時發生未知錯誤');
+        }
+    } catch (error) {
+        showNotification('error', `操作失敗: ${error.message}`);
+        throw error;
+    } finally {
+        loadingOverlay.style.display = 'none';
+        loadingTextElement.textContent = '正在從雲端同步資料...';
+    }
+}
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -113,12 +144,10 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     }
 }
 
-
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
+ * 統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
  */
-export async function updateAppWithData(portfolioData, tempIdMap = {}) {
+export async function updateAppWithData(portfolioData) {
     if (!portfolioData) {
         console.error("updateAppWithData 收到無效數據，已跳過更新。");
         return;
@@ -143,6 +172,7 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         obj[item.symbol] = item; return obj;
     }, {});
     newState.holdings = holdingsObject;
+    newState.summary = portfolioData.summary || {};
     
     setState(newState);
 
@@ -185,8 +215,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
-
 
 /**
  * 從後端載入所有「全部股票」的投資組合資料並更新畫面
