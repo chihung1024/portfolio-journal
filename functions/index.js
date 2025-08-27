@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v6.0 - 暫存區批次提交)
+// == GCP Cloud Function 主入口 (v6.1 - Combined Action Route)
 // =========================================================================================
 
 const admin = require('firebase-admin');
@@ -16,7 +16,6 @@ const splitHandlers = require('./api_handlers/split.handler');
 const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
-// 【核心修改】引入新的 batch handler
 const batchHandlers = require('./api_handlers/batch.handler');
 
 try {
@@ -74,9 +73,13 @@ exports.unifiedPortfolioHandler = async (req, res) => {
             if (!action) return res.status(400).send({ success: false, message: '請求錯誤：缺少 action。' });
 
             switch (action) {
-                // 【核心修改】新增批次提交 Action
+                // Batch
                 case 'submit_batch':
                     return await batchHandlers.submitBatch(uid, data, res);
+                // ========================= 【核心修改 - 開始】 =========================
+                case 'submit_batch_and_execute':
+                    return await batchHandlers.submitBatchAndExecute(uid, data, res);
+                // ========================= 【核心修改 - 結束】 =========================
                 
                 // Portfolio
                 case 'get_data':
@@ -120,10 +123,6 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 case 'delete_user_dividend':
                     return await dividendHandlers.deleteUserDividend(uid, data, res);
                 
-                // 【核心修改】移除 Notes 功能
-                // case 'save_stock_note':
-                //     return await noteHandlers.saveStockNote(uid, data, res);
-
                 // Groups
                 case 'get_groups':
                     return await groupHandlers.getGroups(uid, res);
