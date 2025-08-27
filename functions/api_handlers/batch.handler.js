@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v2.2 (Fix Module Import)
+// == 批次操作處理模組 (batch.handler.js) - v2.3 (Complex Action Handling)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-// 【核心修正】從 transaction.handler 解構導入匯率計算函式
 const { populateSettlementFxRate } = require('./transaction.handler'); 
 
 /**
@@ -13,6 +12,12 @@ const { populateSettlementFxRate } = require('./transaction.handler');
  */
 const getQueryForAction = (uid, action, newId = null) => {
     const { type, entity, payload } = action;
+    
+    // 【核心修正】對於帶有特殊動作的 payload，先過濾掉附加元數據
+    const cleanPayload = { ...payload };
+    delete cleanPayload.groupInclusions;
+    delete cleanPayload.newGroups;
+    delete cleanPayload._special_action;
     
     const tableMap = {
         'transaction': 'transactions',
@@ -27,15 +32,14 @@ const getQueryForAction = (uid, action, newId = null) => {
         case 'DELETE':
             return {
                 sql: `DELETE FROM ${tableName} WHERE id = ? AND uid = ?`,
-                params: [payload.id, uid]
+                params: [cleanPayload.id, uid]
             };
 
         case 'UPDATE': {
-            const updatePayload = { ...payload };
-            delete updatePayload.id;
-            const fields = Object.keys(updatePayload);
+            delete cleanPayload.id;
+            const fields = Object.keys(cleanPayload);
             const setClause = fields.map(f => `${f} = ?`).join(', ');
-            const params = [...fields.map(f => updatePayload[f]), payload.id, uid];
+            const params = [...fields.map(f => cleanPayload[f]), payload.id, uid];
             return {
                 sql: `UPDATE ${tableName} SET ${setClause} WHERE id = ? AND uid = ?`,
                 params
@@ -43,14 +47,13 @@ const getQueryForAction = (uid, action, newId = null) => {
         }
 
         case 'CREATE': {
-            // 使用後端產生的新 ID，並確保 payload 中移除了臨時 id
-            const createPayload = { ...payload, uid, id: newId };
-            const tempIdKey = Object.keys(createPayload).find(k => String(createPayload[k]).startsWith('temp_'));
-            if(tempIdKey) {
-                // 通常 id 就是 tempId, 但做個防禦性編程
-                delete createPayload[tempIdKey];
-                createPayload.id = newId;
+            const createPayload = { ...cleanPayload, uid, id: newId };
+            delete createPayload.id; // 從 payload 移除，因 id 在 SQL 中單獨處理
+            if (payload.id && String(payload.id).startsWith('temp_')) {
+                 // 確保臨時ID不被寫入
             }
+             createPayload.id = newId;
+
 
             const createFields = Object.keys(createPayload);
             const placeholders = createFields.map(() => '?').join(', ');
@@ -79,35 +82,73 @@ exports.submitBatch = async (uid, data, res) => {
         const tempIdMap = {};
         const statements = [];
 
-        const creates = actions.filter(a => a.type === 'CREATE');
-        const updates = actions.filter(a => a.type === 'UPDATE');
-        const deletes = actions.filter(a => a.type === 'DELETE');
+        for (const action of actions) {
+            // ========================= 【核心修改 - 開始】 =========================
+            // 增加一個特殊處理分支來處理帶有群組歸因的新增交易
+            if (action.entity === 'transaction' && action.payload._special_action === 'CREATE_TX_WITH_ATTRIBUTION') {
+                const { payload } = action;
+                const newTxId = uuidv4();
+                tempIdMap[payload.id] = newTxId;
 
-        for (const action of creates) {
-            const permanentId = uuidv4();
-            const tempId = action.payload.id;
-            if (tempId && String(tempId).startsWith('temp_')) {
-                tempIdMap[tempId] = permanentId;
-            }
+                // 1. (可選) 建立新群組
+                const newGroupIdMap = {};
+                if (payload.newGroups && payload.newGroups.length > 0) {
+                    payload.newGroups.forEach(group => {
+                        const newGroupId = uuidv4();
+                        newGroupIdMap[group.tempId] = newGroupId;
+                        tempIdMap[group.tempId] = newGroupId; // 將新群組的 ID 映射也加入
+                        statements.push({
+                            sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`,
+                            params: [newGroupId, uid, group.name, '']
+                        });
+                    });
+                }
 
-            if (action.entity === 'transaction') {
-                // 【核心修正】確保 await 生效
-                action.payload = await populateSettlementFxRate(action.payload);
+                // 2. 準備並插入交易數據
+                let txData = { ...payload };
+                delete txData.groupInclusions;
+                delete txData.newGroups;
+                delete txData._special_action;
+                txData = await populateSettlementFxRate(txData);
+                
+                statements.push({
+                    sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    params: [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
+                });
+
+                // 3. 建立交易與群組的關聯
+                if (payload.groupInclusions && payload.groupInclusions.length > 0) {
+                    payload.groupInclusions.forEach(groupId => {
+                        const finalGroupId = newGroupIdMap[groupId] || groupId;
+                        statements.push({
+                            sql: `INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)`,
+                            params: [uid, finalGroupId, newTxId]
+                        });
+                    });
+                }
+
+            } else { // 對於所有其他常規操作
+                const { type } = action;
+                let permanentId = null;
+
+                if (type === 'CREATE') {
+                    permanentId = uuidv4();
+                    const tempId = action.payload.id;
+                    if (tempId && String(tempId).startsWith('temp_')) {
+                        tempIdMap[tempId] = permanentId;
+                    }
+                }
+                
+                if (action.entity === 'transaction') {
+                    action.payload = await populateSettlementFxRate(action.payload);
+                }
+
+                const { sql, params } = getQueryForAction(uid, action, permanentId);
+                statements.push({ sql, params });
             }
-            
-            const { sql, params } = getQueryForAction(uid, action, permanentId);
-            statements.push({ sql, params });
+             // ========================= 【核心修改 - 結束】 =========================
         }
-        
-        // 批次處理更新與刪除
-        for (const action of [...updates, ...deletes]) {
-            // 對於交易更新，也要檢查並填充匯率
-            if (action.entity === 'transaction' && action.type === 'UPDATE') {
-                 action.payload = await populateSettlementFxRate(action.payload);
-            }
-            const { sql, params } = getQueryForAction(uid, action);
-            statements.push({ sql, params });
-        }
+
 
         if (statements.length > 0) {
             await d1Client.batch(statements);
@@ -115,7 +156,6 @@ exports.submitBatch = async (uid, data, res) => {
 
         await performRecalculation(uid, null, false);
         
-        // 重新獲取所有數據，以確保回傳的是最新、最完整的狀態
         const [txs, splits, holdings, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
