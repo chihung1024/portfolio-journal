@@ -1,13 +1,13 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v4.1 - Selector-Driven)
+// == 檔案：js/events/group.events.js (v5.0 - Decoupled & Bug Fixed)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
+// 【核心修改】引入新的、原子化的 api 函式
+import { apiRequest, applyGroupView, fetchAllCoreData, submitBatch } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
-// 【核心修改】直接從 selector 獲取最終數據
 import { selectCombinedGroups } from '../selectors.js';
 
 /**
@@ -116,44 +116,42 @@ export function initializeGroupEventListeners() {
             const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
+                // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
                     hideConfirm();
                     const loadingOverlay = document.getElementById('loading-overlay');
                     const loadingText = document.getElementById('loading-text');
-                    loadingText.textContent = '正在提交變更並計算群組績效...';
+                    loadingText.textContent = '正在提交變更...';
                     loadingOverlay.style.display = 'flex';
                     
                     try {
                         const netActions = await stagingService.getNetActions();
                         
-                        // 定義提交後的下一個動作
-                        const nextAction = {
-                            type: 'CALCULATE_GROUP',
-                            payload: { groupId: selectedGroupId }
-                        };
-                        
-                        // 呼叫新的合併 API
-                        const result = await apiRequest('submit_batch_and_execute', {
-                            actions: netActions,
-                            nextAction: nextAction
-                        });
+                        // 步驟 1: 呼叫純粹的 submitBatch API
+                        const submitResult = await submitBatch(netActions);
 
-                        if (result.success) {
+                        if (submitResult.success) {
                             await stagingService.clearActions();
-                            // 使用後端回傳的最終計算結果更新 UI
-                            updateAppWithData(result.data, result.data.tempIdMap);
-                            // 更新當前選定的 group ID
-                            setState({ selectedGroupId });
-                            showNotification('success', '群組績效計算完成！');
+                            
+                            // 步驟 2: 主動刷新所有核心數據，確保 state 與後端同步
+                            loadingText.textContent = '正在同步最新數據...';
+                            await fetchAllCoreData(false); // false 表示不重複顯示 loading
+                            
+                            // 步驟 3: 在數據完全同步的基礎上，安全地計算並應用新的群組視圖
+                            loadingText.textContent = '正在計算群組績效...';
+                            setState({ selectedGroupId }); // 更新 state 中的群組 ID
+                            await applyGroupView(selectedGroupId);
                         }
                     } catch (error) {
                         console.error("提交並切換檢視時發生錯誤:", error);
                         e.target.value = previousGroupId;
                         setState({ selectedGroupId: previousGroupId });
+                        showNotification('error', `操作失敗: ${error.message}`);
                     } finally {
                         loadingOverlay.style.display = 'none';
                     }
                 },
+                // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
                     hideConfirm();
@@ -179,7 +177,6 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const groupId = editBtn.dataset.groupId;
-            // 【核心修改】直接從 selector 獲取合併後的數據
             const combinedGroups = await selectCombinedGroups();
             const groupToEdit = combinedGroups.find(g => g.id === groupId);
 

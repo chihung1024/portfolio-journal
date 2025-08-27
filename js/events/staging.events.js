@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
+// == 暫存區事件處理模組 (staging.events.js) - v3.0 (Client-Driven Refresh)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
-// 【核心修改】引入 submitBatch 和 updateAppWithData
-import { submitBatch, updateAppWithData } from '../api.js';
+// 【核心修改】引入新的、原子化的 api 函式
+import { submitBatch, fetchAllCoreData } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
@@ -104,8 +104,9 @@ async function renderStagingModal() {
     lucide.createIcons();
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 處理提交所有暫存操作的完整流程
+ * 【重構】處理提交所有暫存操作的完整流程
  */
 async function submitAllActions() {
     const { closeModal } = await import('../ui/modals.js');
@@ -115,24 +116,33 @@ async function submitAllActions() {
         const netActions = await stagingService.getNetActions();
         if (netActions.length === 0) {
             showNotification('info', '沒有需要提交的操作。');
+            // 確保即使沒有操作也隱藏 loading 畫面
+            const loadingOverlay = document.getElementById('loading-overlay');
+            if (loadingOverlay) loadingOverlay.style.display = 'none';
             return;
         }
         
+        // 步驟 1: 呼叫新的、只負責寫入的 submitBatch API
         const result = await submitBatch(netActions);
         
         if (result.success) {
+            // 步驟 2: 清空本地暫存區
             await stagingService.clearActions();
             
-            // ========================= 【核心修改 - 開始】 =========================
-            // 嚴格等待 UI 更新完成後，才結束整個函式
-            await updateAppWithData(result.data, result.data.tempIdMap);
-            // ========================= 【核心修改 - 結束】 =========================
+            // 步驟 3: 主動呼叫新的 fetchAllCoreData 函式來刷新整個 App 的數據和 UI
+            // 這個函式內部會處理 loading 畫面的顯示與隱藏
+            await fetchAllCoreData(false); // 傳入 false 表示不重複顯示 loading
         }
 
     } catch (error) {
         console.error("提交暫存區時發生最終錯誤:", error);
+    } finally {
+        // 確保無論成功或失敗，loading 畫面最終都會被隱藏
+        const loadingOverlay = document.getElementById('loading-overlay');
+        if (loadingOverlay) loadingOverlay.style.display = 'none';
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
