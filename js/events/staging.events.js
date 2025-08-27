@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.3 (Fix UI Refresh Flow)
+// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
@@ -104,39 +104,35 @@ async function renderStagingModal() {
     lucide.createIcons();
 }
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】處理提交所有暫存操作的完整流程
+ * 處理提交所有暫存操作的完整流程
  */
 async function submitAllActions() {
     const { closeModal } = await import('../ui/modals.js');
     closeModal('staging-modal');
 
     try {
-        // 1. 從暫存區獲取淨操作
         const netActions = await stagingService.getNetActions();
         if (netActions.length === 0) {
             showNotification('info', '沒有需要提交的操作。');
             return;
         }
         
-        // 2. 呼叫 API 提交，並等待後端回傳最新的完整數據
         const result = await submitBatch(netActions);
         
         if (result.success) {
-            // 3. 提交成功後，清空前端的暫存區
             await stagingService.clearActions();
             
-            // 4. 使用後端回傳的最新、最完整的數據來更新整個 App 的 UI
-            updateAppWithData(result.data, result.data.tempIdMap);
+            // ========================= 【核心修改 - 開始】 =========================
+            // 嚴格等待 UI 更新完成後，才結束整個函式
+            await updateAppWithData(result.data, result.data.tempIdMap);
+            // ========================= 【核心修改 - 結束】 =========================
         }
 
     } catch (error) {
-        // submitBatch 內部已經處理了錯誤通知，這裡只需記錄日誌
         console.error("提交暫存區時發生最終錯誤:", error);
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
