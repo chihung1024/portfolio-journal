@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.0.0 - 整合暫存區服務
+// == 主程式進入點 (main.js) v5.1.0 - Bug Fix
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -339,6 +339,10 @@ function setupMainAppEventListeners() {
         toggleOptionalFields();
     });
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 移除此處的 group-selector 事件監聽器，因为它已在 group.events.js 中被正確地、
+    // 且帶有暫存區檢查邏輯地實現了。保留此處會導致邏輯衝突和 Bug。
+    /*
     const groupSelector = document.getElementById('group-selector');
     groupSelector.addEventListener('change', (e) => {
         const selectedGroupId = e.target.value;
@@ -350,6 +354,8 @@ function setupMainAppEventListeners() {
             applyGroupView(selectedGroupId);
         }
     });
+    */
+    // ========================= 【核心修改 - 結束】 =========================
 
 }
 
