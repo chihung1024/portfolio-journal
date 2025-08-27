@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/group.handler.js (v3.1 - Refactored for Reusability)
+// == 檔案：functions/api_handlers/group.handler.js (v3.2 - Return Group Txs)
 // == 職責：處理所有與群組管理和按需計算相關的 API Action
 // =========================================================================================
 
@@ -7,9 +7,8 @@ const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { runCalculationEngine } = require('../calculation/engine');
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【新增】按需計算指定群組的核心邏輯函式
+ * 【核心修改】按需計算指定群組的核心邏輯函式
  * @param {string} uid - 使用者 ID
  * @param {string} groupId - 要計算的群組 ID
  * @returns {Promise<object|null>} - 計算成功則回傳包含 portfolio 數據的物件，否則回傳 null
@@ -40,7 +39,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
     const involvedSymbols = involvedSymbolsResult.map(r => r.symbol);
 
     if (involvedSymbols.length === 0) {
-        const emptyData = { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {} };
+        const emptyData = { holdings: [], summary: {}, history: {}, twrHistory: {}, netProfitHistory: {}, benchmarkHistory: {}, transactions: [] }; // 新增 transactions
         await d1Client.query('UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?', [groupId, uid]);
         return emptyData;
     }
@@ -80,6 +79,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
         twrHistory: result.twrHistory,
         benchmarkHistory: result.benchmarkHistory,
         netProfitHistory: result.netProfitHistory,
+        transactions: txsForEngine // 【核心修改】將篩選過的交易紀錄一併回傳
     };
 
     const cacheOps = [
@@ -100,8 +100,6 @@ async function calculateGroupOnDemandCore(uid, groupId) {
 
 // 將核心邏輯導出
 exports.calculateGroupOnDemandCore = calculateGroupOnDemandCore;
-// ========================= 【核心修改 - 結束】 =========================
-
 
 /**
  * 獲取使用者建立的所有群組
