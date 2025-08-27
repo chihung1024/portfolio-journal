@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易紀錄 UI 模組 (transactions.ui.js) v3.1 - Disable Membership Edit on Staged Create
+// == 交易紀錄 UI 模組 (transactions.ui.js) v3.2 - Robust Button Disabling
 // =========================================================================================
 
 import { getState } from '../../state.js';
@@ -64,6 +64,9 @@ export async function renderTransactionsTable() {
         } else if (action.type === 'UPDATE') {
             if (existingIndex > -1) {
                 combinedTransactions[existingIndex] = { ...combinedTransactions[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            } else {
+                // 如果是對一個僅存在於暫存區的項目進行更新，也將其加入列表
+                combinedTransactions.push({ ...action.payload, _staging_status: 'CREATE' });
             }
         } else if (action.type === 'DELETE') {
             if (existingIndex > -1) {
@@ -94,10 +97,10 @@ export async function renderTransactionsTable() {
         else if (t._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
         
         // ========================= 【核心修改 - 開始】 =========================
-        // 如果交易是新增待提交狀態，則禁用「編輯群組」按鈕
-        const isNewStaged = t._staging_status === 'CREATE';
-        const membershipBtnDisabled = isNewStaged ? 'disabled' : '';
-        const membershipBtnClass = isNewStaged ? 'text-gray-400 cursor-not-allowed' : 'text-teal-600 hover:text-teal-900';
+        // 最可靠的判斷方式：如果 ID 是臨時の，代表它在後端不存在，因此禁用群組編輯。
+        const isTemporary = String(t.id).startsWith('temp_');
+        const membershipBtnDisabled = isTemporary ? 'disabled' : '';
+        const membershipBtnClass = isTemporary ? 'text-gray-400 cursor-not-allowed' : 'text-teal-600 hover:text-teal-900';
         // ========================= 【核心修改 - 結束】 =========================
 
         return `<tr class="${stagingClass}">
