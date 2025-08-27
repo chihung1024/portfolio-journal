@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.3 - Final Bug Fix - Interaction Flow)
+// == 檔案：js/events/group.events.js (v3.4 - Robust Interaction Flow)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, applyGroupView, submitBatch } from '../api.js';
+// 【核心修改】引入 updateAppWithData
+import { apiRequest, applyGroupView, submitBatch, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
@@ -111,23 +112,41 @@ export function initializeGroupEventListeners() {
         const stagedActions = await stagingService.getStagedActions();
 
         if (stagedActions.length > 0 && selectedGroupId !== previousGroupId) {
-            const { showConfirm } = await import('../ui/modals.js');
+            const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
+                // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
-                    const netActions = await stagingService.getNetActions();
-                    await submitBatch(netActions);
-                    await stagingService.clearActions();
-                    setState({ selectedGroupId });
-                    applyGroupView(selectedGroupId);
+                    hideConfirm(); // 先關閉確認視窗
+                    try {
+                        // 1. 提交所有暫存操作
+                        const netActions = await stagingService.getNetActions();
+                        const result = await submitBatch(netActions);
+
+                        if (result.success) {
+                            // 2. 成功後，清空暫存區
+                            await stagingService.clearActions();
+                            // 3. 使用後端回傳的最新數據更新 App 狀態
+                            updateAppWithData(result.data, result.data.tempIdMap);
+                            // 4. 最後才安全地執行切換群組檢視的計算
+                            setState({ selectedGroupId });
+                            await applyGroupView(selectedGroupId);
+                        }
+                    } catch (error) {
+                        console.error("提交並切換檢視時發生錯誤:", error);
+                        // 如果出錯，將選擇器還原
+                        e.target.value = previousGroupId;
+                        setState({ selectedGroupId: previousGroupId });
+                    }
                 },
+                // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
+                    hideConfirm();
                     e.target.value = previousGroupId; // 將選擇器的值還原
                 }
             );
         } else {
-            // 只有在沒有暫存項目的情況下，才直接執行切換
             setState({ selectedGroupId });
             applyGroupView(selectedGroupId);
         }
