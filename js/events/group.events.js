@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v3.4 - Robust Interaction Flow)
+// == 檔案：js/events/group.events.js (v4.0 - Combined API Call)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// 【核心修改】引入 updateAppWithData
-import { apiRequest, applyGroupView, submitBatch, updateAppWithData } from '../api.js';
+// 【核心修改】引入 apiRequest 和 updateAppWithData
+import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
@@ -117,33 +117,48 @@ export function initializeGroupEventListeners() {
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
                 // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
-                    hideConfirm(); // 先關閉確認視窗
+                    hideConfirm();
+                    const loadingOverlay = document.getElementById('loading-overlay');
+                    const loadingText = document.getElementById('loading-text');
+                    loadingText.textContent = '正在提交變更並計算群組績效...';
+                    loadingOverlay.style.display = 'flex';
+                    
                     try {
-                        // 1. 提交所有暫存操作
                         const netActions = await stagingService.getNetActions();
-                        const result = await submitBatch(netActions);
+                        
+                        // 定義提交後的下一個動作
+                        const nextAction = {
+                            type: 'CALCULATE_GROUP',
+                            payload: { groupId: selectedGroupId }
+                        };
+                        
+                        // 呼叫新的合併 API
+                        const result = await apiRequest('submit_batch_and_execute', {
+                            actions: netActions,
+                            nextAction: nextAction
+                        });
 
                         if (result.success) {
-                            // 2. 成功後，清空暫存區
                             await stagingService.clearActions();
-                            // 3. 使用後端回傳的最新數據更新 App 狀態
+                            // 使用後端回傳的最終計算結果更新 UI
                             updateAppWithData(result.data, result.data.tempIdMap);
-                            // 4. 最後才安全地執行切換群組檢視的計算
+                            // 更新當前選定的 group ID
                             setState({ selectedGroupId });
-                            await applyGroupView(selectedGroupId);
+                            showNotification('success', '群組績效計算完成！');
                         }
                     } catch (error) {
                         console.error("提交並切換檢視時發生錯誤:", error);
-                        // 如果出錯，將選擇器還原
                         e.target.value = previousGroupId;
                         setState({ selectedGroupId: previousGroupId });
+                    } finally {
+                        loadingOverlay.style.display = 'none';
                     }
                 },
                 // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
                     hideConfirm();
-                    e.target.value = previousGroupId; // 將選擇器的值還原
+                    e.target.value = previousGroupId;
                 }
             );
         } else {
