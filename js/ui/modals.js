@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v4.2 - Group Attribution Fix
+// == 彈出視窗模組 (modals.js) v4.3 - Staging-Aware Group Selection
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -13,22 +13,39 @@ import { renderTransactionsTable } from './components/transactions.ui.js';
 
 // --- Helper Functions ---
 
-function renderGroupAttributionContent(includedGroupIds = new Set()) {
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】渲染群組歸因視窗的內容 (改為 async)
+ * @param {Set<string>} includedGroupIds - 已包含的群組 ID 集合
+ */
+async function renderGroupAttributionContent(includedGroupIds = new Set()) {
     const { tempTransactionData, groups } = getState();
     if (!tempTransactionData) return;
+
+    // 1. 從暫存區找出所有待刪除的群組 ID
+    const stagedActions = await stagingService.getStagedActions();
+    const deletedGroupIds = new Set(
+        stagedActions
+            .filter(a => a.entity === 'group' && a.type === 'DELETE')
+            .map(a => a.payload.id)
+    );
+    
+    // 2. 從 state 的群組列表中，過濾掉待刪除的群組
+    const availableGroups = groups.filter(g => !deletedGroupIds.has(g.id));
 
     const symbol = tempTransactionData.data.symbol;
     document.getElementById('attribution-symbol-placeholder').textContent = symbol;
 
     const container = document.getElementById('attribution-groups-container');
-    container.innerHTML = groups.length > 0
-        ? groups.map(g => `
+    // 3. 使用過濾後的 `availableGroups` 來渲染選項
+    container.innerHTML = availableGroups.length > 0
+        ? availableGroups.map(g => `
             <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
                 <input type="checkbox" name="attribution_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
                 <span class="font-medium text-gray-700">${g.name}</span>
             </label>
         `).join('')
-        : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
+        : '<p class="text-center text-sm text-gray-500 py-4">沒有可用的群組。</p>';
 
     const newGroupContainer = document.getElementById('attribution-new-group-container');
     newGroupContainer.innerHTML = `
@@ -54,8 +71,8 @@ function renderGroupAttributionContent(includedGroupIds = new Set()) {
         }
     });
 }
+// ========================= 【核心修改 - 結束】 =========================
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 收集群組歸因資訊，並將交易連同歸因資訊一併存入暫存區
  */
@@ -65,10 +82,8 @@ async function submitAttributionAndSaveTransaction() {
     
     closeModal('group-attribution-modal');
 
-    // 1. 收集所有被勾選的群組 ID
     const groupInclusions = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked')).map(cb => cb.value);
     
-    // 2. 找出哪些是新建的群組，並將它們的臨時 ID 和名稱打包
     const newGroups = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked'))
         .filter(cb => cb.dataset.newName)
         .map(cb => ({
@@ -76,17 +91,14 @@ async function submitAttributionAndSaveTransaction() {
             name: cb.dataset.newName
         }));
         
-    // 3. 建立一個包含所有資訊的 payload
     const finalPayload = {
-        ...tempTransactionData.data, // 包含交易本身的所有數據
+        ...tempTransactionData.data,
         groupInclusions: groupInclusions,
         newGroups: newGroups,
-        // 增加一個特殊標記，讓後端 batch handler 知道如何處理這個複雜操作
         _special_action: 'CREATE_TX_WITH_ATTRIBUTION'
     };
 
     try {
-        // 4. 將這個豐富的 payload 存入暫存區
         await stagingService.addAction('CREATE', 'transaction', finalPayload);
         
         showNotification('info', '交易與群組歸因已暫存。');
@@ -98,7 +110,6 @@ async function submitAttributionAndSaveTransaction() {
         setState({ tempTransactionData: null });
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 async function handleMembershipSave() {
@@ -244,6 +255,10 @@ export async function openModal(modalId, isEdit = false, data = null) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】開啟群組歸因視窗 (改為 async)
+ */
 export async function openGroupAttributionModal() {
     const { tempTransactionData } = getState();
     if (!tempTransactionData) return;
@@ -269,13 +284,15 @@ export async function openGroupAttributionModal() {
         }
     }
 
-    renderGroupAttributionContent(includedGroupIds);
+    // 等待異步的渲染函式完成
+    await renderGroupAttributionContent(includedGroupIds);
     
     const modalElement = document.getElementById('group-attribution-modal');
     modalElement.classList.remove('hidden');
     document.getElementById('confirm-attribution-btn').onclick = submitAttributionAndSaveTransaction;
     document.getElementById('cancel-attribution-btn').onclick = () => closeModal('group-attribution-modal');
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 export function closeModal(modalId) {
