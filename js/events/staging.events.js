@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) v3.0 - Context-Aware Submission
+// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
-// 【核心修改】引入 submitBatchAndExecute
-import { submitBatch, submitBatchAndExecute, updateAppWithData } from '../api.js';
+// 【核心修改】引入 submitBatch 和 updateAppWithData
+import { submitBatch, updateAppWithData } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
@@ -104,10 +104,8 @@ async function renderStagingModal() {
     lucide.createIcons();
 }
 
-
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】處理提交所有暫存操作的完整流程 (Context-Aware)
+ * 處理提交所有暫存操作的完整流程
  */
 async function submitAllActions() {
     const { closeModal } = await import('../ui/modals.js');
@@ -120,32 +118,21 @@ async function submitAllActions() {
             return;
         }
         
-        const { selectedGroupId } = getState();
-        let result;
-
-        // 判斷當前是否在自訂群組檢視下
-        if (selectedGroupId && selectedGroupId !== 'all') {
-            // 如果是，則呼叫新的 API，告訴後端提交後接著計算這個群組
-            const nextAction = {
-                type: 'CALCULATE_GROUP',
-                payload: { groupId: selectedGroupId }
-            };
-            result = await submitBatchAndExecute(netActions, nextAction);
-        } else {
-            // 如果在全局檢視下，則使用舊的標準提交流程
-            result = await submitBatch(netActions);
-        }
+        const result = await submitBatch(netActions);
         
         if (result.success) {
             await stagingService.clearActions();
-            await updateAppWithData(result.data); // 使用後端回傳的最新數據更新 UI
+            
+            // ========================= 【核心修改 - 開始】 =========================
+            // 嚴格等待 UI 更新完成後，才結束整個函式
+            await updateAppWithData(result.data, result.data.tempIdMap);
+            // ========================= 【核心修改 - 結束】 =========================
         }
 
     } catch (error) {
         console.error("提交暫存區時發生最終錯誤:", error);
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
