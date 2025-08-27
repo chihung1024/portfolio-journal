@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.1 - Bug Fix
+// == 通用事件處理模組 (general.events.js) v4.2 - Staging Area Integration Fix
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -17,12 +17,15 @@ import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsMo
 
 async function handleShowDetails(symbol) {
     const { transactions } = getState();
+    // 判斷本地 state 是否已有此股票的交易，以決定是否需要向後端請求
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     const { openModal } = await import('../ui/modals.js');
 
     if (hasDataLocally) {
-        openModal('details-modal', false, { symbol });
+        // 【核心修改】呼叫 async 版本的 renderDetailsModal
+        await openModal('details-modal', false, { symbol });
     } else {
+        // 如果本地沒有數據，則向後端請求
         const loadingOverlay = document.getElementById('loading-overlay');
         const loadingText = document.getElementById('loading-text');
         loadingText.textContent = `正在讀取 ${symbol} 的詳細資料...`;
@@ -31,6 +34,7 @@ async function handleShowDetails(symbol) {
         try {
             const result = await apiRequest('get_symbol_details', { symbol });
             if (result.success) {
+                // 將新獲取的數據加入 state
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
                 const currentState = getState();
                 const txIds = new Set(currentState.transactions.map(t => t.id));
@@ -43,7 +47,7 @@ async function handleShowDetails(symbol) {
                     confirmedDividends: [...currentState.confirmedDividends, ...uniqueNewDivs]
                 });
                 
-                openModal('details-modal', false, { symbol });
+                await openModal('details-modal', false, { symbol });
             } else {
                 throw new Error(result.message);
             }
@@ -65,10 +69,10 @@ async function handleUpdateBenchmark() {
 
     const stagedActions = await stagingService.getStagedActions();
     if (stagedActions.length > 0) {
-        const { showConfirm, hideConfirm } = await import('../ui/modals.js'); // 【核心修正】導入 hideConfirm
+        const { showConfirm, hideConfirm } = await import('../ui/modals.js');
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
-            async () => { // 確認回呼
+            async () => {
                 hideConfirm();
                 const netActions = await stagingService.getNetActions();
                 await submitBatch(netActions);
@@ -79,8 +83,8 @@ async function handleUpdateBenchmark() {
                 });
             },
             '提交並更新 Benchmark？',
-            () => { // 【核心修正】新增取消回呼
-                hideConfirm(); // 點擊取消時，只關閉彈窗，不做任何事
+            () => { 
+                hideConfirm();
             }
         );
     } else {
@@ -199,19 +203,40 @@ export function initializeGeneralEventListeners() {
         if (tabItem) {
             e.preventDefault();
             const symbol = document.querySelector('#details-modal-content h2').textContent;
-            switchDetailsTab(tabItem.dataset.tab, symbol);
+            await switchDetailsTab(tabItem.dataset.tab, symbol);
             return;
         }
         
+        // ========================= 【核心修改 - 開始】 =========================
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
             const { transactions } = getState();
-            const txToEdit = transactions.find(t => t.id === txId);
+            
+            // 1. 合併 state 和 staging area 的數據
+            const stagedActions = await stagingService.getStagedActions();
+            const stagedTransactions = stagedActions
+                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
+                .map(a => a.payload);
+                
+            let combined = [...transactions];
+            stagedTransactions.forEach(stagedTx => {
+                const index = combined.findIndex(t => t.id === stagedTx.id);
+                if(index > -1) {
+                    combined[index] = {...combined[index], ...stagedTx};
+                } else {
+                    combined.push(stagedTx);
+                }
+            });
+            
+            // 2. 從合併後的數據中尋找要編輯的最新版本
+            const txToEdit = combined.find(t => t.id === txId);
+
             if (txToEdit) {
                 const { closeModal, openModal } = await import('../ui/modals.js');
                 closeModal('details-modal');
-                openModal('transaction-modal', true, txToEdit);
+                // 3. 將最新的數據傳給編輯視窗
+                await openModal('transaction-modal', true, txToEdit);
             }
             return;
         }
@@ -220,15 +245,39 @@ export function initializeGeneralEventListeners() {
         if (deleteBtn) {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
-            showConfirm('確定要刪除這筆交易紀錄嗎？', () => {
-                stagingService.addAction('DELETE', 'transaction', { id: txId }).then(() => {
+            
+            // 1. 為了能將完整物件存入暫存區，先合併數據找到它
+            const { transactions } = getState();
+            const stagedActions = await stagingService.getStagedActions();
+            const stagedTransactions = stagedActions
+                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
+                .map(a => a.payload);
+            const combinedTxs = [...transactions, ...stagedTransactions];
+            const txToDelete = combinedTxs.find(t => t.id === txId);
+
+            if (!txToDelete) {
+                showNotification('error', '找不到要刪除的交易紀錄。');
+                return;
+            }
+
+            showConfirm('確定要刪除這筆交易紀錄嗎？', async () => {
+                try {
+                    // 2. 將完整的交易物件寫入暫存區
+                    await stagingService.addAction('DELETE', 'transaction', txToDelete);
                     showNotification('info', '刪除操作已暫存。');
+                    
+                    // 3. 異步刷新詳情視窗內容，以顯示刪除狀態
                     const symbol = document.querySelector('#details-modal-content h2').textContent;
-                    setTimeout(() => renderDetailsModal(symbol), 200);
-                }).catch(err => console.error("暫存刪除交易失敗:", err));
+                    await switchDetailsTab('transactions', symbol);
+
+                } catch (err) {
+                    console.error("暫存刪除交易失敗:", err);
+                    showNotification('error', '暫存刪除操作時發生錯誤。');
+                }
             });
             return;
         }
+        // ========================= 【核心修改 - 結束】 =========================
     });
 
     // Chart controls listeners (unchanged)
