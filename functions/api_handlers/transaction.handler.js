@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易 Action 處理模組 (transaction.handler.js) v3.1 - 整合群組快取失效與交割匯率
+// == 交易 Action 處理模組 (transaction.handler.js) v3.2 - 導出輔助函式
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -98,6 +98,9 @@ async function populateSettlementFxRate(txData) {
     }
     return txData;
 }
+
+// 函式導出
+exports.populateSettlementFxRate = populateSettlementFxRate;
 
 // ========================= 【核心修改 - 結束】 =========================
 
