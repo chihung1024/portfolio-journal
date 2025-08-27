@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v6.0 - Atomic API Integration
+// == 主程式進入點 (main.js) v6.1 - Circular Dependency Fix
 // =========================================================================================
 
 import { getState, setState } from './state.js';
-// 【核心修改】引入新的、原子化的 API 請求函式
 import { apiRequest, applyGroupView, fetchAllCoreData } from './api.js';
+// 【核心修改】從 auth.js 導入的函式現在只包含認證相關操作
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
 import { stagingService } from './staging.service.js';
 import { initializeStagingEventListeners } from './events/staging.events.js';
@@ -33,14 +33,8 @@ import { initializeGroupEventListeners, loadGroups } from './events/group.events
 
 let liveRefreshInterval = null;
 
-// ========================= 【核心修改 - 開始】 =========================
-
-/**
- * 【重構】即時刷新儀表板和持股的核心數據
- */
 async function refreshCoreData() {
     try {
-        // 並行請求摘要和持股數據
         const [summaryRes, holdingsRes] = await Promise.all([
             apiRequest('get_dashboard_summary', {}),
             apiRequest('get_holdings', {})
@@ -103,7 +97,7 @@ export function startLiveRefresh() {
 
             if (isTwMarketOpen || isUsMarketOpen) {
                  console.log("Market is open. Refreshing data...");
-                 refreshCoreData(); // <--- 呼叫新的刷新函式
+                 refreshCoreData();
             }
         }
     };
@@ -120,17 +114,10 @@ export function stopLiveRefresh() {
     }
 }
 
-/**
- * 【重構】應用程式啟動時，載入所有核心數據
- */
 export async function loadInitialData() {
     try {
-        // 呼叫 api.js 中新的、統一的數據獲取函式
         await fetchAllCoreData();
-        
-        // 在核心數據載入後，非同步、非阻塞地預載次要數據
         preloadSecondaryData();
-
     } catch (error) {
         showNotification('error', `讀取初始數據失敗: ${error.message}`);
     } finally {
@@ -138,9 +125,6 @@ export async function loadInitialData() {
     }
 }
 
-/**
- * 【新增】在背景預載次要數據（如交易紀錄），以加速分頁切換體驗
- */
 async function preloadSecondaryData() {
     console.log("正在背景預載次要數據 (交易紀錄、配息等)...");
     
@@ -170,31 +154,17 @@ async function preloadSecondaryData() {
             console.error("預載配息資料失敗:", results[1].reason || results[1].value.message);
         }
     } catch (error) {
-        // 預載失敗是可接受的，不打擾使用者
         console.warn("背景預載次要數據時發生錯誤:", error);
     }
 }
 
-
-/**
- * 【廢除】移除 loadInitialDashboard, loadHoldingsInBackground, loadChartDataInBackground, loadSecondaryDataInBackground 等舊函式
- * 它們的職責已被新的 fetchAllCoreData 和 preloadSecondaryData 取代。
- */
-// ========================= 【核心修改 - 結束】 =========================
-
-
-/**
- * 載入交易紀錄數據（如果尚未預載）
- */
 async function loadTransactionsData() {
     const { transactions } = getState();
-    // 如果 state 中已有數據（來自預載），則直接渲染
     if (transactions && transactions.length > 0) {
         renderTransactionsTable();
         return;
     }
     
-    // 如果沒有預載數據，則即時獲取
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
         const result = await apiRequest('get_transactions_and_splits', {});
@@ -213,18 +183,13 @@ async function loadTransactionsData() {
     }
 }
 
-/**
- * 載入並顯示配息管理分頁（如果尚未預載）
- */
 export async function loadAndShowDividends() {
     const { pendingDividends, confirmedDividends } = getState();
-     // 如果 state 中已有數據（來自預載），則直接渲染
     if (pendingDividends && confirmedDividends) {
          renderDividendsManagementTab(pendingDividends, confirmedDividends);
          return;
     }
 
-    // 如果沒有預載數據，則即時獲取
     const overlay = document.getElementById('loading-overlay');
     overlay.style.display = 'flex';
     try {
@@ -278,11 +243,10 @@ function setupMainAppEventListeners() {
                 renderGroupsTab();
             } else if (tabName === 'splits') {
                 const { userSplits } = getState();
-                if (userSplits) {
+                if (userSplits && userSplits.length > 0) {
                     renderSplitsTable();
                 } else {
-                    // 如果拆股數據也未被預載，可以在此處添加即時獲取邏輯
-                    await loadTransactionsData(); // 拆股數據與交易數據一起獲取
+                    await loadTransactionsData(); 
                 }
             }
         }
@@ -321,7 +285,61 @@ export function initializeAppUI() {
     setState({ isAppInitialized: true });
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】處理登入成功後的所有操作
+ */
+function handleLoginSuccess(user) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+
+    // 更新 UI
+    document.getElementById('auth-container').style.display = 'none';
+    document.querySelector('main').classList.remove('hidden');
+    document.getElementById('logout-btn').style.display = 'block';
+    document.getElementById('user-info').classList.remove('hidden');
+    document.getElementById('user-id').textContent = user.email;
+    document.getElementById('auth-status').textContent = '已連線';
+    
+    // 初始化 UI 元件和事件監聽
+    initializeAppUI();
+    
+    // 載入初始數據
+    loadingText.textContent = '正在讀取核心資產數據...';
+    loadingOverlay.style.display = 'flex';
+    loadInitialData();
+
+    // 啟動自動刷新
+    startLiveRefresh();
+}
+
+/**
+ * 【新增】處理登出成功後的所有操作
+ */
+function handleLogoutSuccess() {
+    const loadingOverlay = document.getElementById('loading-overlay');
+
+    // 更新 UI
+    document.getElementById('auth-container').classList.remove('hidden'); 
+    document.querySelector('main').classList.add('hidden');
+    document.getElementById('logout-btn').style.display = 'none';
+    document.getElementById('user-info').classList.add('hidden');
+
+    // 確保隱藏讀取畫面
+    if (loadingOverlay) {
+        loadingOverlay.style.display = 'none';
+    }
+    
+    // 停止自動刷新
+    stopLiveRefresh();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     setupCommonEventListeners();
-    initializeAuth(); 
+    // 【修改】將回呼函式傳遞給 initializeAuth
+    initializeAuth({
+        onLogin: handleLoginSuccess,
+        onLogout: handleLogoutSuccess,
+    }); 
 });
+// ========================= 【核心修改 - 結束】 =========================
