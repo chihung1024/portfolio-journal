@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.2 (Final Bug Fix - Delete Payload)
+// == 交易事件處理模組 (transaction.events.js) v4.0 - Selector-Driven
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -7,29 +7,18 @@ import { stagingService } from '../staging.service.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
+// 【核心修改】直接從 selector 獲取最終數據
+import { selectCombinedTransactions } from '../selectors.js';
 
 // --- Private Functions (內部函式) ---
 
 async function handleEdit(button) {
-    const { transactions } = getState();
     const txId = button.dataset.id;
     
-    const stagedActions = await stagingService.getStagedActions();
-    const stagedTransactions = stagedActions
-        .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-        .map(a => a.payload);
-
-    let combined = [...transactions];
-    stagedTransactions.forEach(stagedTx => {
-        const index = combined.findIndex(t => t.id === stagedTx.id);
-        if (index > -1) {
-            combined[index] = { ...combined[index], ...stagedTx };
-        } else {
-            combined.push(stagedTx);
-        }
-    });
-
-    const transaction = combined.find(t => t.id === txId);
+    // 【核心修改】直接從 selector 獲取合併後的數據
+    const combinedTransactions = await selectCombinedTransactions();
+    
+    const transaction = combinedTransactions.find(t => t.id === txId);
     if (!transaction) {
         showNotification('error', '找不到要編輯的交易紀錄。');
         return;
@@ -51,22 +40,9 @@ async function handleDelete(button) {
     const txId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
 
-    // 【核心修正】在暫存刪除操作前，先找到完整的交易物件
-    const { transactions } = getState();
-    const stagedActions = await stagingService.getStagedActions();
-    const stagedTransactions = stagedActions
-        .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-        .map(a => a.payload);
-        
-    let combined = [...transactions];
-    stagedTransactions.forEach(stagedTx => {
-        const index = combined.findIndex(t => t.id === stagedTx.id);
-        if (index === -1) {
-            combined.push(stagedTx);
-        }
-    });
-
-    const txToDelete = combined.find(t => t.id === txId);
+    // 【核心修改】直接從 selector 獲取合併後的數據來查找要刪除的物件
+    const combinedTransactions = await selectCombinedTransactions();
+    const txToDelete = combinedTransactions.find(t => t.id === txId);
 
     if (!txToDelete) {
         showNotification('error', '找不到要刪除的交易紀錄。');
@@ -75,7 +51,7 @@ async function handleDelete(button) {
 
     showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
         try {
-            // 將完整的交易物件作為 payload 存入，而不僅僅是 id
+            // 將完整的交易物件作為 payload 存入
             await stagingService.addAction('DELETE', 'transaction', txToDelete);
             await handleStagingSuccess();
         } catch (error) {

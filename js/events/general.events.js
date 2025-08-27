@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.3 - Group Context Fix
+// == 通用事件處理模組 (general.events.js) v5.0 - Selector-Driven
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -12,21 +12,21 @@ import { updateAssetChart } from '../ui/charts/assetChart.js';
 import { updateTwrChart } from '../ui/charts/twrChart.js';
 import { updateNetProfitChart } from '../ui/charts/netProfitChart.js';
 import { switchDetailsTab, renderDetailsModal } from '../ui/components/detailsModal.ui.js';
+// 【核心修改】直接從 selector 獲取最終數據
+import { selectCombinedTransactions } from '../selectors.js';
 
 // --- Private Functions ---
 
 async function handleShowDetails(symbol) {
-    const { transactions, selectedGroupId } = getState(); // 【新增】獲取 selectedGroupId
+    const { transactions, selectedGroupId } = getState();
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     const { openModal } = await import('../ui/modals.js');
 
-    // 當處於群組檢視時，我們假設數據已完全載入，不再觸發後備的 API 請求
     if (selectedGroupId !== 'all') {
         await openModal('details-modal', false, { symbol });
         return;
     }
     
-    // 只有在全局檢視 ('all') 且本地數據不完整時，才觸發後備 API
     if (hasDataLocally) {
         await openModal('details-modal', false, { symbol });
     } else {
@@ -36,10 +36,7 @@ async function handleShowDetails(symbol) {
         loadingOverlay.style.display = 'flex';
         
         try {
-            // ========================= 【核心修改 - 開始】 =========================
-            // 將當前的 groupId 傳遞給後端，以便後端能回傳正確範圍的數據
             const result = await apiRequest('get_symbol_details', { symbol, groupId: selectedGroupId });
-            // ========================= 【核心修改 - 結束】 =========================
 
             if (result.success) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
@@ -217,24 +214,9 @@ export function initializeGeneralEventListeners() {
         const editBtn = e.target.closest('.details-edit-tx-btn');
         if (editBtn) {
             const txId = editBtn.dataset.id;
-            const { transactions } = getState();
-            
-            const stagedActions = await stagingService.getStagedActions();
-            const stagedTransactions = stagedActions
-                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-                .map(a => a.payload);
-                
-            let combined = [...transactions];
-            stagedTransactions.forEach(stagedTx => {
-                const index = combined.findIndex(t => t.id === stagedTx.id);
-                if(index > -1) {
-                    combined[index] = {...combined[index], ...stagedTx};
-                } else {
-                    combined.push(stagedTx);
-                }
-            });
-            
-            const txToEdit = combined.find(t => t.id === txId);
+            // 【核心修改】直接從 selector 獲取合併後的數據
+            const combinedTransactions = await selectCombinedTransactions();
+            const txToEdit = combinedTransactions.find(t => t.id === txId);
 
             if (txToEdit) {
                 const { closeModal, openModal } = await import('../ui/modals.js');
@@ -249,13 +231,9 @@ export function initializeGeneralEventListeners() {
             const txId = deleteBtn.dataset.id;
             const { showConfirm } = await import('../ui/modals.js');
             
-            const { transactions } = getState();
-            const stagedActions = await stagingService.getStagedActions();
-            const stagedTransactions = stagedActions
-                .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-                .map(a => a.payload);
-            const combinedTxs = [...transactions, ...stagedTransactions];
-            const txToDelete = combinedTxs.find(t => t.id === txId);
+            // 【核心修改】直接從 selector 獲取合併後的數據
+            const combinedTransactions = await selectCombinedTransactions();
+            const txToDelete = combinedTransactions.find(t => t.id === txId);
 
             if (!txToDelete) {
                 showNotification('error', '找不到要刪除的交易紀錄。');

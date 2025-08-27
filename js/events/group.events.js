@@ -1,13 +1,14 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v4.0 - Combined API Call)
+// == 檔案：js/events/group.events.js (v4.1 - Selector-Driven)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// 【核心修改】引入 apiRequest 和 updateAppWithData
 import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
+// 【核心修改】直接從 selector 獲取最終數據
+import { selectCombinedGroups } from '../selectors.js';
 
 /**
  * 操作成功存入暫存區後，更新 UI
@@ -115,7 +116,6 @@ export function initializeGroupEventListeners() {
             const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
-                // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
                     hideConfirm();
                     const loadingOverlay = document.getElementById('loading-overlay');
@@ -154,7 +154,6 @@ export function initializeGroupEventListeners() {
                         loadingOverlay.style.display = 'none';
                     }
                 },
-                // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
                     hideConfirm();
@@ -180,21 +179,9 @@ export function initializeGroupEventListeners() {
         const editBtn = e.target.closest('.edit-group-btn');
         if (editBtn) {
             const groupId = editBtn.dataset.groupId;
-            const { groups } = getState();
-            const stagedActions = await stagingService.getStagedActions();
-            const stagedGroups = stagedActions.filter(a => a.entity === 'group').map(a => a.payload);
-            
-            let combined = [...groups];
-            stagedGroups.forEach(stagedGroup => {
-                const index = combined.findIndex(g => g.id === stagedGroup.id);
-                if(index > -1) {
-                    combined[index] = {...combined[index], ...stagedGroup};
-                } else {
-                    combined.push(stagedGroup);
-                }
-            });
-
-            const groupToEdit = combined.find(g => g.id === groupId);
+            // 【核心修改】直接從 selector 獲取合併後的數據
+            const combinedGroups = await selectCombinedGroups();
+            const groupToEdit = combinedGroups.find(g => g.id === groupId);
 
             if (groupToEdit) {
                  const { openModal } = await import('../ui/modals.js');

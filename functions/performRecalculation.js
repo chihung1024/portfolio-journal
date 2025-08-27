@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
+// == 檔案：functions/performRecalculation.js (v_final_robust_refactored)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -118,9 +118,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】一次性抓取所有需要的原始數據
-        const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
+        // ========================= 【核心修改 - 開始】 =========================
+        // 【簡化】一次性抓取所有需要的原始數據，用於全局計算
+        const [transactions, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
@@ -128,25 +128,21 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
-        await calculateAndCachePendingDividends(uid, txs, allUserDividends);
-        // ========================= 【核心修正 - 結束】 =========================
-
-        if (txs.length === 0) {
+        await calculateAndCachePendingDividends(uid, transactions, allUserDividends);
+        
+        if (transactions.length === 0) {
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
             ]);
+            console.log(`[${uid}] 使用者無交易紀錄，已清除所有相關數據。`);
             return;
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
-        // ========================= 【核心修正 - 結束】 =========================
-        
         let oldHistory = {};
         let baseSnapshot = null;
         
@@ -164,27 +160,24 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshot.snapshot_date]);
             if (summaryResult[0] && summaryResult[0].history) {
                 oldHistory = JSON.parse(summaryResult[0].history);
-                Object.keys(oldHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldHistory[date]; });
+                Object.keys(oldHistory).forEach(date => { if (toDate(date) > toDate(baseSnapshot.snapshot_date)) delete oldHistory[date]; });
             }
         } else {
             console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
+        // 【簡化與一致性】呼叫統一的計算引擎，傳入所有原始數據進行全局計算
         const result = await runCalculationEngine(
-            txs,
+            transactions,
             allUserSplits,
             allUserDividends,
             benchmarkSymbol,
             baseSnapshot,
             oldHistory
         );
-        // ========================= 【核心修正 - 結束】 =========================
+        // ========================= 【核心修改 - 結束】 =========================
 
-
-        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
