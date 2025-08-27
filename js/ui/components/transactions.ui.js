@@ -1,9 +1,9 @@
 // =========================================================================================
-// == 交易紀錄 UI 模組 (transactions.ui.js) v3.0 - 整合暫存區狀態
+// == 交易紀錄 UI 模組 (transactions.ui.js) v3.1 - Disable Membership Edit on Staged Create
 // =========================================================================================
 
 import { getState } from '../../state.js';
-import { stagingService } from '../../staging.service.js'; // 【核心修改】
+import { stagingService } from '../../staging.service.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
 
 /**
@@ -44,18 +44,14 @@ export async function renderTransactionsTable() {
     const { transactions, transactionFilter, transactionsPerPage, transactionsCurrentPage } = getState();
     const container = document.getElementById('transactions-tab');
 
-    // 【核心修改】從暫存區獲取交易相關的操作
     const stagedActions = await stagingService.getStagedActions();
     const transactionActions = stagedActions.filter(a => a.entity === 'transaction');
     
-    // 建立一個方便查詢的 Map，以交易 ID 為 key
     const stagedActionMap = new Map();
     transactionActions.forEach(action => {
-        // 對於同一個 ID，後面的操作會覆蓋前面的
         stagedActionMap.set(action.payload.id, action);
     });
 
-    // 結合 state 中的數據和暫存區的數據
     let combinedTransactions = [...transactions];
     
     stagedActionMap.forEach((action, txId) => {
@@ -67,18 +63,15 @@ export async function renderTransactionsTable() {
             }
         } else if (action.type === 'UPDATE') {
             if (existingIndex > -1) {
-                // 如果是更新，用暫存區的數據覆蓋舊數據
                 combinedTransactions[existingIndex] = { ...combinedTransactions[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
             }
         } else if (action.type === 'DELETE') {
             if (existingIndex > -1) {
-                // 如果是刪除，在現有項目上做標記
                 combinedTransactions[existingIndex]._staging_status = 'DELETE';
             }
         }
     });
     
-    // 重新排序，確保新增的項目也能按日期排序
     combinedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 
     const uniqueSymbols = ['all', ...Array.from(new Set(combinedTransactions.map(t => t.symbol)))];
@@ -95,12 +88,18 @@ export async function renderTransactionsTable() {
         const fxRate = t.exchangeRate || findFxRateForFrontend(t.currency, transactionDate);
         const totalAmountTWD = (t.totalCost || (t.quantity * t.price)) * fxRate;
         
-        // 【核心修改】根據暫存狀態決定背景色
         let stagingClass = '';
         if (t._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
         else if (t._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
         else if (t._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
         
+        // ========================= 【核心修改 - 開始】 =========================
+        // 如果交易是新增待提交狀態，則禁用「編輯群組」按鈕
+        const isNewStaged = t._staging_status === 'CREATE';
+        const membershipBtnDisabled = isNewStaged ? 'disabled' : '';
+        const membershipBtnClass = isNewStaged ? 'text-gray-400 cursor-not-allowed' : 'text-teal-600 hover:text-teal-900';
+        // ========================= 【核心修改 - 結束】 =========================
+
         return `<tr class="${stagingClass}">
             <td class="px-6 py-4 whitespace-nowrap">${transactionDate}</td>
             <td class="px-6 py-4 whitespace-nowrap font-medium">${t.symbol.toUpperCase()}</td>
@@ -110,7 +109,7 @@ export async function renderTransactionsTable() {
             <td class="px-6 py-4 whitespace-nowrap">${formatNumber(totalAmountTWD, 0)}</td>
             <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
                 <button data-id="${t.id}" class="edit-btn text-indigo-600 hover:text-indigo-900 mr-3">編輯</button>
-                <button data-id="${t.id}" class="edit-membership-btn text-teal-600 hover:text-teal-900 mr-3">編輯群組</button>
+                <button data-id="${t.id}" class="edit-membership-btn ${membershipBtnClass} mr-3" ${membershipBtnDisabled}>編輯群組</button>
                 <button data-id="${t.id}" class="delete-btn text-red-600 hover:text-red-900">刪除</button>
             </td>
         </tr>`;
