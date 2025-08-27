@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.4 (Robust data handling)
+// == API 通訊模組 (api.js) v5.5 (Async UI Update)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -96,7 +96,7 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         
         if (shouldRefreshData) {
             const fullData = await apiRequest('get_data', {});
-            updateAppWithData(fullData.data);
+            await updateAppWithData(fullData.data);
         }
         
         if (successMessage) {
@@ -114,16 +114,16 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 統一的函式，用來接收計算結果並更新整個 App 的 UI
+ * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
  */
-export function updateAppWithData(portfolioData, tempIdMap = {}) {
+export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (!portfolioData) {
         console.error("updateAppWithData 收到無效數據，已跳過更新。");
         return;
     }
     
-    // 建立一個更新物件，只更新 portfolioData 中存在的鍵
     const newState = {};
     if (portfolioData.transactions) newState.transactions = portfolioData.transactions;
     if (portfolioData.splits) newState.userSplits = portfolioData.splits;
@@ -133,7 +133,6 @@ export function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
     
-    // 如果是全局更新，重設圖表範圍
     if (portfolioData.history) {
         newState.assetDateRange = { type: 'all', start: null, end: null };
         newState.twrDateRange = { type: 'all', start: null, end: null };
@@ -147,22 +146,20 @@ export function updateAppWithData(portfolioData, tempIdMap = {}) {
     
     setState(newState);
 
+    // 等待所有異步的 UI 渲染完成
     renderHoldingsTable(holdingsObject);
-    if (portfolioData.transactions) renderTransactionsTable();
-    if (portfolioData.splits) renderSplitsTable();
-    if (portfolioData.groups) loadGroups(); 
+    if (portfolioData.transactions) await renderTransactionsTable();
+    if (portfolioData.splits) await renderSplitsTable();
+    if (portfolioData.groups) await loadGroups(); 
     
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
-    // ========================= 【核心修改 - 開始】 =========================
-    const { selectedGroupId, groups } = getState(); // 從全域 state 獲取最新的群組列表
+    const { selectedGroupId, groups } = getState();
     let seriesName = '投資組合'; 
     if (selectedGroupId && selectedGroupId !== 'all') {
-        // 使用從 state 中讀取的、保證存在的 groups 陣列
         const selectedGroup = groups.find(g => g.id === selectedGroupId);
         if (selectedGroup) seriesName = selectedGroup.name; 
     }
-    // ========================= 【核心修改 - 結束】 =========================
     
     updateAssetChart(seriesName); 
     updateNetProfitChart(seriesName);
@@ -188,6 +185,7 @@ export function updateAppWithData(portfolioData, tempIdMap = {}) {
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -202,7 +200,7 @@ export async function loadPortfolioData() {
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
         const result = await apiRequest('get_data', {});
-        updateAppWithData(result.data);
+        await updateAppWithData(result.data);
 
     } catch (error) {
         console.error('Failed to load portfolio data:', error);
@@ -228,7 +226,7 @@ export async function applyGroupView(groupId) {
     try {
         const result = await apiRequest('calculate_group_on_demand', { groupId });
         if (result.success) {
-            updateAppWithData(result.data);
+            await updateAppWithData(result.data);
             showNotification('success', '群組績效計算完成！');
         }
     } catch (error) {
