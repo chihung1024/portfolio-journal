@@ -27,6 +27,11 @@ let state = {
     groups: [],
     selectedGroupId: 'all',
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 平倉紀錄相關狀態
+    closedPositions: [],
+    // ========================= 【核心修改 - 結束】 =========================
+
     // 行動裝置 UI 狀態
     mobileViewMode: localStorage.getItem('mobileViewMode') || 'list',
     activeMobileHolding: null,
