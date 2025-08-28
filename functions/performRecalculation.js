@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
+// == 檔案：functions/performRecalculation.js (v_final_robust - Closed Lot Storage)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -118,18 +118,18 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】一次性抓取所有需要的原始數據
         const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
-            d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+            // ========================= 【核心修改 - 開始】 =========================
+            // 同時讀取舊的 closedLots 數據
+            d1Client.query('SELECT history, closed_lots FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+            // ========================= 【核心修改 - 結束】 =========================
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
-        // ========================= 【核心修正 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
@@ -142,10 +142,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
-        // ========================= 【核心修正 - 結束】 =========================
         
         let oldHistory = {};
         let baseSnapshot = null;
@@ -171,8 +167,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
         const result = await runCalculationEngine(
             txs,
             allUserSplits,
@@ -181,13 +175,14 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             baseSnapshot,
             oldHistory
         );
-        // ========================= 【核心修正 - 結束】 =========================
 
 
-        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
+            // ========================= 【核心修改 - 開始】 =========================
+            closedLots, // 接收計算引擎回傳的 closedLots
+            // ========================= 【核心修改 - 結束】 =========================
             fullHistory: newFullHistory,
             twrHistory,
             benchmarkHistory,
@@ -213,10 +208,24 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             ]
         }));
         
+        // ========================= 【核心修改 - 開始】 =========================
+        // 在儲存 summary 時，一併將 closed_lots 數據 JSON 化並存入
         const summaryOps = [{
-            sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
+            sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, closed_lots, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            params: [
+                uid, 
+                ALL_GROUP_ID, 
+                JSON.stringify(summaryData), 
+                JSON.stringify(newFullHistory), 
+                JSON.stringify(twrHistory), 
+                JSON.stringify(benchmarkHistory), 
+                JSON.stringify(netProfitHistory), 
+                JSON.stringify(closedLots), // 儲存 closedLots
+                new Date().toISOString()
+            ]
         }];
+        // ========================= 【核心修改 - 結束】 =========================
+
         if (summaryOps.length > 0) await d1Client.batch(summaryOps);
         if (holdingsOps.length > 0) await d1Client.batch(holdingsOps);
 
