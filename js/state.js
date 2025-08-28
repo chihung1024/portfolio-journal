@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.2.0 - Closed Lots State
+// == 狀態管理模組 (state.js) v4.3.0 - UI State for Closed Positions
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -11,9 +11,7 @@ let state = {
     pendingDividends: [],
     confirmedDividends: [],
     holdings: {},
-    // ========================= 【核心修改 - 開始】 =========================
-    closedLots: [], // 新增：用於儲存詳細的已平倉 FIFO 紀錄
-    // ========================= 【核心修改 - 結束】 =========================
+    closedLots: [], 
     isAppInitialized: false,
     chart: null,
     twrChart: null,
@@ -33,6 +31,12 @@ let state = {
     // 行動裝置 UI 狀態
     mobileViewMode: localStorage.getItem('mobileViewMode') || 'list',
     activeMobileHolding: null,
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 新增：用於追蹤已平倉部位區塊的 UI 狀態
+    isClosedPositionsExpanded: false, // 已平倉部位的總列表是否展開
+    expandedClosedSymbol: null,       // 哪一檔已平倉股票的明細被展開了
+    // ========================= 【核心修改 - 結束】 =========================
 
     // 篩選與排序狀態
     transactionFilter: 'all',
