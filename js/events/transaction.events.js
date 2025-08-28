@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.2 (Final Bug Fix - Delete Payload)
+// == 交易事件處理模組 (transaction.events.js) v3.3 (Robust Delete Logic)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -51,7 +51,8 @@ async function handleDelete(button) {
     const txId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
 
-    // 【核心修正】在暫存刪除操作前，先找到完整的交易物件
+    // ========================= 【核心修改 - 開始】 =========================
+    // 採用與 handleEdit 完全相同的邏輯，確保在刪除前能讀取到合併暫存區後的最新資料狀態。
     const { transactions } = getState();
     const stagedActions = await stagingService.getStagedActions();
     const stagedTransactions = stagedActions
@@ -61,12 +62,17 @@ async function handleDelete(button) {
     let combined = [...transactions];
     stagedTransactions.forEach(stagedTx => {
         const index = combined.findIndex(t => t.id === stagedTx.id);
-        if (index === -1) {
+        if (index > -1) {
+            // 如果 state 中已存在，則用暫存的更新覆蓋它
+            combined[index] = {...combined[index], ...stagedTx};
+        } else {
+            // 如果 state 中不存在 (例如一個新建後又被更新的項目)，則直接加入
             combined.push(stagedTx);
         }
     });
 
     const txToDelete = combined.find(t => t.id === txId);
+    // ========================= 【核心修改 - 結束】 =========================
 
     if (!txToDelete) {
         showNotification('error', '找不到要刪除的交易紀錄。');
@@ -75,7 +81,7 @@ async function handleDelete(button) {
 
     showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
         try {
-            // 將完整的交易物件作為 payload 存入，而不僅僅是 id
+            // 將完整的、最新的交易物件作為 payload 存入，而不僅僅是 id 或舊物件
             await stagingService.addAction('DELETE', 'transaction', txToDelete);
             await handleStagingSuccess();
         } catch (error) {
