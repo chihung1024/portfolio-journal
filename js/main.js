@@ -18,6 +18,9 @@ import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
@@ -28,6 +31,9 @@ import { getDateRangeForPreset } from './ui/utils.js';
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
 import { initializeSplitEventListeners } from './events/split.events.js';
 import { initializeDividendEventListeners } from './events/dividend.events.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { initializeClosedPositionEventListeners } from './events/closed_positions.events.js';
+// ========================= 【核心修改 - 結束】 =========================
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
@@ -291,6 +297,38 @@ export async function loadAndShowDividends() {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】載入並顯示平倉紀錄的函式
+ */
+async function loadAndShowClosedPositions() {
+    const { selectedGroupId } = getState();
+    const overlay = document.getElementById('loading-overlay');
+    overlay.style.display = 'flex';
+
+    try {
+        // 向後端請求數據，同時傳遞當前選擇的 groupId
+        const result = await apiRequest('get_closed_positions', { groupId: selectedGroupId });
+        if (result.success) {
+            // 將獲取的數據存入 state
+            setState({
+                closedPositions: result.data,
+                activeClosedPosition: null // 每次刷新都重置展開狀態
+            });
+            // 呼叫 UI 模組進行渲染
+            renderClosedPositionsTable();
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (error) {
+        showNotification('error', `讀取平倉紀錄失敗: ${error.message}`);
+    } finally {
+        overlay.style.display = 'none';
+    }
+}
+// ========================= 【核心修改 - 結束】 =========================
+
+
 function setupCommonEventListeners() {
     document.getElementById('login-btn').addEventListener('click', handleLogin);
     document.getElementById('register-btn').addEventListener('click', handleRegister);
@@ -318,7 +356,11 @@ function setupMainAppEventListeners() {
             
             const { transactions, pendingDividends, confirmedDividends, userSplits } = getState();
 
-            if (tabName === 'dividends') {
+            // ========================= 【核心修改 - 開始】 =========================
+            if (tabName === 'closed-positions') {
+                await loadAndShowClosedPositions();
+            } else if (tabName === 'dividends') {
+            // ========================= 【核心修改 - 結束】 =========================
                 if (pendingDividends && confirmedDividends) {
                     renderDividendsManagementTab(pendingDividends, confirmedDividends);
                 } else {
@@ -384,6 +426,9 @@ export function initializeAppUI() {
     initializeTransactionEventListeners();
     initializeSplitEventListeners();
     initializeDividendEventListeners();
+    // ========================= 【核心修改 - 開始】 =========================
+    initializeClosedPositionEventListeners();
+    // ========================= 【核心修改 - 結束】 =========================
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
     // 【核心修改】初始化暫存區相關的事件監聽
