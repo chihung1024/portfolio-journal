@@ -1,13 +1,11 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v3.1 (Refactored with Service Layer)
+// == 批次操作處理模組 (batch.handler.js) - v3.2 (State Sync Fix)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-// ========================= 【核心修改 - 開始】 =========================
 const { populateSettlementFxRate } = require('../services/transaction.service');
-// ========================= 【核心修改 - 結束】 =========================
 const { calculateGroupOnDemandCore } = require('./group.handler');
 const { updateBenchmarkCore } = require('./portfolio.handler');
 
@@ -79,8 +77,6 @@ async function processBatchActions(uid, actions) {
                 action.payload = await populateSettlementFxRate(action.payload);
             }
 
-            // 這段 getQueryForAction 應該要重構，但暫時保留以求穩定
-            // START of getQueryForAction logic
             const { entity, payload } = action;
             const cleanPayload = { ...payload };
             delete cleanPayload.groupInclusions;
@@ -118,7 +114,6 @@ async function processBatchActions(uid, actions) {
                 default:
                     throw new Error(`Unsupported action type: ${type}`);
             }
-            // END of getQueryForAction logic
             statements.push({ sql, params });
         }
     }
@@ -137,7 +132,6 @@ async function processBatchActions(uid, actions) {
 exports.submitBatch = async (uid, data, res) => {
     try {
         const { tempIdMap } = await processBatchActions(uid, data.actions);
-        // 批次提交後，總是觸發一次全局重算
         await performRecalculation(uid, null, false);
         
         const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
@@ -150,7 +144,6 @@ exports.submitBatch = async (uid, data, res) => {
 
         const summaryRow = summaryResult[0] || {};
         const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
-        // ... (省略 history 的解析，因為前端不需要立即用)
 
         return res.status(200).send({ 
             success: true, 
@@ -167,7 +160,6 @@ exports.submitBatch = async (uid, data, res) => {
 };
 
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【新 API 端點】合併提交與後續計算
  */
@@ -175,24 +167,32 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
     const { actions, nextAction } = data;
 
     try {
-        // 步驟 1: 先執行標準的批次提交資料庫操作
         const { tempIdMap } = await processBatchActions(uid, actions);
-
         let resultData;
 
-        // 步驟 2: 根據 nextAction 參數，執行對應的後續計算
         if (nextAction) {
             switch (nextAction.type) {
-                case 'CALCULATE_GROUP':
+                // ========================= 【核心修改 - 開始】 =========================
+                case 'CALCULATE_GROUP': {
                     console.log(`[Combined Action] 提交後，接續計算群組: ${nextAction.payload.groupId}`);
                     resultData = await calculateGroupOnDemandCore(uid, nextAction.payload.groupId);
+                    
+                    // BUG FIX: 群組計算的回傳不包含全局交易列表，需手動補上以確保前端狀態完全同步
+                    const [transactions, splits, groups] = await Promise.all([
+                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+                        d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
+                    ]);
+                    resultData.transactions = transactions;
+                    resultData.splits = splits;
+                    resultData.groups = groups;
                     break;
+                }
+                // ========================= 【核心修改 - 結束】 =========================
                 
-                case 'UPDATE_BENCHMARK':
+                case 'UPDATE_BENCHMARK': {
                     console.log(`[Combined Action] 提交後，接續更新 Benchmark 為: ${nextAction.payload.benchmarkSymbol}`);
                     await updateBenchmarkCore(uid, nextAction.payload.benchmarkSymbol);
-                    // 更新 benchmark 後，需要回傳全局 ('all') 的數據
-                    // 我們可以透過呼叫 get_data 的核心邏輯來達成
                     const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
                         d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
                         d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
@@ -210,19 +210,17 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
                         holdings, transactions: txs, splits, groups,
                     };
                     break;
+                }
                 
                 default:
-                    // 如果 nextAction 無效，則執行標準的全局重算
                     await performRecalculation(uid, null, false);
                     break;
             }
         } else {
-            // 如果沒有 nextAction，則行為與舊的 submitBatch 相同
             await performRecalculation(uid, null, false);
         }
 
         if (!resultData) {
-            // 如果前面的流程沒有產生 resultData (例如預設情況)，則重新獲取全局數據
              const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
                 d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
                 d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
@@ -237,7 +235,6 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
             };
         }
 
-        // 步驟 3: 將最終計算結果與 tempIdMap 一併回傳
         return res.status(200).send({
             success: true,
             message: '組合操作成功。',
@@ -252,4 +249,3 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
         return res.status(500).send({ success: false, message: `組合操作失敗: ${error.message}` });
     }
 };
-// ========================= 【核心修改 - 結束】 =========================
