@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.5 (Async UI Update)
+// == API 通訊模組 (api.js) v5.6 (Closed Lots Sync)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -114,7 +114,7 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
+
 /**
  * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
  */
@@ -132,6 +132,9 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
+    // ========================= 【核心修改 - 開始】 =========================
+    if (portfolioData.closedLots) newState.closedLots = portfolioData.closedLots;
+    // ========================= 【核心修改 - 結束】 =========================
     
     if (portfolioData.history) {
         newState.assetDateRange = { type: 'all', start: null, end: null };
@@ -147,7 +150,7 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     setState(newState);
 
     // 等待所有異步的 UI 渲染完成
-    renderHoldingsTable(holdingsObject);
+    renderHoldingsTable(holdingsObject); // holdings.ui.js 將在下一步被修改以渲染 closedLots
     if (portfolioData.transactions) await renderTransactionsTable();
     if (portfolioData.splits) await renderSplitsTable();
     if (portfolioData.groups) await loadGroups(); 
@@ -185,7 +188,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
