@@ -17,6 +17,10 @@ const portfolioHandlers = require('./api_handlers/portfolio.handler');
 const groupHandlers = require('./api_handlers/group.handler');
 const detailsHandlers = require('./api_handlers/details.handler');
 const batchHandlers = require('./api_handlers/batch.handler');
+// ========================= 【核心修改 - 開始】 =========================
+const closedPositionsHandlers = require('./api_handlers/closed_positions.handler'); // 引入新的 handler
+// ========================= 【核心修改 - 結束】 =========================
+
 
 try {
     admin.initializeApp();
@@ -136,6 +140,12 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                     return await groupHandlers.calculateGroupOnDemand(uid, data, res);
                 case 'update_transaction_group_membership':
                     return await groupHandlers.updateTransactionGroupMembership(uid, data, res);
+
+                // ========================= 【核心修改 - 開始】 =========================
+                // Closed Positions
+                case 'get_closed_positions':
+                    return await closedPositionsHandlers.getClosedPositions(uid, data, res);
+                // ========================= 【核心修改 - 結束】 =========================
 
                 default:
                     return res.status(400).send({ success: false, message: '未知的操作' });
