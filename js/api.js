@@ -5,7 +5,7 @@
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
 import { API } from './config.js';
 import { getState, setState } from './state.js';
-import { loadGroups } from './events/group.events.js'; 
+import { loadGroups } from './events/group.events.js';
 
 // --- UI Module Imports ---
 import { getDateRangeForPreset } from './ui/utils.js';
@@ -42,7 +42,7 @@ export async function apiRequest(action, data) {
             },
             body: JSON.stringify(payload)
         });
-        
+
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result.message || '伺服器發生錯誤');
@@ -90,23 +90,23 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
     const loadingTextElement = document.getElementById('loading-text');
     loadingTextElement.textContent = loadingText;
     loadingOverlay.style.display = 'flex';
-    
+
     try {
         const result = await apiRequest(action, payload);
-        
+
         if (shouldRefreshData) {
             const fullData = await apiRequest('get_data', {});
             await updateAppWithData(fullData.data);
         }
-        
+
         if (successMessage) {
             showNotification('success', successMessage);
         }
-        
-        return result; 
+
+        return result;
     } catch (error) {
         showNotification('error', `操作失敗: ${error.message}`);
-        throw error; 
+        throw error;
     } finally {
         loadingOverlay.style.display = 'none';
         loadingTextElement.textContent = '正在從雲端同步資料...';
@@ -123,7 +123,7 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         console.error("updateAppWithData 收到無效數據，已跳過更新。");
         return;
     }
-    
+
     const newState = {};
     if (portfolioData.transactions) newState.transactions = portfolioData.transactions;
     if (portfolioData.splits) newState.userSplits = portfolioData.splits;
@@ -132,39 +132,43 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
-    // ========================= 【核心修改 - 開始】 =========================
     if (portfolioData.closedLots) newState.closedLots = portfolioData.closedLots;
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 新增：重設已平倉部位區塊的 UI 狀態，確保每次切換檢視時都會摺疊
+    newState.isClosedPositionsExpanded = false;
+    newState.expandedClosedSymbol = null;
     // ========================= 【核心修改 - 結束】 =========================
-    
+
     if (portfolioData.history) {
         newState.assetDateRange = { type: 'all', start: null, end: null };
         newState.twrDateRange = { type: 'all', start: null, end: null };
         newState.netProfitDateRange = { type: 'all', start: null, end: null };
     }
-    
+
     const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
         obj[item.symbol] = item; return obj;
     }, {});
     newState.holdings = holdingsObject;
-    
+
     setState(newState);
 
     // 等待所有異步的 UI 渲染完成
-    renderHoldingsTable(holdingsObject); // holdings.ui.js 將在下一步被修改以渲染 closedLots
+    renderHoldingsTable(holdingsObject);
     if (portfolioData.transactions) await renderTransactionsTable();
     if (portfolioData.splits) await renderSplitsTable();
-    if (portfolioData.groups) await loadGroups(); 
-    
+    if (portfolioData.groups) await loadGroups();
+
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
-    
+
     const { selectedGroupId, groups } = getState();
-    let seriesName = '投資組合'; 
+    let seriesName = '投資組合';
     if (selectedGroupId && selectedGroupId !== 'all') {
         const selectedGroup = groups.find(g => g.id === selectedGroupId);
-        if (selectedGroup) seriesName = selectedGroup.name; 
+        if (selectedGroup) seriesName = selectedGroup.name;
     }
-    
-    updateAssetChart(seriesName); 
+
+    updateAssetChart(seriesName);
     updateNetProfitChart(seriesName);
     const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || getState().summary?.benchmarkSymbol || 'SPY';
     updateTwrChart(benchmarkSymbol, seriesName);
