@@ -135,9 +135,9 @@ function renderHoldingDetailCardContent(h) {
     `;
 }
 
-// ========================= 【核心修改 - 開始】 =========================
-// == 徹底重構主渲染函式，採用「狀態驅動」模式
-// =====================================================================
+/**
+ * 主渲染函式，採用「狀態驅動」模式
+ */
 export function renderHoldingsTable(currentHoldings) {
     const { holdingsSort, mobileViewMode, activeMobileHolding, closedLots } = getState();
     const container = document.getElementById('holdings-content');
@@ -171,9 +171,6 @@ export function renderHoldingsTable(currentHoldings) {
         const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
         const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
 
-        const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { /* ... table row HTML ... */ }).join('')}</tbody></table></div>`;
-        
-        // ... (此處省略 table row, cardsHtml, listHtml 的重複程式碼，它們的內部邏輯不變)
         const tableBodyHtml = holdingsArray.map(h => {
              const isShort = h.quantity < 0;
             const decimals = isTwStock(h.symbol) ? 0 : 2; 
@@ -191,12 +188,14 @@ export function renderHoldingsTable(currentHoldings) {
                     <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
                 </tr>`;
         }).join('');
-        const fullTableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${tableBodyHtml}</tbody></table></div>`;
+        
+        const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${tableBodyHtml}</tbody></table></div>`;
 
         const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => { 
             const isShort = h.quantity < 0;
             const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-            return `<div class="bg-white rounded-lg shadow ${isShort ? 'ring-2 ring-sky-300' : ''}"><div class="p-4 space-y-3"><div class="flex justify-between items-center"><div class="flex items-center"><h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>${isShort ? shortBadge : ''}</div><span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span></div>${renderHoldingDetailCardContent(h)}</div><div class="border-t border-gray-200 px-4 py-2"><button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">更多詳情</button></div></div>`; }).join('')}</div>`;
+            return `<div class="bg-white rounded-lg shadow ${isShort ? 'ring-2 ring-sky-300' : ''}"><div class="p-4 space-y-3"><div class="flex justify-between items-center"><div class="flex items-center"><h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>${isShort ? shortBadge : ''}</div><span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span></div>${renderHoldingDetailCardContent(h)}</div><div class="border-t border-gray-200 px-4 py-2"><button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">更多詳情</button></div></div>`; 
+        }).join('')}</div>`;
 
         const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
             const isShort = h.quantity < 0;
@@ -205,9 +204,10 @@ export function renderHoldingsTable(currentHoldings) {
             const detailsButtonHtml = `<div class="border-t border-gray-200 px-4 py-2"><button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">更多詳情</button></div>`;
             return `<div class="bg-white rounded-lg shadow overflow-hidden ${isShort ? 'ring-2 ring-sky-300' : ''}"><div class="px-2 py-3 flex justify-between items-center cursor-pointer list-view-item" data-symbol="${h.symbol}"><div class="flex items-center"><h3 class="font-bold text-base text-indigo-600">${h.symbol}</h3>${isShort ? shortBadge : ''}</div><div class="text-right"><p class="font-medium text-base text-gray-900">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-sm text-gray-500">${h.currency}</span></p><p class="text-sm ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p></div></div><div class="holding-details-container ${isExpanded ? '' : 'hidden'}">${isExpanded ? renderHoldingDetailCardContent(h) : ''}${isExpanded ? detailsButtonHtml : ''}</div></div>`;
         }).join('')}</div>`;
+        
         const mobileContent = `<div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div><div class="${mobileViewMode === 'list' ? '' : 'hidden'}">${listHtml}</div>`;
         
-        holdingsSectionHtml = viewSwitcherHtml + fullTableHtml + mobileContent;
+        holdingsSectionHtml = viewSwitcherHtml + tableHtml + mobileContent;
     }
     
     const closedPositionsHtml = renderClosedPositionsSection();
@@ -248,4 +248,3 @@ export function renderHoldingsTable(currentHoldings) {
         });
     });
 }
-// ========================= 【核心修改 - 結束】 =========================
