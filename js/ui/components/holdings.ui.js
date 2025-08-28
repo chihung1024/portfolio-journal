@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v_mobile_list_simplified (v2 - Cleanup)
+// == 持股表格 UI 模組 (holdings.ui.js) - v2.1 (Note Feature Removed)
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -11,34 +11,28 @@ import { isTwStock, formatNumber } from '../utils.js';
  * @returns {string} HTML string
  */
 function renderHoldingDetailCardContent(h) {
-    const { stockNotes } = getState();
-    const note = stockNotes[h.symbol] || {};
     const decimals = isTwStock(h.symbol) ? 0 : 2;
     const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-
-    let priceClass = '';
-    if (h.quantity < 0) { // 放空
-        if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1';
-        else if (note.stop_loss_price && h.currentPriceOriginal >= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1';
-    } else { // 做多
-        if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800 rounded px-1';
-        else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800 rounded px-1';
-    }
-
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    // 移除了所有與 stockNotes 和 priceClass 相關的邏輯
     return `
         <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm p-4 bg-gray-50">
             <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)} (${(h.returnRate || 0).toFixed(2)}%)</p></div>
             <div><p class="text-gray-500">平均成本/放空價</p><p class="font-medium text-gray-800">${formatNumber(h.avgCostOriginal, 2)}</p></div>
-            <div><p class="text-gray-500">現價 (${h.currency})</p><p class="font-medium text-gray-800"><span class="${priceClass}">${formatNumber(h.currentPriceOriginal, 2)}</span></p></div>
+            <div><p class="text-gray-500">現價 (${h.currency})</p><p class="font-medium text-gray-800"><span>${formatNumber(h.currentPriceOriginal, 2)}</span></p></div>
             <div><p class="text-gray-500">股數</p><p class="font-medium text-gray-800">${formatNumber(h.quantity, decimals)}</p></div>
             <div><p class="text-gray-500">持股佔比</p><p class="font-medium text-gray-800">${h.portfolioPercentage.toFixed(2)}%</p></div>
         </div>
     `;
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 
 export function renderHoldingsTable(currentHoldings) {
-    const { stockNotes, holdingsSort, mobileViewMode, activeMobileHolding } = getState();
+    // ========================= 【核心修改 - 開始】 =========================
+    const { holdingsSort, mobileViewMode, activeMobileHolding } = getState();
+    // ========================= 【核心修改 - 結束】 =========================
     const container = document.getElementById('holdings-content');
     container.innerHTML = '';
     let holdingsArray = Object.values(currentHoldings);
@@ -70,7 +64,7 @@ export function renderHoldingsTable(currentHoldings) {
     holdingsArray.sort((a, b) => {
         const valA = a[holdingsSort.key] || 0;
         const valB = b[holdingsSort.key] || 0;
-        return holdingsSort.order === 'asc' ? valA - valB : valB - valA;
+        return holdingsSort.order === 'asc' ? valA - valB : valB - a[holdingsSort.key];
     });
 
     const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
@@ -78,18 +72,12 @@ export function renderHoldingsTable(currentHoldings) {
 
     const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
         const isShort = h.quantity < 0;
-        const note = stockNotes[h.symbol] || {}; 
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
-        let priceClass = ''; 
-        if (isShort) {
-             if (note.target_price && h.currentPriceOriginal <= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
-             else if (note.stop_loss_price && h.currentPriceOriginal >= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
-        } else {
-             if (note.target_price && h.currentPriceOriginal >= note.target_price) priceClass = 'bg-green-100 text-green-800'; 
-             else if (note.stop_loss_price && h.currentPriceOriginal <= note.stop_loss_price) priceClass = 'bg-red-100 text-red-800';
-        }
+        // ========================= 【核心修改 - 開始】 =========================
+        const priceClass = ''; // 移除所有條件式樣式邏輯
+        // ========================= 【核心修改 - 結束】 =========================
         return `
             <tr class="hover:bg-gray-100 cursor-pointer holding-row" data-symbol="${h.symbol}" ${isShort ? 'style="background-color: #f0f9ff;"' : ''}>
                 <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900">
