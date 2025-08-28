@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.1.0 - Bug Fix
+// == 主程式進入點 (main.js) v5.2.0 - Race Condition Fix
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -61,6 +61,15 @@ export function startLiveRefresh() {
     stopLiveRefresh(); 
 
     const poll = async () => {
+        // ========================= 【核心修改 - 開始】 =========================
+        // 1. 檢查暫存區是否有待辦事項
+        const stagedActions = await stagingService.getStagedActions();
+        if (stagedActions.length > 0) {
+            console.log("Staging area is not empty, skipping live refresh.");
+            return;
+        }
+        // ========================= 【核心修改 - 結束】 =========================
+        
         const { selectedGroupId } = getState();
         if (selectedGroupId !== 'all') {
             console.log(`正在檢視群組 ${selectedGroupId}，跳過自動刷新。`);
