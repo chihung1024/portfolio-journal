@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 身份驗證模組 (auth.js) v2.9.0 (支援鍵盤操作)
+// == 身份驗證模組 (auth.js) v3.0 (Robust Initial Load)
 // =========================================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
@@ -14,7 +14,10 @@ import {
 import { firebaseConfig } from './config.js';
 import { setState } from './state.js';
 import { showNotification } from './ui/notifications.js';
-import { initializeAppUI, loadInitialDashboard, startLiveRefresh, stopLiveRefresh } from './main.js';
+// ========================= 【核心修改 - 開始】 =========================
+// 廢除 loadInitialDashboard，改用能夠獲取完整數據的 loadPortfolioData
+import { initializeAppUI, loadPortfolioData, startLiveRefresh, stopLiveRefresh } from './main.js';
+// ========================= 【核心修改 - 結束】 =========================
 
 // 初始化 Firebase
 const firebaseApp = initializeApp(firebaseConfig);
@@ -45,13 +48,13 @@ export function initializeAuth() {
             // 2. 初始化 UI 元件 (如圖表物件) 和事件監聽
             initializeAppUI();
             
-            // 3. 執行新的、更輕量的初始資料載入函式
-            loadingText.textContent = '正在讀取核心資產數據...';
+            // 3. 【修改】執行新的、能獲取完整數據的初始載入函式
+            loadingText.textContent = '正在從雲端同步所有數據...';
             loadingOverlay.style.display = 'flex';
             
-            loadInitialDashboard(); // <--- 呼叫新的、超輕量級的載入函式
+            loadPortfolioData(); // <--- 直接呼叫能獲取包括 closedLots 在內的完整數據函式
 
-            // 【新增】在初始資料載入後，啟動自動刷新
+            // 4. 在初始資料載入後，啟動自動刷新
             startLiveRefresh();
 
         } else {
@@ -74,12 +77,11 @@ export function initializeAuth() {
                 loadingOverlay.style.display = 'none';
             }
             
-            // 【新增】使用者登出時，停止自動刷新
+            // 使用者登出時，停止自動刷新
             stopLiveRefresh();
         }
     });
 
-    // ========================= 【核心修改 - 開始】 =========================
     // 為登入表單增加 Enter 鍵監聽
     document.getElementById('auth-form').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -87,7 +89,6 @@ export function initializeAuth() {
             document.getElementById('login-btn').click(); // 觸發登入按鈕
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 }
 
 /**
@@ -126,7 +127,7 @@ export async function handleLogin() {
 export async function handleLogout() {
     try {
         await signOut(auth);
-        // 【新增】在登出前手動停止，確保計時器被清除
+        // 在登出前手動停止，確保計時器被清除
         stopLiveRefresh();
         showNotification('info', '您已成功登出。');
     } catch (error) {
