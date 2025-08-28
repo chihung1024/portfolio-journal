@@ -27,10 +27,12 @@ let state = {
     groups: [],
     selectedGroupId: 'all',
 
-    // ========================= 【核心修改 - 開始】 =========================
     // 平倉紀錄相關狀態
     closedPositions: [],
+    // ========================= 【核心修改 - 開始】 =========================
+    activeClosedPosition: null, // 追蹤當前展開的平倉紀錄 symbol
     // ========================= 【核心修改 - 結束】 =========================
+
 
     // 行動裝置 UI 狀態
     mobileViewMode: localStorage.getItem('mobileViewMode') || 'list',
