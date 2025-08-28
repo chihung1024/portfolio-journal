@@ -1,12 +1,13 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v3.0 (Combined Actions)
+// == 批次操作處理模組 (batch.handler.js) - v3.1 (Refactored with Service Layer)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-const { populateSettlementFxRate } = require('./transaction.handler');
-// 【新增】導入重構後的核心邏輯函式
+// ========================= 【核心修改 - 開始】 =========================
+const { populateSettlementFxRate } = require('../services/transaction.service');
+// ========================= 【核心修改 - 結束】 =========================
 const { calculateGroupOnDemandCore } = require('./group.handler');
 const { updateBenchmarkCore } = require('./portfolio.handler');
 
