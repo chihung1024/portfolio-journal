@@ -11,11 +11,11 @@ let state = {
     pendingDividends: [],
     confirmedDividends: [],
     holdings: {},
-    closedLots: [],
+    closedLots: [], 
     isAppInitialized: false,
     chart: null,
     twrChart: null,
-    netProfitChart: null,
+    netProfitChart: null, 
     confirmCallback: null,
 
     isSyncing: false,
@@ -40,8 +40,8 @@ let state = {
 
     // 篩選與排序狀態
     transactionFilter: 'all',
-    transactionsPerPage: 15,
-    transactionsCurrentPage: 1,
+    transactionsPerPage: 15, 
+    transactionsCurrentPage: 1, 
     dividendFilter: 'all',
     holdingsSort: {
         key: 'marketValueTWD',
@@ -52,10 +52,10 @@ let state = {
     portfolioHistory: {},
     twrHistory: {},
     benchmarkHistory: {},
-    netProfitHistory: {},
+    netProfitHistory: {}, 
     assetDateRange: { type: 'all', start: null, end: null },
     twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null }
+    netProfitDateRange: { type: 'all', start: null, end: null } 
 };
 
 // 提供外部讀取狀態的方法
