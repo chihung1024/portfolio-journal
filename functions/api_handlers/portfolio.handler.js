@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_syntax_fix)
+// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_closed_lots_fix)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
@@ -8,6 +8,45 @@ const { performRecalculation } = require('../performRecalculation');
 const ALL_GROUP_ID = 'all';
 
 // ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【舊 API - 升級】獲取使用者所有核心資料 (預設為 'all' 群組)
+ * - 新增：一併回傳 closed_lots 數據
+ */
+exports.getData = async (uid, res) => {
+    const [txs, splits, holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+        // 確保查詢包含 closed_lots 欄位
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+    ]);
+
+    const summaryRow = summaryResult[0] || {};
+    const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    // 從資料庫讀取並解析 closed_lots
+    const closedLots = summaryRow.closed_lots ? JSON.parse(summaryRow.closed_lots) : [];
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            summary: summaryData,
+            holdings,
+            transactions: txs,
+            splits,
+            history,
+            twrHistory,
+            benchmarkHistory,
+            netProfitHistory,
+            closedLots, // 將 closedLots 加入回傳數據中
+        }
+    });
+};
+// ========================= 【核心修改 - 結束】 =========================
+
 /**
  * 【新增】更新 Benchmark 的核心邏輯函式
  * @param {string} uid - 使用者 ID
@@ -24,41 +63,7 @@ async function updateBenchmarkCore(uid, benchmarkSymbol) {
 
 // 將核心邏輯導出
 exports.updateBenchmarkCore = updateBenchmarkCore;
-// ========================= 【核心修改 - 結束】 =========================
 
-
-/**
- * 【舊 API - 保留】獲取使用者所有核心資料 (預設為 'all' 群組)
- */
-exports.getData = async (uid, res) => {
-    const [txs, splits, holdings, summaryResult] = await Promise.all([
-        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
-        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
-    ]);
-
-    const summaryRow = summaryResult[0] || {};
-    const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
-    const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
-    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
-    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
-    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
-
-    return res.status(200).send({
-        success: true,
-        data: {
-            summary: summaryData,
-            holdings,
-            transactions: txs,
-            splits,
-            history,
-            twrHistory,
-            benchmarkHistory,
-            netProfitHistory,
-        }
-    });
-};
 
 /**
  * 【新增】超輕量級 API：只獲取儀表板摘要數據
