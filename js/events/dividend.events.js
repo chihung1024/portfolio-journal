@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 配息事件處理模組 (dividend.events.js) v2.0 - 整合暫存區
+// == 配息事件處理模組 (dividend.events.js) v2.1 - Robust Delete Logic
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -82,9 +82,36 @@ async function handleDividendFormSubmit(e) {
 async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 統一邏輯：在刪除前，先合併 state 與暫存區的數據，確保拿到最新版本的物件。
+    const { confirmedDividends } = getState();
+    const stagedActions = await stagingService.getStagedActions();
+    const stagedDividends = stagedActions
+        .filter(a => a.entity === 'dividend' && a.type !== 'DELETE')
+        .map(a => a.payload);
+
+    let combined = [...confirmedDividends];
+    stagedDividends.forEach(stagedDiv => {
+        const index = combined.findIndex(d => d.id === stagedDiv.id);
+        if (index > -1) {
+            combined[index] = { ...combined[index], ...stagedDiv };
+        } else {
+            combined.push(stagedDiv);
+        }
+    });
+
+    const dividendToDelete = combined.find(d => d.id === dividendId);
+    // ========================= 【核心修改 - 結束】 =========================
+
+    if (!dividendToDelete) {
+        showNotification('error', '找不到要刪除的配息紀錄。');
+        return;
+    }
+
     showConfirm('確定要刪除這筆已確認的配息紀錄嗎？此操作將被加入暫存區。', async () => {
         try {
-            await stagingService.addAction('DELETE', 'dividend', { id: dividendId });
+            await stagingService.addAction('DELETE', 'dividend', dividendToDelete);
             handleStagingSuccess();
         } catch (error) {
             showNotification('error', `暫存刪除操作失敗: ${error.message}`);
