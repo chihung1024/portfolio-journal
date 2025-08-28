@@ -59,7 +59,7 @@ function renderClosedPositionDetails(position) {
     }).join('');
 
     return `
-        <div class="p-4 bg-gray-50 border-t border-gray-200">
+        <div class="p-4 bg-slate-50 border-t border-gray-200">
             <h4 class="font-bold text-gray-700 mb-2">FIFO 平倉批次明細：</h4>
             <div class="max-h-60 overflow-y-auto pr-2">
                 ${lotsHtml}
@@ -121,7 +121,9 @@ export function renderClosedPositionsTable() {
             ${isExpanded ? `
                 <tbody class="bg-white">
                     <tr>
-                        <td colspan="6">
+                        {/* ========================= 【核心修改 - 開始】 ========================= */}
+                        <td colspan="6" class="p-0 bg-slate-50">
+                        {/* ========================= 【核心修改 - 結束】 ========================= */}
                             ${renderClosedPositionDetails(pos)}
                         </td>
                     </tr>
