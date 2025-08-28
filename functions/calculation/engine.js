@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.1 - Closed Lot Integration)
+// == 檔案：functions/calculation/engine.js (v2.0 - Purity Refined)
 // == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
@@ -23,9 +23,6 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         return {
             summaryData: {},
             holdingsToUpdate: {},
-            // ========================= 【核心修改 - 開始】 =========================
-            closedLots: [], // 新增：回傳空的已平倉列表
-            // ========================= 【核心修改 - 結束】 =========================
             fullHistory: {},
             twrHistory: {},
             benchmarkHistory: {},
@@ -33,15 +30,21 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         };
     }
     
+    // ========================= 【核心修正 - 開始】 =========================
+    // 步驟 1: 建立一個只包含當前計算範圍內股票代碼的 Set，以便高效查詢。
     const symbolsInScope = new Set(txs.map(t => t.symbol.toUpperCase()));
+
+    // 步驟 2: 根據範圍內的股票代碼，過濾拆股和股利事件，確保數據純淨。
     const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
     const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
+    // ========================= 【核心修正 - 結束】 =========================
 
 
     // 確保計算所需的市場數據都存在
     await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
     const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
+    // 【修改】將過濾後的、乾淨的數據傳遞下去
     const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
     if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
 
@@ -72,10 +75,8 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
     const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(fullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 呼叫核心指標計算，它現在會回傳包含 closedLots 的結果
+    // 呼叫核心指標計算，它現在會回傳包含完整當日損益的持股數據
     const portfolioResult = metrics.calculateCoreMetrics(evts, market);
-    // ========================= 【核心修改 - 結束】 =========================
 
     const netProfitHistory = {};
     let cumulativeCashflow = 0;
@@ -96,15 +97,12 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     return {
         summaryData,
         holdingsToUpdate,
-        // ========================= 【核心修改 - 開始】 =========================
-        closedLots: portfolioResult.closedLots, // 新增：將計算出的已平倉列表回傳
-        // ========================= 【核心修改 - 結束】 =========================
         fullHistory,
         twrHistory,
         benchmarkHistory,
         netProfitHistory,
-        evts, 
-        market
+        evts, // 回傳 evts 給快照使用
+        market // 【修正】將準備好的 market 物件一併回傳
     };
 }
 

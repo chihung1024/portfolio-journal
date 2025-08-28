@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/group.handler.js (v3.3 - Closed Lot Sync for Groups)
+// == 檔案：functions/api_handlers/group.handler.js (v3.2 - Group Transactions Sync)
 // == 職責：處理所有與群組管理和按需計算相關的 API Action
 // =========================================================================================
 
@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { runCalculationEngine } = require('../calculation/engine');
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【新增】按需計算指定群組的核心邏輯函式
  * @param {string} uid - 使用者 ID
@@ -39,6 +40,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
     const involvedSymbols = involvedSymbolsResult.map(r => r.symbol);
 
     if (involvedSymbols.length === 0) {
+        // 【修改】即使群組為空，也要回傳一個結構完整的空物件
         const emptyData = { 
             holdings: [], 
             summary: {}, 
@@ -46,10 +48,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
             twrHistory: {}, 
             netProfitHistory: {}, 
             benchmarkHistory: {},
-            transactions: [],
-            // ========================= 【核心修改 - 開始】 =========================
-            closedLots: [] // 新增：即使群組為空，也要回傳空的 closedLots 陣列
-            // ========================= 【核心修改 - 結束】 =========================
+            transactions: [] // 新增
         };
         await d1Client.query('UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?', [groupId, uid]);
         return emptyData;
@@ -82,8 +81,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
         allUserDividends,
         benchmarkSymbol
     );
-    
-    // ========================= 【核心修改 - 開始】 =========================
+
     const responseData = {
         holdings: Object.values(result.holdingsToUpdate),
         summary: result.summaryData,
@@ -91,10 +89,8 @@ async function calculateGroupOnDemandCore(uid, groupId) {
         twrHistory: result.twrHistory,
         benchmarkHistory: result.benchmarkHistory,
         netProfitHistory: result.netProfitHistory,
-        transactions: txsForEngine.sort((a, b) => new Date(b.date) - new Date(a.date)),
-        closedLots: result.closedLots // 新增：將計算出的 closedLots 加入回傳數據中
+        transactions: txsForEngine.sort((a, b) => new Date(b.date) - new Date(a.date)) // 【新增】將用於計算的交易紀錄回傳
     };
-    // ========================= 【核心修改 - 結束】 =========================
 
     const cacheOps = [
         {
@@ -114,6 +110,7 @@ async function calculateGroupOnDemandCore(uid, groupId) {
 
 // 將核心邏輯導出
 exports.calculateGroupOnDemandCore = calculateGroupOnDemandCore;
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**

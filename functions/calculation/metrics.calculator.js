@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) v4.1 - Detailed FIFO Closed Lot Tracking
+// == 核心指標計算模組 (metrics.calculator.js) - FINAL & COMPLETE VERSION
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -70,6 +70,12 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 /**
  * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
+ * This version implements the Modified Dietz method as suggested, providing a robust
+ * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
+ * @param {object} pf - The portfolio state object from the end of the calculation period.
+ * @param {object} market - The market data object.
+ * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
+ * @returns {{holdingsToUpdate: object}} - An object containing the updated holdings.
  */
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
@@ -128,20 +134,29 @@ function calculateFinalHoldings(pf, market, allEvts) {
             });
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
+
+            // ================== 【核心修正 v3 - 開始】 ==================
+            // 準確抓取「今天」和「昨天」各自對應的匯率
             const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
             const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
+            // ================== 【核心修正 v3 - 結束】 ==================
 
             const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
             
             const daily_pl_twd = endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
             const mktVal = endingMarketValueTWD;
+
+            // ================== 【採納您建議的公式進行修改】 ==================
             let daily_change_percent = 0;
             const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
 
             if (Math.abs(denominator) > 1e-9) {
+                // 公式: (當日終值 / (前日終值 + 當日現金流)) - 1
+                // 也就是: (當日損益 / (前日終值 + 當日現金流))
                 daily_change_percent = (daily_pl_twd / denominator) * 100;
             }
+            // ================== 【修改結束】 ==================
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -154,7 +169,7 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
-                daily_change_percent: daily_change_percent,
+                daily_change_percent: daily_change_percent, // 使用最終修正後的百分比
                 daily_pl_twd: daily_pl_twd
             };
         }
@@ -263,9 +278,6 @@ function calculateCoreMetrics(evts, market) {
     const pf = {};
     let totalRealizedPL = 0;
     let totalBuyCostTWD = 0; 
-    // ========================= 【核心修改 - 開始】 =========================
-    const closedLots = []; // 新增：用於儲存詳細的已平倉紀錄
-    // ========================= 【核心修改 - 結束】 =========================
 
     for (const e of evts) {
         const sym = e.symbol.toUpperCase();
@@ -296,19 +308,6 @@ function calculateCoreMetrics(evts, market) {
                         
                         totalRealizedPL += realizedPL;
                         pf[sym].realizedPLTWD += realizedPL;
-
-                        // 【新增】記錄詳細的空頭回補平倉紀錄
-                        closedLots.push({
-                            symbol: sym,
-                            buyDate: toDate(e.date).toISOString().split('T')[0],
-                            sellDate: shortLot.date.toISOString().split('T')[0], // 賣出日期在前
-                            quantity: qtyToCover,
-                            buyPricePerShareTWD: buyPricePerShareTWD,
-                            sellPricePerShareTWD: shortLot.pricePerShareTWD,
-                            realizedPLTWD: realizedPL,
-                            currency: pf[sym].currency,
-                            type: 'short_cover'
-                        });
                         
                         shortLot.quantity += qtyToCover;
                         buyQty -= qtyToCover;
@@ -341,21 +340,6 @@ function calculateCoreMetrics(evts, market) {
 
                         totalRealizedPL += realizedPL;
                         pf[sym].realizedPLTWD += realizedPL;
-
-                        // ========================= 【核心修改 - 開始】 =========================
-                        // 【新增】記錄詳細的多頭平倉紀錄
-                        closedLots.push({
-                            symbol: sym,
-                            buyDate: longLot.date.toISOString().split('T')[0],
-                            sellDate: toDate(e.date).toISOString().split('T')[0],
-                            quantity: qtyToSell,
-                            buyPricePerShareTWD: longLot.pricePerShareTWD,
-                            sellPricePerShareTWD: sellPricePerShareTWD,
-                            realizedPLTWD: realizedPL,
-                            currency: pf[sym].currency,
-                            type: 'long_sell'
-                        });
-                        // ========================= 【核心修改 - 結束】 =========================
 
                         longLot.quantity -= qtyToSell;
                         sellQty -= qtyToSell;
@@ -428,17 +412,8 @@ function calculateCoreMetrics(evts, market) {
     const totalInvestedCost = totalBuyCostTWD;
     
     const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
-    
-    // ========================= 【核心修改 - 開始】 =========================
-    // 舊的 closedPositions 邏輯已移除，直接回傳新的 closedLots 陣列
-    return { 
-        holdings: { holdingsToUpdate }, 
-        closedLots: closedLots.sort((a,b) => new Date(b.sellDate) - new Date(a.sellDate)), // 按賣出日期降序排列
-        totalRealizedPL, 
-        xirr, 
-        overallReturnRate 
-    };
-    // ========================= 【核心修改 - 結束】 =========================
+
+    return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
 }
 
 module.exports = {
