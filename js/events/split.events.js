@@ -1,10 +1,11 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v3.0 - 整合暫存區
+// == 拆股事件處理模組 (split.events.js) v3.1 - Robust Delete Logic
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js'; // 【核心修改】
 import { showNotification } from '../ui/notifications.js';
 import { renderSplitsTable } from '../ui/components/splits.ui.js'; // 【核心修改】
+import { getState } from '../state.js';
 
 // --- Private Functions ---
 
@@ -20,9 +21,37 @@ function handleStagingSuccess() {
 async function handleDeleteSplit(button) {
     const splitId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 統一邏輯：即使拆股事件沒有更新(UPDATE)操作，依然採用標準模式來獲取要刪除的物件，
+    // 以確保程式碼風格一致，並為未來可能的擴展做準備。
+    const { userSplits } = getState();
+    const stagedActions = await stagingService.getStagedActions();
+    const splitActions = stagedActions
+        .filter(a => a.entity === 'split' && a.type !== 'DELETE')
+        .map(a => a.payload);
+
+    let combined = [...userSplits];
+    splitActions.forEach(stagedSplit => {
+        const index = combined.findIndex(s => s.id === stagedSplit.id);
+        if (index > -1) {
+            combined[index] = { ...combined[index], ...stagedSplit };
+        } else {
+            combined.push(stagedSplit);
+        }
+    });
+    
+    const splitToDelete = combined.find(s => s.id === splitId);
+    // ========================= 【核心修改 - 結束】 =========================
+
+    if (!splitToDelete) {
+        showNotification('error', '找不到要刪除的拆股事件。');
+        return;
+    }
+
     showConfirm('確定要刪除這個拆股事件嗎？此操作將被加入暫存區。', async () => {
         try {
-            await stagingService.addAction('DELETE', 'split', { id: splitId });
+            await stagingService.addAction('DELETE', 'split', splitToDelete);
             handleStagingSuccess();
         } catch (error) {
             showNotification('error', `暫存刪除操作失敗: ${error.message}`);
