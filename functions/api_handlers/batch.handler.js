@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v3.2 (State Sync Fix)
+// == 批次操作處理模組 (batch.handler.js) - v3.3 (Group View Sync)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -177,13 +177,14 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
                     console.log(`[Combined Action] 提交後，接續計算群組: ${nextAction.payload.groupId}`);
                     resultData = await calculateGroupOnDemandCore(uid, nextAction.payload.groupId);
                     
-                    // BUG FIX: 群組計算的回傳不包含全局交易列表，需手動補上以確保前端狀態完全同步
-                    const [transactions, splits, groups] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+                    // Bug Fix: 確保即使群組計算完成後，也能取得最新的全局 splits 和 groups 列表
+                    // 這樣可以避免前端在更新時因缺少最新數據而出錯
+                    const [splits, groups] = await Promise.all([
                         d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
                         d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
                     ]);
-                    resultData.transactions = transactions;
+                    
+                    // transactions 已經由 calculateGroupOnDemandCore 正確回傳，這裡只需補充其他全局數據
                     resultData.splits = splits;
                     resultData.groups = groups;
                     break;
