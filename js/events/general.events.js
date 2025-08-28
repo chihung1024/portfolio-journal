@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.5 - Benchmark View State Fix
+// == 通用事件處理模組 (general.events.js) v4.6 - Group-Aware Details Fetching
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -21,10 +21,50 @@ async function handleShowDetails(symbol) {
     const hasDataLocally = transactions.some(t => t.symbol.toUpperCase() === symbol.toUpperCase());
     const { openModal } = await import('../ui/modals.js');
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 當處於群組檢視模式時，我們總是強制從後端重新獲取數據，
+    // 因為本地的 transaction state 可能是不完整的 (例如，它可能來自上一個查看的群組)。
+    // 這樣可以確保彈出視窗顯示的永遠是正確歸屬的交易紀錄。
     if (selectedGroupId !== 'all') {
-        await openModal('details-modal', false, { symbol });
-        return;
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        loadingText.textContent = `正在讀取 ${symbol} 在此群組的詳細資料...`;
+        loadingOverlay.style.display = 'flex';
+        
+        try {
+            // 將 groupId 傳遞給 API
+            const result = await apiRequest('get_symbol_details', { symbol, groupId: selectedGroupId });
+
+            if (result.success) {
+                // 更新 state 中對應股票的交易和股利數據
+                const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
+                const currentState = getState();
+                
+                // 移除舊的、屬於此股票的數據
+                const otherSymbolTxs = currentState.transactions.filter(t => t.symbol.toUpperCase() !== symbol.toUpperCase());
+                const otherSymbolDivs = currentState.confirmedDividends.filter(d => d.symbol.toUpperCase() !== symbol.toUpperCase());
+
+                setState({
+                    transactions: [...otherSymbolTxs, ...newTransactions],
+                    confirmedDividends: [...otherSymbolDivs, ...newDividends]
+                });
+                
+                // 使用更新後的 state 渲染 modal
+                await openModal('details-modal', false, { symbol });
+            } else {
+                throw new Error(result.message);
+            }
+        } catch (error) {
+            showNotification('error', `讀取 ${symbol} 資料失敗: ${error.message}`);
+        } finally {
+            loadingText.textContent = '正在從雲端同步資料...';
+            loadingOverlay.style.display = 'none';
+        }
+        return; // 提早結束函式
     }
+    // ========================= 【核心修改 - 結束】 =========================
+    
+    // --- 以下為原有的全局檢視 (selectedGroupId === 'all') 邏輯 ---
     
     if (hasDataLocally) {
         await openModal('details-modal', false, { symbol });
@@ -35,7 +75,8 @@ async function handleShowDetails(symbol) {
         loadingOverlay.style.display = 'flex';
         
         try {
-            const result = await apiRequest('get_symbol_details', { symbol, groupId: selectedGroupId });
+            // 在全局檢視下，不傳遞 groupId
+            const result = await apiRequest('get_symbol_details', { symbol, groupId: 'all' });
 
             if (result.success) {
                 const { transactions: newTransactions, confirmedDividends: newDividends } = result.data;
@@ -99,10 +140,8 @@ async function handleUpdateBenchmark() {
 
                     if (result.success) {
                         await stagingService.clearActions();
-                        // ========================= 【核心修改 - 開始】 =========================
                         // 在更新 UI 前，先將群組狀態重設為全局
                         setState({ selectedGroupId: 'all' });
-                        // ========================= 【核心修改 - 結束】 =========================
                         await updateAppWithData(result.data, result.data.tempIdMap);
                         showNotification('success', 'Benchmark 已成功更新！');
                     }
@@ -123,13 +162,11 @@ async function handleUpdateBenchmark() {
             loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
             successMessage: 'Benchmark 已成功更新！'
         }).then(() => {
-            // ========================= 【核心修改 - 開始】 =========================
             // 操作成功後，API 執行器已用全局資料更新了 UI
             // 我們只需再將本地的群組狀態重設，並手動更新下拉選單
             setState({ selectedGroupId: 'all' });
             const groupSelector = document.getElementById('group-selector');
             if(groupSelector) groupSelector.value = 'all';
-            // ========================= 【核心修改 - 結束】 =========================
         }).catch(error => {
             console.error("更新 Benchmark 最終失敗:", error);
         });
