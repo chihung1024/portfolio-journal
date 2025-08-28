@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v6.3 - CJS Syntax Verified)
+// == GCP Cloud Function 主入口 (v6.4 - CJS Syntax Verified & Cleaned)
 // =========================================================================================
 
 const admin = require('firebase-admin');
