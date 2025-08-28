@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v6.1 - Combined Action Route)
+// == GCP Cloud Function 主入口 (v6.2 - Note Feature Removed)
 // =========================================================================================
 
 const admin = require('firebase-admin');
