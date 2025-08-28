@@ -59,18 +59,14 @@ exports.getClosedPositions = async (uid, data, res) => {
         // 5. 為每一檔股票調用 FIFO 計算機
         const closedPositionResults = [];
         for (const symbol in txsBySymbol) {
-            // 檢查該股票的淨持有量是否為零 (或趨近於零)
-            const netQuantity = txsBySymbol[symbol].reduce((sum, tx) => {
-                return sum + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
-            }, 0);
-
-            // 只有當淨持有量為零時，才將其視為完全平倉的股票進行計算
-            if (Math.abs(netQuantity) < 1e-9) {
-                 const result = calculateFifoClosedPositions(symbol, txsBySymbol[symbol], market);
-                 if (result) {
-                    closedPositionResults.push(result);
-                 }
+            // ========================= 【核心修改 - 開始】 =========================
+            // 移除原先僅計算完全平倉股票的限制 (if netQuantity === 0)。
+            // 現在，只要一檔股票有任何賣出紀錄，FIFO 計算機就會處理並回傳所有已了結的批次。
+            const result = calculateFifoClosedPositions(symbol, txsBySymbol[symbol], market);
+            if (result) {
+               closedPositionResults.push(result);
             }
+            // ========================= 【核心修改 - 結束】 =========================
         }
         
         // 6. 按總損益降序排序結果
