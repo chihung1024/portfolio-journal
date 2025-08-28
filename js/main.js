@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.2.0 - Race Condition Fix
+// == 主程式進入點 (main.js) v5.3.0 - Note Feature Removed
 // =========================================================================================
 
 import { getState, setState } from './state.js';
@@ -121,17 +121,14 @@ export async function loadInitialDashboard() {
         const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
-        const { summary, stockNotes } = result.data;
+        // ========================= 【核心修改 - 開始】 =========================
+        const { summary } = result.data;
         
-        const stockNotesMap = (stockNotes || []).reduce((map, note) => {
-            map[note.symbol] = note; return map;
-        }, {});
-
         setState({
             holdings: {},
-            stockNotes: stockNotesMap,
             summary: summary
         });
+        // ========================= 【核心修改 - 結束】 =========================
 
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable({});
