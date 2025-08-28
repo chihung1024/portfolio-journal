@@ -1,14 +1,11 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) v3.0 - Closed Positions Feature
+// == 持股表格 UI 模組 (holdings.ui.js) v3.1 - State-Driven UI Fixes
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
 import { isTwStock, formatNumber } from '../utils.js';
 
 // ========================= 【核心修改 - 開始】 =========================
-// 新增一個本地狀態，用於追蹤哪個已平倉股票的詳情被展開了
-let expandedClosedSymbol = null;
-
 /**
  * 輔助函式：渲染單一已平倉股票的所有詳細交易紀錄
  * @param {Array} lots - 屬於該股票的已平倉紀錄陣列
@@ -52,12 +49,11 @@ function renderClosedLotsDetails(lots) {
  * @returns {string} HTML string for the closed positions section
  */
 function renderClosedPositionsSection() {
-    const { closedLots } = getState();
+    const { closedLots, isClosedPositionsExpanded, expandedClosedSymbol } = getState();
     if (!closedLots || closedLots.length === 0) {
-        return ''; // 如果沒有已平倉紀錄，則不渲染此區塊
+        return '';
     }
 
-    // 1. 按股票代碼將所有平倉紀錄分組，並計算每支股票的總損益
     const closedPositionsBySymbol = closedLots.reduce((acc, lot) => {
         if (!acc[lot.symbol]) {
             acc[lot.symbol] = {
@@ -71,17 +67,18 @@ function renderClosedPositionsSection() {
         return acc;
     }, {});
 
-    // 2. 將分組後的結果轉換為陣列，並按總損益降序排列
     const sortedClosedPositions = Object.values(closedPositionsBySymbol)
-        .sort((a, b) => b.totalRealizedPLTWD - a.totalRealizedPLTWD);
+        .sort((a, b) => new Date(b.lots[0].sellDate) - new Date(a.lots[0].sellDate));
     
-    // 3. 產生 HTML
+    const chevronClass = isClosedPositionsExpanded ? 'rotate-180' : '';
+    const listClass = isClosedPositionsExpanded ? '' : 'hidden';
+
     const headerHtml = `
         <div id="closed-positions-toggle" class="mt-8 p-4 bg-gray-100 rounded-t-lg cursor-pointer hover:bg-gray-200 border-b border-gray-300">
             <h3 class="text-base font-semibold text-gray-800 flex items-center">
                 <i data-lucide="archive" class="w-5 h-5 mr-2"></i>
                 已平倉部位 (FIFO 明細)
-                <i id="closed-positions-chevron" data-lucide="chevron-down" class="w-5 h-5 ml-auto transition-transform"></i>
+                <i id="closed-positions-chevron" data-lucide="chevron-down" class="w-5 h-5 ml-auto transition-transform ${chevronClass}"></i>
             </h3>
         </div>
     `;
@@ -100,7 +97,7 @@ function renderClosedPositionsSection() {
                         <p class="font-semibold text-base ${profitClass}">${formatNumber(pos.totalRealizedPLTWD, 0)}</p>
                     </div>
                 </div>
-                <div class="closed-position-details-container bg-white ${isExpanded ? '' : 'hidden'}">
+                <div class="closed-position-details-container bg-gray-50 ${isExpanded ? '' : 'hidden'}">
                     ${isExpanded ? renderClosedLotsDetails(pos.lots) : ''}
                 </div>
             </div>
@@ -109,7 +106,7 @@ function renderClosedPositionsSection() {
 
     return `
         ${headerHtml}
-        <div id="closed-positions-list" class="hidden bg-white rounded-b-lg border border-t-0 border-gray-200 overflow-hidden">
+        <div id="closed-positions-list" class="${listClass} bg-white rounded-b-lg border border-t-0 border-gray-200 overflow-hidden">
             ${bodyHtml}
         </div>
     `;
@@ -138,9 +135,9 @@ function renderHoldingDetailCardContent(h) {
 
 
 export function renderHoldingsTable(currentHoldings) {
-    const { holdingsSort, mobileViewMode, activeMobileHolding } = getState();
+    const { holdingsSort, mobileViewMode, activeMobileHolding, closedLots } = getState();
     const container = document.getElementById('holdings-content');
-    container.innerHTML = ''; // 清空容器
+    container.innerHTML = '';
     let holdingsArray = Object.values(currentHoldings);
     
     const viewSwitcherHtml = `
@@ -157,146 +154,90 @@ export function renderHoldingsTable(currentHoldings) {
         </div>
     `;
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 渲染邏輯重構：無論持股是否為空，都獨立處理
+    let currentHoldingsHtml = '';
     if (holdingsArray.length === 0) {
-        container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
-        // ========================= 【核心修改 - 開始】 =========================
-        // 即使沒有當前持股，也要嘗試渲染已平倉部位
-        const closedSectionHtml = renderClosedPositionsSection();
-        container.innerHTML += closedSectionHtml;
-        lucide.createIcons();
-        return;
-        // ========================= 【核心修改 - 結束】 =========================
+        // 僅在也沒有已平倉部位時，才顯示"沒有持股紀錄"
+        if (!closedLots || closedLots.length === 0) {
+            currentHoldingsHtml = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
+        }
+    } else {
+        const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
+        holdingsArray.forEach(h => {
+            h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
+        });
+
+        holdingsArray.sort((a, b) => {
+            const valA = a[holdingsSort.key] || 0;
+            const valB = b[holdingsSort.key] || 0;
+            return holdingsSort.order === 'asc' ? valA - valB : valB - a[holdingsSort.key];
+        });
+
+        const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
+        const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
+
+        const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
+            const isShort = h.quantity < 0;
+            const decimals = isTwStock(h.symbol) ? 0 : 2; 
+            const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+            const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
+            const priceClass = '';
+            return `
+                <tr class="hover:bg-gray-100 cursor-pointer holding-row" data-symbol="${h.symbol}" ${isShort ? 'style="background-color: #f0f9ff;"' : ''}>
+                    <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900"><div class="flex items-center"><span>${h.symbol}</span>${isShort ? shortBadge : ''}</div></td>
+                    <td class="px-6 py-4 whitespace-nowrap text-base font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right"><div class="text-base font-semibold text-gray-900 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)}</div><div class="text-sm text-gray-500">${formatNumber(h.avgCostOriginal, 2)} ${h.currency}</div></td>
+                    <td class="px-6 py-4 whitespace-nowrap text-base text-right">${formatNumber(h.marketValueTWD, 0)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right ${dailyReturnClass}"><div class="text-base font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div><div class="text-sm">${(h.daily_change_percent || 0).toFixed(2)}%</div></td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right ${returnClass}"><div class="text-base font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div><div class="text-sm">${(h.returnRate || 0).toFixed(2)}%</div></td>
+                    <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
+                </tr>`; }).join('')}</tbody></table></div>`;
+
+        const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => { 
+            const isShort = h.quantity < 0;
+            const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+            return `<div class="bg-white rounded-lg shadow ${isShort ? 'ring-2 ring-sky-300' : ''}"><div class="p-4 space-y-3"><div class="flex justify-between items-center"><div class="flex items-center"><h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>${isShort ? shortBadge : ''}</div><span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span></div>${renderHoldingDetailCardContent(h)}</div><div class="border-t border-gray-200 px-4 py-2"><button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">更多詳情</button></div></div>`; }).join('')}</div>`;
+
+        const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
+            const isShort = h.quantity < 0;
+            const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
+            const isExpanded = activeMobileHolding === h.symbol;
+            const detailsButtonHtml = `<div class="border-t border-gray-200 px-4 py-2"><button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">更多詳情</button></div>`;
+            return `<div class="bg-white rounded-lg shadow overflow-hidden ${isShort ? 'ring-2 ring-sky-300' : ''}"><div class="px-2 py-3 flex justify-between items-center cursor-pointer list-view-item" data-symbol="${h.symbol}"><div class="flex items-center"><h3 class="font-bold text-base text-indigo-600">${h.symbol}</h3>${isShort ? shortBadge : ''}</div><div class="text-right"><p class="font-medium text-base text-gray-900">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-sm text-gray-500">${h.currency}</span></p><p class="text-sm ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p></div></div><div class="holding-details-container ${isExpanded ? '' : 'hidden'}">${isExpanded ? renderHoldingDetailCardContent(h) : ''}${isExpanded ? detailsButtonHtml : ''}</div></div>`;
+        }).join('')}</div>`;
+
+        const mobileContent = `<div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div><div class="${mobileViewMode === 'list' ? '' : 'hidden'}">${listHtml}</div>`;
+
+        currentHoldingsHtml = viewSwitcherHtml + tableHtml + mobileContent;
     }
 
-    const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
-    holdingsArray.forEach(h => {
-        h.portfolioPercentage = totalMarketValue > 0 ? (h.marketValueTWD / totalMarketValue) * 100 : 0;
-    });
-
-    holdingsArray.sort((a, b) => {
-        const valA = a[holdingsSort.key] || 0;
-        const valB = b[holdingsSort.key] || 0;
-        return holdingsSort.order === 'asc' ? valA - valB : valB - a[holdingsSort.key];
-    });
-
-    const getSortArrow = (key) => holdingsSort.key === key ? (holdingsSort.order === 'desc' ? '▼' : '▲') : '';
-    const shortBadge = `<span class="ml-2 text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-sky-600 bg-sky-200">放空</span>`;
-
-    const tableHtml = `<div class="overflow-x-auto hidden sm:block"><table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-base text-gray-500 uppercase tracking-wider">代碼</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">股數</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider">現價 / 成本</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="marketValueTWD">市值(TWD) ${getSortArrow('marketValueTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="daily_pl_twd">當日損益 ${getSortArrow('daily_pl_twd')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="unrealizedPLTWD">未實現損益 ${getSortArrow('unrealizedPLTWD')}</th><th class="px-6 py-3 text-right text-base text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" data-sort-key="portfolioPercentage">持股佔比 ${getSortArrow('portfolioPercentage')}</th></tr></thead><tbody class="bg-white divide-y divide-gray-200">${holdingsArray.map(h => { 
-        const isShort = h.quantity < 0;
-        const decimals = isTwStock(h.symbol) ? 0 : 2; 
-        const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-        const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
-        const priceClass = '';
-        return `
-            <tr class="hover:bg-gray-100 cursor-pointer holding-row" data-symbol="${h.symbol}" ${isShort ? 'style="background-color: #f0f9ff;"' : ''}>
-                <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900">
-                    <div class="flex items-center">
-                        <span>${h.symbol}</span>
-                        ${isShort ? shortBadge : ''}
-                        </div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-base font-semibold text-right ${isShort ? 'text-sky-700' : ''}">${formatNumber(h.quantity, decimals)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-right">
-                    <div class="text-base font-semibold text-gray-900 ${priceClass} rounded px-1 inline-block">${formatNumber(h.currentPriceOriginal, 2)}</div>
-                    <div class="text-sm text-gray-500">${formatNumber(h.avgCostOriginal, 2)} ${h.currency}</div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-base text-right">${formatNumber(h.marketValueTWD, 0)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-right ${dailyReturnClass}">
-                    <div class="text-base font-semibold">${formatNumber(h.daily_pl_twd, 0)}</div>
-                    <div class="text-sm">${(h.daily_change_percent || 0).toFixed(2)}%</div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-right ${returnClass}">
-                    <div class="text-base font-semibold">${formatNumber(h.unrealizedPLTWD, 0)}</div>
-                    <div class="text-sm">${(h.returnRate || 0).toFixed(2)}%</div>
-                </td>
-                <td class="px-6 py-4 whitespace-nowrap text-base text-right">${h.portfolioPercentage.toFixed(2)}%</td>
-            </tr>`; }).join('')}</tbody></table></div>`;
-
-    const cardsHtml = `<div class="sm:hidden grid grid-cols-1 gap-4">${holdingsArray.map(h => { 
-        const isShort = h.quantity < 0;
-        const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
-        return `
-            <div class="bg-white rounded-lg shadow ${isShort ? 'ring-2 ring-sky-300' : ''}">
-                <div class="p-4 space-y-3">
-                    <div class="flex justify-between items-center">
-                        <div class="flex items-center">
-                            <h3 class="font-bold text-lg text-indigo-600">${h.symbol}</h3>
-                            ${isShort ? shortBadge : ''}
-                            </div>
-                        <span class="font-semibold text-lg ${returnClass}">${(h.returnRate || 0).toFixed(2)}%</span>
-                    </div>
-                    ${renderHoldingDetailCardContent(h)}
-                </div>
-                <div class="border-t border-gray-200 px-4 py-2">
-                    <button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">
-                        更多詳情
-                    </button>
-                </div>
-            </div>`; }).join('')}</div>`;
-
-    const listHtml = `<div class="sm:hidden space-y-2">${holdingsArray.map(h => {
-        const isShort = h.quantity < 0;
-        const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
-        const isExpanded = activeMobileHolding === h.symbol;
-        
-        const detailsButtonHtml = `
-            <div class="border-t border-gray-200 px-4 py-2">
-                <button class="w-full text-center text-sm font-medium text-indigo-600 hover:text-indigo-800 open-details-btn" data-symbol="${h.symbol}">
-                    更多詳情
-                </button>
-            </div>
-        `;
-
-        return `
-            <div class="bg-white rounded-lg shadow overflow-hidden ${isShort ? 'ring-2 ring-sky-300' : ''}">
-                <div class="px-2 py-3 flex justify-between items-center cursor-pointer list-view-item" data-symbol="${h.symbol}">
-                    <div class="flex items-center">
-                        <h3 class="font-bold text-base text-indigo-600">${h.symbol}</h3>
-                        ${isShort ? shortBadge : ''}
-                        </div>
-                    <div class="text-right">
-                        <p class="font-medium text-base text-gray-900">${formatNumber(h.currentPriceOriginal, 2)} <span class="text-sm text-gray-500">${h.currency}</span></p>
-                        <p class="text-sm ${dailyReturnClass}">${formatNumber(h.daily_pl_twd, 0)} (${(h.daily_change_percent || 0).toFixed(2)}%)</p>
-                    </div>
-                </div>
-                <div class="holding-details-container ${isExpanded ? '' : 'hidden'}">
-                    ${isExpanded ? renderHoldingDetailCardContent(h) : ''}
-                    ${isExpanded ? detailsButtonHtml : ''}
-                </div>
-            </div>
-        `;
-    }).join('')}</div>`;
-
-    const mobileContent = `
-        <div class="${mobileViewMode === 'card' ? '' : 'hidden'}">${cardsHtml}</div>
-        <div class="${mobileViewMode === 'list' ? '' : 'hidden'}">${listHtml}</div>
-    `;
-
-    // ========================= 【核心修改 - 開始】 =========================
-    // 將所有內容組合起來，並加入事件監聽
     const closedPositionsHtml = renderClosedPositionsSection();
-    container.innerHTML = viewSwitcherHtml + tableHtml + mobileContent + closedPositionsHtml;
+    container.innerHTML = currentHoldingsHtml + closedPositionsHtml;
     lucide.createIcons();
 
-    // 為新的 UI 元素加上事件監聽
+    // 將事件監聽器綁定在渲染函式內部，確保每次重繪後都能正常運作
     const toggleButton = document.getElementById('closed-positions-toggle');
-    const listContainer = document.getElementById('closed-positions-list');
-    const chevronIcon = document.getElementById('closed-positions-chevron');
-    if (toggleButton && listContainer) {
+    if (toggleButton) {
         toggleButton.addEventListener('click', () => {
-            listContainer.classList.toggle('hidden');
-            chevronIcon.classList.toggle('rotate-180');
+            const currentState = getState();
+            setState({ isClosedPositionsExpanded: !currentState.isClosedPositionsExpanded });
+            renderHoldingsTable(currentHoldings); // 狀態改變，觸發重繪
         });
     }
 
     document.querySelectorAll('.closed-position-item').forEach(item => {
         item.addEventListener('click', (e) => {
             const symbol = e.currentTarget.dataset.symbol;
-            // 如果點擊的項目已經是展開的，則收合它；否則，展開新的
-            expandedClosedSymbol = expandedClosedSymbol === symbol ? null : symbol;
-            // 觸發一次完整的重新渲染，以更新所有相關的 UI 狀態
-            renderHoldingsTable(currentHoldings);
+            const currentState = getState();
+            const newExpandedSymbol = currentState.expandedClosedSymbol === symbol ? null : symbol;
+            
+            // 點擊展開明細時，強制將總列表設為展開狀態
+            setState({ 
+                expandedClosedSymbol: newExpandedSymbol,
+                isClosedPositionsExpanded: true 
+            });
+            renderHoldingsTable(currentHoldings); // 狀態改變，觸發重繪
         });
     });
     // ========================= 【核心修改 - 結束】 =========================
