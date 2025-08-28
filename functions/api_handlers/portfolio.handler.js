@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_note_removed)
+// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_syntax_fix)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
@@ -31,14 +31,12 @@ exports.updateBenchmarkCore = updateBenchmarkCore;
  * 【舊 API - 保留】獲取使用者所有核心資料 (預設為 'all' 群組)
  */
 exports.getData = async (uid, res) => {
-    // ========================= 【核心修改 - 開始】 =========================
     const [txs, splits, holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
         d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
         d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
     ]);
-    // ========================= 【核心修改 - 結束】 =========================
 
     const summaryRow = summaryResult[0] || {};
     const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
@@ -47,7 +45,6 @@ exports.getData = async (uid, res) => {
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
     const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
 
-    // ========================= 【核心修改 - 開始】 =========================
     return res.status(200).send({
         success: true,
         data: {
@@ -61,29 +58,24 @@ exports.getData = async (uid, res) => {
             netProfitHistory,
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 };
 
 /**
  * 【新增】超輕量級 API：只獲取儀表板摘要數據
  */
 exports.getDashboardSummary = async (uid, res) => {
-    // ========================= 【核心修改 - 開始】 =========================
     const [summaryResult] = await Promise.all([
         d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
     ]);
-    // ========================= 【核心修改 - 結束】 =========================
 
     const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
 
-    // ========================= 【核心修改 - 開始】 =========================
     return res.status(200).send({
         success: true,
         data: {
             summary: summaryData,
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 };
 
 /**
@@ -99,16 +91,13 @@ exports.getHoldings = async (uid, res) => {
  * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據
  */
 exports.getDashboardAndHoldings = async (uid, res) => {
-    // ========================= 【核心修改 - 開始】 =========================
     const [holdings, summaryResult] = await Promise.all([
         d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
     ]);
-    // ========================= 【核心修改 - 結束】 =========================
 
     const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
 
-    // ========================= 【核心修改 - 開始】 =========================
     return res.status(200).send({
         success: true,
         data: {
@@ -116,7 +105,6 @@ exports.getDashboardAndHoldings = async (uid, res) => {
             holdings,
         }
     });
-    // ========================= 【核心修改 - 結束】 =========================
 };
 
 /**
