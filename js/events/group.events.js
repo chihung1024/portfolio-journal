@@ -1,8 +1,9 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v4.1 - UI State Reset)
+// == 檔案：js/events/group.events.js (v4.0 - Combined API Call)
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
+// 【核心修改】引入 apiRequest 和 updateAppWithData
 import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
@@ -110,18 +111,11 @@ export function initializeGroupEventListeners() {
         const previousGroupId = getState().selectedGroupId;
         const stagedActions = await stagingService.getStagedActions();
 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在切換群組時，重設已平倉部位的 UI 狀態
-        setState({
-            isClosedPositionsExpanded: false,
-            expandedClosedSymbol: null,
-        });
-        // ========================= 【核心修改 - 結束】 =========================
-
         if (stagedActions.length > 0 && selectedGroupId !== previousGroupId) {
             const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
+                // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
                     hideConfirm();
                     const loadingOverlay = document.getElementById('loading-overlay');
@@ -132,11 +126,13 @@ export function initializeGroupEventListeners() {
                     try {
                         const netActions = await stagingService.getNetActions();
                         
+                        // 定義提交後的下一個動作
                         const nextAction = {
                             type: 'CALCULATE_GROUP',
                             payload: { groupId: selectedGroupId }
                         };
                         
+                        // 呼叫新的合併 API
                         const result = await apiRequest('submit_batch_and_execute', {
                             actions: netActions,
                             nextAction: nextAction
@@ -144,7 +140,9 @@ export function initializeGroupEventListeners() {
 
                         if (result.success) {
                             await stagingService.clearActions();
+                            // 使用後端回傳的最終計算結果更新 UI
                             updateAppWithData(result.data, result.data.tempIdMap);
+                            // 更新當前選定的 group ID
                             setState({ selectedGroupId });
                             showNotification('success', '群組績效計算完成！');
                         }
@@ -156,6 +154,7 @@ export function initializeGroupEventListeners() {
                         loadingOverlay.style.display = 'none';
                     }
                 },
+                // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
                     hideConfirm();
