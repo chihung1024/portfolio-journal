@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - 【新檔案】
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - 【修正與強化】
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -21,10 +21,10 @@ function renderClosedPositionDetails(position) {
         const header = `
             <thead class="bg-gray-100">
                 <tr>
-                    <th class="px-2 py-1 text-left text-xs font-medium text-gray-600 uppercase">日期</th>
-                    <th class="px-2 py-1 text-left text-xs font-medium text-gray-600 uppercase">類型</th>
-                    <th class="px-2 py-1 text-right text-xs font-medium text-gray-600 uppercase">配對股數</th>
-                    <th class="px-2 py-1 text-right text-xs font-medium text-gray-600 uppercase">價格</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase">日期</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-600 uppercase">類型</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-gray-600 uppercase">配對股數</th>
+                    <th class="px-3 py-2 text-right text-xs font-medium text-gray-600 uppercase">價格</th>
                 </tr>
             </thead>`;
         
@@ -32,36 +32,37 @@ function renderClosedPositionDetails(position) {
             const typeClass = tx.type === 'buy' ? 'text-red-700' : 'text-green-700';
             const typeText = tx.type === 'buy' ? '買入' : '賣出';
             return `
-                <tr class="border-b border-gray-200">
-                    <td class="px-2 py-1 whitespace-nowrap text-xs">${tx.date.split('T')[0]}</td>
-                    <td class="px-2 py-1 font-semibold text-xs ${typeClass}">${typeText}</td>
-                    <td class="px-2 py-1 text-right text-xs">${formatNumber(tx.usedQty, isTwStock(tx.symbol) ? 0 : 2)}</td>
-                    <td class="px-2 py-1 text-right text-xs">${formatNumber(tx.price, 2)} <span class="text-gray-400">${tx.currency}</span></td>
+                <tr class="border-b border-gray-200 last:border-b-0">
+                    <td class="px-3 py-2 whitespace-nowrap text-xs">${tx.date.split('T')[0]}</td>
+                    <td class="px-3 py-2 font-semibold text-xs ${typeClass}">${typeText}</td>
+                    <td class="px-3 py-2 text-right text-xs">${formatNumber(tx.usedQty, isTwStock(tx.symbol) ? 0 : 2)}</td>
+                    <td class="px-3 py-2 text-right text-xs">${formatNumber(tx.price, 2)} <span class="text-gray-400">${tx.currency}</span></td>
                 </tr>`;
         }).join('');
 
-        return `<table class="min-w-full mt-2">${header}<tbody class="bg-white">${body}</tbody></table>`;
+        return `<table class="min-w-full divide-y divide-gray-200 mt-2">${header}<tbody class="bg-white divide-y divide-gray-100">${body}</tbody></table>`;
     };
 
     const lotsHtml = position.closedLots.map((lot, index) => {
         const returnClass = lot.realizedPL >= 0 ? 'text-red-600' : 'text-green-600';
         return `
-            <div class="p-3 border rounded-md bg-white mb-3">
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+            <div class="card p-4 mb-3 border border-gray-200 rounded-md shadow-sm">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3 pb-3 border-b border-gray-200">
                     <div><p class="text-gray-500">平倉日</p><p class="font-medium">${lot.closingDate}</p></div>
-                    <div><p class="text-gray-500">成本</p><p class="font-medium">${formatNumber(lot.costBasis, 0)}</p></div>
-                    <div><p class="text-gray-500">收入</p><p class="font-medium">${formatNumber(lot.proceeds, 0)}</p></div>
-                    <div><p class="text-gray-500">損益</p><p class="font-bold ${returnClass}">${formatNumber(lot.realizedPL, 0)}</p></div>
+                    <div><p class="text-gray-500">成本 (TWD)</p><p class="font-medium">${formatNumber(lot.costBasis, 0)}</p></div>
+                    <div><p class="text-gray-500">收入 (TWD)</p><p class="font-medium">${formatNumber(lot.proceeds, 0)}</p></div>
+                    <div><p class="text-gray-500">損益 (TWD)</p><p class="font-bold ${returnClass}">${formatNumber(lot.realizedPL, 0)}</p></div>
                 </div>
+                <h5 class="text-sm font-semibold text-gray-700 mb-2">配對交易明細：</h5>
                 ${renderLotTransactions(lot.transactions)}
             </div>
         `;
     }).join('');
 
     return `
-        <div class="p-4 bg-slate-50 border-t border-gray-200">
-            <h4 class="font-bold text-gray-700 mb-2">FIFO 平倉批次明細：</h4>
-            <div class="max-h-60 overflow-y-auto pr-2">
+        <div class="px-6 py-5 bg-slate-50 mt-2 border-t border-b border-gray-200">
+            <h4 class="font-bold text-gray-700 mb-3 text-lg">FIFO 平倉批次明細：</h4>
+            <div class="max-h-80 overflow-y-auto pr-2 no-scrollbar">
                 ${lotsHtml}
             </div>
         </div>`;
@@ -121,9 +122,7 @@ export function renderClosedPositionsTable() {
             ${isExpanded ? `
                 <tbody class="bg-white">
                     <tr>
-                        {/* ========================= 【核心修改 - 開始】 ========================= */}
-                        <td colspan="6" class="p-0 bg-slate-50">
-                        {/* ========================= 【核心修改 - 結束】 ========================= */}
+                        <td colspan="6" class="p-0">
                             ${renderClosedPositionDetails(pos)}
                         </td>
                     </tr>
