@@ -3,11 +3,15 @@
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-// 【核心修改】引入 apiRequest 和 updateAppWithData
+// ========================= 【核心修改 - 開始】 =========================
 import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
+// 引入平倉紀錄的渲染函式，以便在群組切換後可以刷新
+import { renderClosedPositionsTable } from '../ui/components/closedPositions.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
+
 
 /**
  * 操作成功存入暫存區後，更新 UI
@@ -110,12 +114,40 @@ export function initializeGroupEventListeners() {
         const selectedGroupId = e.target.value;
         const previousGroupId = getState().selectedGroupId;
         const stagedActions = await stagingService.getStagedActions();
+        
+        // ========================= 【核心修改 - 開始】 =========================
+        // 將重新載入平倉紀錄的邏輯封裝成一個可重用的函式
+        const reloadClosedPositionsIfNeeded = async () => {
+            const activeTab = document.querySelector('.tab-content:not(.hidden)');
+            if (activeTab && activeTab.id === 'closed-positions-tab') {
+                console.log(`偵測到群組變更，且當前在平倉紀錄頁，正在為群組 ${selectedGroupId} 重新載入數據...`);
+                // 這裡直接複製 main.js 中的載入邏輯
+                const overlay = document.getElementById('loading-overlay');
+                overlay.style.display = 'flex';
+                try {
+                    const result = await apiRequest('get_closed_positions', { groupId: selectedGroupId });
+                    if (result.success) {
+                        setState({
+                            closedPositions: result.data,
+                            activeClosedPosition: null
+                        });
+                        renderClosedPositionsTable();
+                    } else {
+                        throw new Error(result.message);
+                    }
+                } catch (error) {
+                    showNotification('error', `讀取平倉紀錄失敗: ${error.message}`);
+                } finally {
+                    overlay.style.display = 'none';
+                }
+            }
+        };
+        // ========================= 【核心修改 - 結束】 =========================
 
         if (stagedActions.length > 0 && selectedGroupId !== previousGroupId) {
             const { showConfirm, hideConfirm } = await import('../ui/modals.js');
             showConfirm(
                 '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
-                // ========================= 【核心修改 - 開始】 =========================
                 async () => { // 確認回呼
                     hideConfirm();
                     const loadingOverlay = document.getElementById('loading-overlay');
@@ -145,6 +177,9 @@ export function initializeGroupEventListeners() {
                             // 更新當前選定的 group ID
                             setState({ selectedGroupId });
                             showNotification('success', '群組績效計算完成！');
+                            // ========================= 【核心修改】 =========================
+                            await reloadClosedPositionsIfNeeded(); // 刷新平倉紀錄
+                            // ==========================================================
                         }
                     } catch (error) {
                         console.error("提交並切換檢視時發生錯誤:", error);
@@ -154,7 +189,6 @@ export function initializeGroupEventListeners() {
                         loadingOverlay.style.display = 'none';
                     }
                 },
-                // ========================= 【核心修改 - 結束】 =========================
                 '提交並切換檢視？',
                 () => { // 取消回呼
                     hideConfirm();
@@ -163,7 +197,10 @@ export function initializeGroupEventListeners() {
             );
         } else {
             setState({ selectedGroupId });
-            applyGroupView(selectedGroupId);
+            await applyGroupView(selectedGroupId);
+            // ========================= 【核心修改】 =========================
+            await reloadClosedPositionsIfNeeded(); // 刷新平倉紀錄
+            // ==========================================================
         }
     });
 
