@@ -1,9 +1,120 @@
 // =========================================================================================
-// == 持股表格 UI 模組 (holdings.ui.js) - v2.1 (Note Feature Removed)
+// == 持股表格 UI 模組 (holdings.ui.js) v3.0 - Closed Positions Feature
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
 import { isTwStock, formatNumber } from '../utils.js';
+
+// ========================= 【核心修改 - 開始】 =========================
+// 新增一個本地狀態，用於追蹤哪個已平倉股票的詳情被展開了
+let expandedClosedSymbol = null;
+
+/**
+ * 輔助函式：渲染單一已平倉股票的所有詳細交易紀錄
+ * @param {Array} lots - 屬於該股票的已平倉紀錄陣列
+ * @returns {string} HTML string for the details table
+ */
+function renderClosedLotsDetails(lots) {
+    if (!lots || lots.length === 0) return '<p class="px-4 py-2 text-xs text-gray-500">沒有找到詳細的平倉紀錄。</p>';
+
+    const header = `
+        <thead class="bg-gray-100">
+            <tr>
+                <th class="px-2 py-1 text-left text-xs font-medium text-gray-600">數量</th>
+                <th class="px-2 py-1 text-left text-xs font-medium text-gray-600">買入日期</th>
+                <th class="px-2 py-1 text-left text-xs font-medium text-gray-600">賣出日期</th>
+                <th class="px-2 py-1 text-right text-xs font-medium text-gray-600">買入價 (TWD)</th>
+                <th class="px-2 py-1 text-right text-xs font-medium text-gray-600">賣出價 (TWD)</th>
+                <th class="px-2 py-1 text-right text-xs font-medium text-gray-600">單筆損益 (TWD)</th>
+            </tr>
+        </thead>`;
+    
+    const body = lots.map(lot => {
+        const profitClass = lot.realizedPLTWD >= 0 ? 'text-red-500' : 'text-green-500';
+        return `
+            <tr>
+                <td class="px-2 py-1 text-xs">${formatNumber(lot.quantity, isTwStock(lot.symbol) ? 0 : 4)}</td>
+                <td class="px-2 py-1 text-xs">${lot.buyDate}</td>
+                <td class="px-2 py-1 text-xs">${lot.sellDate}</td>
+                <td class="px-2 py-1 text-xs text-right">${formatNumber(lot.buyPricePerShareTWD, 2)}</td>
+                <td class="px-2 py-1 text-xs text-right">${formatNumber(lot.sellPricePerShareTWD, 2)}</td>
+                <td class="px-2 py-1 text-xs text-right font-medium ${profitClass}">${formatNumber(lot.realizedPLTWD, 0)}</td>
+            </tr>
+        `;
+    }).join('');
+
+    return `<div class="p-2"><table class="min-w-full">${header}<tbody>${body}</tbody></table></div>`;
+}
+
+
+/**
+ * 輔助函式：渲染整個「已平倉部位」區塊
+ * @returns {string} HTML string for the closed positions section
+ */
+function renderClosedPositionsSection() {
+    const { closedLots } = getState();
+    if (!closedLots || closedLots.length === 0) {
+        return ''; // 如果沒有已平倉紀錄，則不渲染此區塊
+    }
+
+    // 1. 按股票代碼將所有平倉紀錄分組，並計算每支股票的總損益
+    const closedPositionsBySymbol = closedLots.reduce((acc, lot) => {
+        if (!acc[lot.symbol]) {
+            acc[lot.symbol] = {
+                symbol: lot.symbol,
+                totalRealizedPLTWD: 0,
+                lots: []
+            };
+        }
+        acc[lot.symbol].totalRealizedPLTWD += lot.realizedPLTWD;
+        acc[lot.symbol].lots.push(lot);
+        return acc;
+    }, {});
+
+    // 2. 將分組後的結果轉換為陣列，並按總損益降序排列
+    const sortedClosedPositions = Object.values(closedPositionsBySymbol)
+        .sort((a, b) => b.totalRealizedPLTWD - a.totalRealizedPLTWD);
+    
+    // 3. 產生 HTML
+    const headerHtml = `
+        <div id="closed-positions-toggle" class="mt-8 p-4 bg-gray-100 rounded-t-lg cursor-pointer hover:bg-gray-200 border-b border-gray-300">
+            <h3 class="text-base font-semibold text-gray-800 flex items-center">
+                <i data-lucide="archive" class="w-5 h-5 mr-2"></i>
+                已平倉部位 (FIFO 明細)
+                <i id="closed-positions-chevron" data-lucide="chevron-down" class="w-5 h-5 ml-auto transition-transform"></i>
+            </h3>
+        </div>
+    `;
+
+    const bodyHtml = sortedClosedPositions.map(pos => {
+        const isExpanded = expandedClosedSymbol === pos.symbol;
+        const profitClass = pos.totalRealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
+        return `
+            <div class="border-b">
+                <div class="closed-position-item p-4 flex justify-between items-center cursor-pointer hover:bg-gray-50" data-symbol="${pos.symbol}">
+                    <div>
+                        <span class="font-bold text-base text-indigo-700">${pos.symbol}</span>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-sm text-gray-500">總已實現損益</span>
+                        <p class="font-semibold text-base ${profitClass}">${formatNumber(pos.totalRealizedPLTWD, 0)}</p>
+                    </div>
+                </div>
+                <div class="closed-position-details-container bg-white ${isExpanded ? '' : 'hidden'}">
+                    ${isExpanded ? renderClosedLotsDetails(pos.lots) : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    return `
+        ${headerHtml}
+        <div id="closed-positions-list" class="hidden bg-white rounded-b-lg border border-t-0 border-gray-200 overflow-hidden">
+            ${bodyHtml}
+        </div>
+    `;
+}
+// ========================= 【核心修改 - 結束】 =========================
 
 /**
  * 渲染單一持股的詳細卡片內容 (供列表模式展開使用)
@@ -14,8 +125,6 @@ function renderHoldingDetailCardContent(h) {
     const decimals = isTwStock(h.symbol) ? 0 : 2;
     const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 移除了所有與 stockNotes 和 priceClass 相關的邏輯
     return `
         <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm p-4 bg-gray-50">
             <div><p class="text-gray-500">未實現損益</p><p class="font-medium ${returnClass}">${formatNumber(h.unrealizedPLTWD, 0)} (${(h.returnRate || 0).toFixed(2)}%)</p></div>
@@ -25,16 +134,13 @@ function renderHoldingDetailCardContent(h) {
             <div><p class="text-gray-500">持股佔比</p><p class="font-medium text-gray-800">${h.portfolioPercentage.toFixed(2)}%</p></div>
         </div>
     `;
-    // ========================= 【核心修改 - 結束】 =========================
 }
 
 
 export function renderHoldingsTable(currentHoldings) {
-    // ========================= 【核心修改 - 開始】 =========================
     const { holdingsSort, mobileViewMode, activeMobileHolding } = getState();
-    // ========================= 【核心修改 - 結束】 =========================
     const container = document.getElementById('holdings-content');
-    container.innerHTML = '';
+    container.innerHTML = ''; // 清空容器
     let holdingsArray = Object.values(currentHoldings);
     
     const viewSwitcherHtml = `
@@ -53,7 +159,13 @@ export function renderHoldingsTable(currentHoldings) {
 
     if (holdingsArray.length === 0) {
         container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有持股紀錄，請新增一筆交易。</p>`;
+        // ========================= 【核心修改 - 開始】 =========================
+        // 即使沒有當前持股，也要嘗試渲染已平倉部位
+        const closedSectionHtml = renderClosedPositionsSection();
+        container.innerHTML += closedSectionHtml;
+        lucide.createIcons();
         return;
+        // ========================= 【核心修改 - 結束】 =========================
     }
 
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + h.marketValueTWD, 0);
@@ -75,9 +187,7 @@ export function renderHoldingsTable(currentHoldings) {
         const decimals = isTwStock(h.symbol) ? 0 : 2; 
         const returnClass = h.unrealizedPLTWD >= 0 ? 'text-red-600' : 'text-green-600';
         const dailyReturnClass = h.daily_pl_twd >= 0 ? 'text-red-600' : 'text-green-600';
-        // ========================= 【核心修改 - 開始】 =========================
-        const priceClass = ''; // 移除所有條件式樣式邏輯
-        // ========================= 【核心修改 - 結束】 =========================
+        const priceClass = '';
         return `
             <tr class="hover:bg-gray-100 cursor-pointer holding-row" data-symbol="${h.symbol}" ${isShort ? 'style="background-color: #f0f9ff;"' : ''}>
                 <td class="px-6 py-4 whitespace-nowrap text-base font-medium text-gray-900">
@@ -163,6 +273,31 @@ export function renderHoldingsTable(currentHoldings) {
         <div class="${mobileViewMode === 'list' ? '' : 'hidden'}">${listHtml}</div>
     `;
 
-    container.innerHTML = viewSwitcherHtml + tableHtml + mobileContent;
+    // ========================= 【核心修改 - 開始】 =========================
+    // 將所有內容組合起來，並加入事件監聽
+    const closedPositionsHtml = renderClosedPositionsSection();
+    container.innerHTML = viewSwitcherHtml + tableHtml + mobileContent + closedPositionsHtml;
     lucide.createIcons();
+
+    // 為新的 UI 元素加上事件監聽
+    const toggleButton = document.getElementById('closed-positions-toggle');
+    const listContainer = document.getElementById('closed-positions-list');
+    const chevronIcon = document.getElementById('closed-positions-chevron');
+    if (toggleButton && listContainer) {
+        toggleButton.addEventListener('click', () => {
+            listContainer.classList.toggle('hidden');
+            chevronIcon.classList.toggle('rotate-180');
+        });
+    }
+
+    document.querySelectorAll('.closed-position-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            const symbol = e.currentTarget.dataset.symbol;
+            // 如果點擊的項目已經是展開的，則收合它；否則，展開新的
+            expandedClosedSymbol = expandedClosedSymbol === symbol ? null : symbol;
+            // 觸發一次完整的重新渲染，以更新所有相關的 UI 狀態
+            renderHoldingsTable(currentHoldings);
+        });
+    });
+    // ========================= 【核心修改 - 結束】 =========================
 }
