@@ -1,9 +1,10 @@
 // =========================================================================================
-// == 通用事件處理模組 (general.events.js) v4.3 - Group Context Fix
+// == 通用事件處理模組 (general.events.js) v4.4 - Unified API Logic
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { apiRequest, executeApiAction, submitBatch } from '../api.js';
+// 【核心修改】引入 apiRequest 和 updateAppWithData
+import { apiRequest, executeApiAction, updateAppWithData } from '../api.js';
 import { stagingService } from '../staging.service.js';
 import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
 import { showNotification } from '../ui/notifications.js';
@@ -67,6 +68,10 @@ async function handleShowDetails(symbol) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】處理 Benchmark 更新，採用與群組切換一致的合併 API 呼叫模式
+ */
 async function handleUpdateBenchmark() {
     const newBenchmark = document.getElementById('benchmark-symbol-input').value.toUpperCase().trim();
     if (!newBenchmark) {
@@ -75,26 +80,53 @@ async function handleUpdateBenchmark() {
     }
 
     const stagedActions = await stagingService.getStagedActions();
+    
     if (stagedActions.length > 0) {
         const { showConfirm, hideConfirm } = await import('../ui/modals.js');
         showConfirm(
             '您有未提交的變更。更新 Benchmark 前，必須先提交所有暫存的變更。要繼續嗎？',
-            async () => {
+            async () => { // 確認回呼
                 hideConfirm();
-                const netActions = await stagingService.getNetActions();
-                await submitBatch(netActions);
-                await stagingService.clearActions();
-                await executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
-                    loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
-                    successMessage: 'Benchmark 已成功更新！'
-                });
+                const loadingOverlay = document.getElementById('loading-overlay');
+                const loadingText = document.getElementById('loading-text');
+                loadingText.textContent = `正在提交變更並更新 Benchmark 為 ${newBenchmark}...`;
+                loadingOverlay.style.display = 'flex';
+                
+                try {
+                    const netActions = await stagingService.getNetActions();
+                    
+                    // 定義提交後的下一個動作
+                    const nextAction = {
+                        type: 'UPDATE_BENCHMARK',
+                        payload: { benchmarkSymbol: newBenchmark }
+                    };
+                    
+                    // 呼叫新的合併 API
+                    const result = await apiRequest('submit_batch_and_execute', {
+                        actions: netActions,
+                        nextAction: nextAction
+                    });
+
+                    if (result.success) {
+                        await stagingService.clearActions();
+                        // 使用後端回傳的最終計算結果更新 UI
+                        await updateAppWithData(result.data, result.data.tempIdMap);
+                        showNotification('success', 'Benchmark 已成功更新！');
+                    }
+                } catch (error) {
+                    console.error("提交並更新 Benchmark 時發生錯誤:", error);
+                    showNotification('error', `操作失敗: ${error.message}`);
+                } finally {
+                    loadingOverlay.style.display = 'none';
+                }
             },
             '提交並更新 Benchmark？',
-            () => { 
+            () => { // 取消回呼
                 hideConfirm();
             }
         );
     } else {
+        // 如果暫存區是空的，則直接執行標準操作
         executeApiAction('update_benchmark', { benchmarkSymbol: newBenchmark }, {
             loadingText: `正在更新 Benchmark 為 ${newBenchmark}...`,
             successMessage: 'Benchmark 已成功更新！'
@@ -103,6 +135,7 @@ async function handleUpdateBenchmark() {
         });
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 function handleChartRangeChange(chartType, rangeType, startDate = null, endDate = null) {
