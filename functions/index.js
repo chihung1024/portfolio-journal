@@ -1,5 +1,5 @@
 // =========================================================================================
-// == GCP Cloud Function 主入口 (v6.2 - Note Feature Removed)
+// == GCP Cloud Function 主入口 (v6.3 - CJS Syntax Verified)
 // =========================================================================================
 
 const admin = require('firebase-admin');
@@ -76,10 +76,8 @@ exports.unifiedPortfolioHandler = async (req, res) => {
                 // Batch
                 case 'submit_batch':
                     return await batchHandlers.submitBatch(uid, data, res);
-                // ========================= 【核心修改 - 開始】 =========================
                 case 'submit_batch_and_execute':
                     return await batchHandlers.submitBatchAndExecute(uid, data, res);
-                // ========================= 【核心修改 - 結束】 =========================
                 
                 // Portfolio
                 case 'get_data':
