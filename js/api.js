@@ -14,6 +14,9 @@ import { updateTwrChart } from './ui/charts/twrChart.js';
 import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
@@ -132,6 +135,11 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
+    // 為平倉紀錄新增處理邏輯
+    if (portfolioData.closedPositions) {
+        newState.closedPositions = portfolioData.closedPositions;
+        newState.activeClosedPosition = null;
+    }
     
     if (portfolioData.history) {
         newState.assetDateRange = { type: 'all', start: null, end: null };
@@ -150,7 +158,9 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     renderHoldingsTable(holdingsObject);
     if (portfolioData.transactions) await renderTransactionsTable();
     if (portfolioData.splits) await renderSplitsTable();
-    if (portfolioData.groups) await loadGroups(); 
+    if (portfolioData.groups) await loadGroups();
+    // 如果數據包裡有平倉紀錄，也一併渲染
+    if (portfolioData.closedPositions) renderClosedPositionsTable();
     
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
