@@ -69,9 +69,9 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 
 /**
- * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
- * This version implements the Modified Dietz method as suggested, providing a robust
- * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
+ * [FINAL VERSION 3.1] Calculates the final state of holdings including daily profit/loss.
+ * This version corrects the date logic for FX rate lookups, ensuring that valuation dates
+ * are used instead of price dates, which fixes the divergent return curve issue.
  * @param {object} pf - The portfolio state object from the end of the calculation period.
  * @param {object} market - The market data object.
  * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
@@ -92,32 +92,40 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a));
 
             let latestPrice = 0, priceBefore = 0;
-            let latestDateStr = new Date().toISOString().split('T')[0];
-            let beforeDateStr = new Date().toISOString().split('T')[0];
+            let latestPriceDateStr = new Date().toISOString().split('T')[0];
+            let priceBeforeDateStr = new Date().toISOString().split('T')[0];
 
             if (availableDates.length > 0) {
-                latestDateStr = availableDates[0];
-                latestPrice = symbolPrices[latestDateStr];
+                latestPriceDateStr = availableDates[0];
+                latestPrice = symbolPrices[latestPriceDateStr];
                 if (availableDates.length > 1) {
-                    beforeDateStr = availableDates[1];
-                    priceBefore = symbolPrices[beforeDateStr];
+                    priceBeforeDateStr = availableDates[1];
+                    priceBefore = symbolPrices[priceBeforeDateStr];
                 } else {
-                    beforeDateStr = latestDateStr;
+                    priceBeforeDateStr = latestPriceDateStr;
                     priceBefore = latestPrice;
                 }
             }
             
-            const latestPriceDate = new Date(latestDateStr);
+            const latestPriceDate = new Date(latestPriceDateStr);
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym && toDate(e.date) > latestPriceDate);
             const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
-            const today = new Date(latestDateStr);
-            today.setUTCHours(0, 0, 0, 0);
+            // ================== 【核心修正 v3.1 - 開始】 ==================
+            // 關鍵修正：定義今日和昨日的「估值日期」，而不是依賴股價日期。
+            // 這確保我們總是抓取當前和前一天的匯率來計算市值。
+            const todayValuationDate = new Date();
+            const yesterdayValuationDate = new Date();
+            yesterdayValuationDate.setDate(todayValuationDate.getDate() - 1);
+            
+            // 找出今日的所有交易，以計算當日現金流
+            const todayStrForTx = todayValuationDate.toISOString().split('T')[0];
             const todaysTransactions = allEvts.filter(e =>
                 e.eventType === 'transaction' &&
                 e.symbol.toUpperCase() === sym &&
-                toDate(e.date).getTime() === today.getTime()
+                e.date.startsWith(todayStrForTx)
             );
+            // ================== 【核心修正 v3.1 - 結束】 ==================
 
             let dailyCashFlowTWD = 0;
             let dailyQuantityChange = 0;
@@ -135,28 +143,26 @@ function calculateFinalHoldings(pf, market, allEvts) {
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
-            // ================== 【核心修正 v3 - 開始】 ==================
-            // 準確抓取「今天」和「昨天」各自對應的匯率
-            const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
-            const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
-            // ================== 【核心修正 v3 - 結束】 ==================
+            // ================== 【核心修正 v3.1 - 開始】 ==================
+            // 使用正確的「估值日期」來獲取匯率
+            const latestFx = findFxRate(market, h.currency, todayValuationDate);
+            const beforeFx = findFxRate(market, h.currency, yesterdayValuationDate);
 
-            const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
+            // 今日收盤市值 = (今日股數) * (最新可得股價) * (今日匯率)
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
+            // 昨日收盤市值 = (昨日股數) * (昨日可得股價) * (昨日匯率)
+            const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
+            // ================== 【核心修正 v3.1 - 結束】 ==================
             
             const daily_pl_twd = endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
             const mktVal = endingMarketValueTWD;
 
-            // ================== 【採納您建議的公式進行修改】 ==================
             let daily_change_percent = 0;
             const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
 
             if (Math.abs(denominator) > 1e-9) {
-                // 公式: (當日終值 / (前日終值 + 當日現金流)) - 1
-                // 也就是: (當日損益 / (前日終值 + 當日現金流))
                 daily_change_percent = (daily_pl_twd / denominator) * 100;
             }
-            // ================== 【修改結束】 ==================
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -169,7 +175,7 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
-                daily_change_percent: daily_change_percent, // 使用最終修正後的百分比
+                daily_change_percent: daily_change_percent,
                 daily_pl_twd: daily_pl_twd
             };
         }
