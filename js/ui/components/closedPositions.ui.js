@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.3 (Final Polish: ROI & Collapse FX)
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.4 (Nested Collapse & No Scroll)
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -17,9 +17,11 @@ function calculateHoldingDays(dateStr1, dateStr2) {
 }
 
 /**
- * 渲染單筆平倉紀錄的詳細交易明細 (故事線視圖)，參照使用者提供的設計範例
+ * 渲染單筆平倉紀錄的詳細交易明細 (故事線視圖)，支援巢狀摺疊
+ * @param {object} position - 單一平倉紀錄物件
+ * @param {Set<string>} expandedSales - 一個包含所有應展開的 saleId 的 Set
  */
-function renderClosedPositionDetails(position) {
+function renderClosedPositionDetails(position, expandedSales) {
     if (!position.closedLots || position.closedLots.length === 0) {
         return '<div class="px-4 sm:px-6 py-5 bg-gray-50 border-t"><p class="text-center text-sm text-gray-500">沒有詳細的平倉批次紀錄。</p></div>';
     }
@@ -40,9 +42,13 @@ function renderClosedPositionDetails(position) {
     const sellBlocksHtml = Object.entries(lotsBySellDate).map(([sellDate, data]) => {
         const { sellTransaction, matchedBuys, totalCostBasis, totalProceeds } = data;
         const realizedPL = totalProceeds - totalCostBasis;
-        const returnRate = totalCostBasis > 0 ? (realizedPL / totalCostBasis) * 100 : 0; // 【新增】計算單筆報酬率
-        const returnClass = realizedPL >= 0 ? 'text-red-500' : 'text-green-600';
+        const returnRate = totalCostBasis > 0 ? (realizedPL / totalCostBasis) * 100 : 0;
+        const returnClass = realizedPL >= 0 ? 'text-red-500' : 'text-green-500';
         const avgHoldingDays = matchedBuys.reduce((sum, buy) => sum + (calculateHoldingDays(buy.date.split('T')[0], sellDate) * buy.usedQty), 0) / (matchedBuys.reduce((sum, buy) => sum + buy.usedQty, 0) || 1);
+        
+        // 【核心修改】為每個平倉交易產生唯一ID，並檢查它是否應被展開
+        const saleId = `${position.symbol}|${sellDate}`;
+        const isSaleExpanded = expandedSales.has(saleId);
 
         const buysHtml = matchedBuys.map(buy => `
             <div class="grid grid-cols-4 gap-4 text-sm items-center py-2.5 px-4">
@@ -55,51 +61,46 @@ function renderClosedPositionDetails(position) {
 
         return `
             <div class="mb-6 last:mb-0">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3">
+                <div class="closed-position-sale-header flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 cursor-pointer" data-sale-id="${saleId}">
                      <div class="flex items-center space-x-3">
+                        <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 ${isSaleExpanded ? 'rotate-180' : ''}"></i>
                         <span class="text-sm font-semibold text-green-800 bg-green-100 px-3 py-1 rounded-md">平倉</span>
                         <span class="text-base font-semibold text-gray-800">${sellDate}</span>
                     </div>
-                    <p class="text-sm text-gray-600 mt-2 sm:mt-0">
+                    <p class="text-sm text-gray-600 mt-2 sm:mt-0 sm:ml-auto">
                         賣出 ${formatNumber(sellTransaction.quantity, isTwStock(sellTransaction.symbol) ? 0 : 2)} 股 @ ${formatNumber(sellTransaction.price, 2)}
                     </p>
                 </div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 border border-gray-200 bg-white rounded-lg p-4">
-                    <div>
-                        <p class="text-sm text-gray-500">成本</p>
-                        <p class="font-semibold text-lg text-gray-800">${formatNumber(totalCostBasis, 0)}</p>
-                    </div>
-                    <div>
-                        <p class="text-sm text-gray-500">收入</p>
-                        <p class="font-semibold text-lg text-gray-800">${formatNumber(totalProceeds, 0)}</p>
-                    </div>
-                    <div>
-                        <p class="text-sm text-gray-500">持有天期</p>
-                        <p class="font-semibold text-lg text-gray-800">${avgHoldingDays.toFixed(0)} 天</p>
-                    </div>
-                    <div class="text-left md:text-right">
-                        <p class="text-sm text-gray-500">損益 (TWD)</p>
-                        <div class="flex items-baseline justify-start md:justify-end">
-                            <p class="font-bold text-2xl ${returnClass}">${formatNumber(realizedPL, 0)}</p>
-                            <p class="font-semibold text-base ml-2 ${returnClass}">(${formatNumber(returnRate, 2)}%)</p>
+
+                ${isSaleExpanded ? `
+                <div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 border border-gray-200 bg-white rounded-lg p-4">
+                        <div><p class="text-sm text-gray-500">成本</p><p class="font-semibold text-lg text-gray-800">${formatNumber(totalCostBasis, 0)}</p></div>
+                        <div><p class="text-sm text-gray-500">收入</p><p class="font-semibold text-lg text-gray-800">${formatNumber(totalProceeds, 0)}</p></div>
+                        <div><p class="text-sm text-gray-500">持有天期</p><p class="font-semibold text-lg text-gray-800">${avgHoldingDays.toFixed(0)} 天</p></div>
+                        <div class="text-left md:text-right">
+                            <p class="text-sm text-gray-500">損益 (TWD)</p>
+                            <div class="flex items-baseline justify-start md:justify-end">
+                                <p class="font-bold text-2xl ${returnClass}">${formatNumber(realizedPL, 0)}</p>
+                                <p class="font-semibold text-base ml-2 ${returnClass}">(${formatNumber(returnRate, 2)}%)</p>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="mt-4 border border-gray-200 rounded-lg overflow-hidden">
-                    <div class="grid grid-cols-4 gap-4 text-sm font-semibold text-gray-500 bg-gray-50 py-2 px-4 border-b border-gray-200">
-                        <div>買入日期</div>
-                        <div class="text-right">配對股數</div>
-                        <div class="text-right">成本價</div>
-                        <div class="text-right">持有天期</div>
+                    <div class="mt-4 border border-gray-200 rounded-lg overflow-hidden">
+                        <div class="grid grid-cols-4 gap-4 text-sm font-semibold text-gray-500 bg-gray-50 py-2 px-4 border-b border-gray-200">
+                            <div>買入日期</div><div class="text-right">配對股數</div><div class="text-right">成本價</div><div class="text-right">持有天期</div>
+                        </div>
+                        <div>${buysHtml}</div>
                     </div>
-                    <div class="max-h-48 overflow-y-auto no-scrollbar">${buysHtml}</div>
                 </div>
+                ` : ''}
             </div>
         `;
     }).join('');
 
     return `<div class="px-4 sm:px-6 py-5 bg-gray-50/70 border-t border-gray-200">${sellBlocksHtml}</div>`;
 }
+
 
 /**
  * 渲染整個平倉紀錄的主列表
@@ -125,30 +126,22 @@ export function renderClosedPositionsTable() {
         </thead>`;
     
     const tableBody = closedPositions.map(pos => {
-        const isExpanded = activeClosedPosition === pos.symbol;
-        const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-600';
+        const isSymbolExpanded = activeClosedPosition && activeClosedPosition.symbol === pos.symbol;
+        const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-500';
         const returnRate = pos.totalCostBasis > 0 ? (pos.totalRealizedPL / pos.totalCostBasis) * 100 : 0;
-        
-        // 【核心修改】增加展開時的背景色，強化分組感
-        const rowClass = isExpanded ? 'bg-gray-50 hover:bg-gray-100' : 'hover:bg-gray-50';
+        const rowClass = isSymbolExpanded ? 'bg-gray-50 hover:bg-gray-100' : 'hover:bg-gray-50';
 
         return `
             <tbody class="border-b border-gray-200 last:border-b-0">
                 <tr class="closed-position-row cursor-pointer ${rowClass}" data-symbol="${pos.symbol}">
                     <td class="px-3 py-4 whitespace-nowrap text-center">
-                        <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}"></i>
+                        <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 ${isSymbolExpanded ? 'rotate-180' : ''}"></i>
                     </td>
-                    <td class="px-4 py-4 whitespace-nowrap">
-                        <div class="font-bold text-base text-indigo-700">${pos.symbol}</div>
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-right">
-                        <div class="font-semibold text-xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</div>
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-right">
-                        <div class="font-semibold text-xl ${returnClass}">${formatNumber(returnRate, 2)}%</div>
-                    </td>
+                    <td class="px-4 py-4 whitespace-nowrap"><div class="font-bold text-base text-indigo-700">${pos.symbol}</div></td>
+                    <td class="px-4 py-4 whitespace-nowrap text-right"><div class="font-semibold text-xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</div></td>
+                    <td class="px-4 py-4 whitespace-nowrap text-right"><div class="font-semibold text-xl ${returnClass}">${formatNumber(returnRate, 2)}%</div></td>
                 </tr>
-                ${isExpanded ? `<tr><td colspan="4" class="p-0 bg-white">${renderClosedPositionDetails(pos)}</td></tr>` : ''}
+                ${isSymbolExpanded ? `<tr><td colspan="4" class="p-0 bg-white">${renderClosedPositionDetails(pos, activeClosedPosition.expandedSales)}</td></tr>` : ''}
             </tbody>`;
     }).join('');
 
