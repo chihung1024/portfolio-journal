@@ -1,6 +1,5 @@
 // =========================================================================================
-// == 交易紀錄 UI 模組 (transactions.ui.js) v4.0 (Enhanced UX)
-// == 職責：處理交易紀錄分頁的 UI 渲染，包含強化的禁用狀態與智慧型分頁。
+// == 交易紀錄 UI 模組 (transactions.ui.js) v3.2 - Robust Button Disabling
 // =========================================================================================
 
 import { getState } from '../../state.js';
@@ -8,7 +7,7 @@ import { stagingService } from '../../staging.service.js';
 import { isTwStock, formatNumber, findFxRateForFrontend } from '../utils.js';
 
 /**
- * 【重構】產生智慧型自適應分頁控制項的 HTML
+ * 產生智慧型自適應分頁控制項的 HTML
  */
 function renderPaginationControls(totalItems, itemsPerPage, currentPage) {
     const totalPages = Math.ceil(totalItems / itemsPerPage);
@@ -16,29 +15,25 @@ function renderPaginationControls(totalItems, itemsPerPage, currentPage) {
 
     let paginationHtml = '<div class="flex flex-wrap justify-center items-center gap-2 mt-4 transaction-pagination">';
     
-    // 上一頁按鈕
     paginationHtml += `<button data-page="${currentPage - 1}" class="page-btn px-3 py-1 rounded-md text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : ''}" ${currentPage === 1 ? 'disabled' : ''}>上一頁</button>`;
 
-    const pageNumbers = [];
-    const pagesToShow = new Set([1, totalPages, currentPage, currentPage - 1, currentPage + 2, currentPage + 1, currentPage - 2]);
-
+    let lastPageRendered = 0;
     for (let i = 1; i <= totalPages; i++) {
-        if (pagesToShow.has(i) && i > 0 && i <= totalPages) {
-            pageNumbers.push(i);
+        const isFirstPage = i === 1;
+        const isLastPage = i === totalPages;
+        const isInContext = Math.abs(i - currentPage) <= 1;
+
+        if (isFirstPage || isLastPage || isInContext) {
+            if (i > lastPageRendered + 1) {
+                paginationHtml += `<span class="px-3 py-1 text-sm text-gray-500">...</span>`;
+            }
+            
+            const isActive = i === currentPage;
+            paginationHtml += `<button data-page="${i}" class="page-btn px-3 py-1 rounded-md text-sm font-medium border ${isActive ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}">${i}</button>`;
+            lastPageRendered = i;
         }
-    }
-    
-    let lastPage = 0;
-    for(const page of [...new Set(pageNumbers)].sort((a,b) => a-b)) {
-        if (lastPage !== 0 && page > lastPage + 1) {
-             paginationHtml += `<span class="px-3 py-1 text-sm text-gray-500">...</span>`;
-        }
-        const isActive = page === currentPage;
-        paginationHtml += `<button data-page="${page}" class="page-btn px-3 py-1 rounded-md text-sm font-medium border ${isActive ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}">${page}</button>`;
-        lastPage = page;
     }
 
-    // 下一頁按鈕
     paginationHtml += `<button data-page="${currentPage + 1}" class="page-btn px-3 py-1 rounded-md text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 ${currentPage === totalPages ? 'opacity-50 cursor-not-allowed' : ''}" ${currentPage === totalPages ? 'disabled' : ''}>下一頁</button>`;
     paginationHtml += '</div>';
     return paginationHtml;
@@ -70,6 +65,7 @@ export async function renderTransactionsTable() {
             if (existingIndex > -1) {
                 combinedTransactions[existingIndex] = { ...combinedTransactions[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
             } else {
+                // 如果是對一個僅存在於暫存區的項目進行更新，也將其加入列表
                 combinedTransactions.push({ ...action.payload, _staging_status: 'CREATE' });
             }
         } else if (action.type === 'DELETE') {
@@ -101,13 +97,10 @@ export async function renderTransactionsTable() {
         else if (t._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
         
         // ========================= 【核心修改 - 開始】 =========================
-        // 強化禁用狀態的視覺呈現
+        // 最可靠的判斷方式：如果 ID 是臨時の，代表它在後端不存在，因此禁用群組編輯。
         const isTemporary = String(t.id).startsWith('temp_');
         const membershipBtnDisabled = isTemporary ? 'disabled' : '';
-        // 當按鈕被禁用時，套用新的 .btn-disabled class
-        const membershipBtnClass = isTemporary 
-            ? 'btn-disabled' 
-            : 'text-teal-600 hover:text-teal-900';
+        const membershipBtnClass = isTemporary ? 'text-gray-400 cursor-not-allowed' : 'text-teal-600 hover:text-teal-900';
         // ========================= 【核心修改 - 結束】 =========================
 
         return `<tr class="${stagingClass}">
