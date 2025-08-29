@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.2 (Polished & Finalized Layout)
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.3 (Final Polish: ROI & Collapse FX)
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -40,6 +40,7 @@ function renderClosedPositionDetails(position) {
     const sellBlocksHtml = Object.entries(lotsBySellDate).map(([sellDate, data]) => {
         const { sellTransaction, matchedBuys, totalCostBasis, totalProceeds } = data;
         const realizedPL = totalProceeds - totalCostBasis;
+        const returnRate = totalCostBasis > 0 ? (realizedPL / totalCostBasis) * 100 : 0; // 【新增】計算單筆報酬率
         const returnClass = realizedPL >= 0 ? 'text-red-500' : 'text-green-600';
         const avgHoldingDays = matchedBuys.reduce((sum, buy) => sum + (calculateHoldingDays(buy.date.split('T')[0], sellDate) * buy.usedQty), 0) / (matchedBuys.reduce((sum, buy) => sum + buy.usedQty, 0) || 1);
 
@@ -63,7 +64,6 @@ function renderClosedPositionDetails(position) {
                         賣出 ${formatNumber(sellTransaction.quantity, isTwStock(sellTransaction.symbol) ? 0 : 2)} 股 @ ${formatNumber(sellTransaction.price, 2)}
                     </p>
                 </div>
-
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 border border-gray-200 bg-white rounded-lg p-4">
                     <div>
                         <p class="text-sm text-gray-500">成本</p>
@@ -79,10 +79,12 @@ function renderClosedPositionDetails(position) {
                     </div>
                     <div class="text-left md:text-right">
                         <p class="text-sm text-gray-500">損益 (TWD)</p>
-                        <p class="font-bold text-2xl ${returnClass}">${formatNumber(realizedPL, 0)}</p>
+                        <div class="flex items-baseline justify-start md:justify-end">
+                            <p class="font-bold text-2xl ${returnClass}">${formatNumber(realizedPL, 0)}</p>
+                            <p class="font-semibold text-base ml-2 ${returnClass}">(${formatNumber(returnRate, 2)}%)</p>
+                        </div>
                     </div>
                 </div>
-
                 <div class="mt-4 border border-gray-200 rounded-lg overflow-hidden">
                     <div class="grid grid-cols-4 gap-4 text-sm font-semibold text-gray-500 bg-gray-50 py-2 px-4 border-b border-gray-200">
                         <div>買入日期</div>
@@ -127,9 +129,12 @@ export function renderClosedPositionsTable() {
         const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-600';
         const returnRate = pos.totalCostBasis > 0 ? (pos.totalRealizedPL / pos.totalCostBasis) * 100 : 0;
         
+        // 【核心修改】增加展開時的背景色，強化分組感
+        const rowClass = isExpanded ? 'bg-gray-50 hover:bg-gray-100' : 'hover:bg-gray-50';
+
         return `
-            <tbody class="bg-white border-b border-gray-200 last:border-b-0">
-                <tr class="closed-position-row cursor-pointer hover:bg-gray-50" data-symbol="${pos.symbol}">
+            <tbody class="border-b border-gray-200 last:border-b-0">
+                <tr class="closed-position-row cursor-pointer ${rowClass}" data-symbol="${pos.symbol}">
                     <td class="px-3 py-4 whitespace-nowrap text-center">
                         <i data-lucide="chevron-down" class="w-5 h-5 text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}"></i>
                     </td>
@@ -143,7 +148,7 @@ export function renderClosedPositionsTable() {
                         <div class="font-semibold text-xl ${returnClass}">${formatNumber(returnRate, 2)}%</div>
                     </td>
                 </tr>
-                ${isExpanded ? `<tr><td colspan="4" class="p-0">${renderClosedPositionDetails(pos)}</td></tr>` : ''}
+                ${isExpanded ? `<tr><td colspan="4" class="p-0 bg-white">${renderClosedPositionDetails(pos)}</td></tr>` : ''}
             </tbody>`;
     }).join('');
 
