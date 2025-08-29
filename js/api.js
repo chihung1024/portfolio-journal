@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.5 (Async UI Update)
+// == API 通訊模組 (api.js) v6.0 (Optimistic Update Refactor)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -14,15 +14,14 @@ import { updateTwrChart } from './ui/charts/twrChart.js';
 import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
-// ========================= 【核心修改 - 結束】 =========================
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 
+
 /**
- * 統一的後端 API 請求函式
+ * 統一的後端 API 請求函式 (底層)
  */
 export async function apiRequest(action, data) {
     const auth = getAuth();
@@ -58,20 +57,26 @@ export async function apiRequest(action, data) {
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+
 /**
- * 提交暫存區的批次操作 - 只負責發送請求並回傳結果
+ * 【新】提交暫存區的批次操作 - 只負責發送請求並回傳結果，不等待完整計算。
+ * @param {Array} actions - 要提交的淨操作陣列
+ * @returns {Promise<object>} - 後端對請求的初步回應
  */
-export async function submitBatch(actions) {
+export async function submitBatchActions(actions) {
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingTextElement = document.getElementById('loading-text');
-    loadingTextElement.textContent = '正在提交所有變更並同步數據...';
+    loadingTextElement.textContent = '正在提交變更...';
     loadingOverlay.style.display = 'flex';
 
     try {
-        const result = await apiRequest('submit_batch', { actions });
+        // 使用一個新的 API action 'submit_batch_async'，它會立即回傳，並在背景執行計算
+        const result = await apiRequest('submit_batch_async', { actions });
+        
         if (result.success) {
-            showNotification('success', '所有變更已成功提交並同步！');
-            return result;
+            showNotification('success', '變更已成功提交，系統正在背景為您更新數據。');
+            return result; // result 可能包含 tempIdMap
         } else {
             throw new Error(result.message || '批次提交時發生未知錯誤');
         }
@@ -79,14 +84,45 @@ export async function submitBatch(actions) {
         showNotification('error', `提交失敗: ${error.message}`);
         throw error;
     } finally {
-        loadingOverlay.style.display = 'none';
-        loadingTextElement.textContent = '正在從雲端同步資料...';
+        // 請求發出後很快就隱藏 loading
+        setTimeout(() => {
+            loadingOverlay.style.display = 'none';
+            loadingTextElement.textContent = '正在從雲端同步資料...';
+        }, 500);
     }
 }
 
+/**
+ * 【新】獲取全局最新數據並應用於整個 App
+ * @param {boolean} showLoading - 是否顯示全局載入遮罩
+ */
+export async function fetchAndApplyGlobalData(showLoading = true) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    try {
+        if (showLoading) {
+            loadingOverlay.style.display = 'flex';
+        }
+        const result = await apiRequest('get_data', {});
+        if (result.success) {
+            await updateAppWithData(result.data);
+            console.log("已從伺服器同步並應用最新權威數據。");
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (error) {
+        console.error("同步伺服器權威數據失敗:", error);
+        showNotification('error', '無法從伺服器同步最新數據。');
+    } finally {
+        if (showLoading) {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+}
+// ========================= 【核心修改 - 結束】 =========================
+
 
 /**
- * 高階 API 執行器 (主要用於非暫存區的單一操作)
+ * 高階 API 執行器 (主要用於非暫存區的單一操作，這些操作通常需要同步等待)
  */
 export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -98,6 +134,7 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
         const result = await apiRequest(action, payload);
         
         if (shouldRefreshData) {
+            // 在同步操作成功後，依然使用統一的 get_data 獲取完整數據來刷新
             const fullData = await apiRequest('get_data', {});
             await updateAppWithData(fullData.data);
         }
@@ -117,9 +154,8 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
+ * 統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
  */
 export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (!portfolioData) {
@@ -135,7 +171,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
-    // 為平倉紀錄新增處理邏輯
     if (portfolioData.closedPositions) {
         newState.closedPositions = portfolioData.closedPositions;
         newState.activeClosedPosition = null;
@@ -159,7 +194,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.transactions) await renderTransactionsTable();
     if (portfolioData.splits) await renderSplitsTable();
     if (portfolioData.groups) await loadGroups();
-    // 如果數據包裡有平倉紀錄，也一併渲染
     if (portfolioData.closedPositions) renderClosedPositionsTable();
     
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
@@ -195,7 +229,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -207,17 +240,9 @@ export async function loadPortfolioData() {
         console.log("未登入，無法載入資料。");
         return;
     }
-    document.getElementById('loading-overlay').style.display = 'flex';
-    try {
-        const result = await apiRequest('get_data', {});
-        await updateAppWithData(result.data);
-
-    } catch (error) {
-        console.error('Failed to load portfolio data:', error);
-        showNotification('error', `讀取資料失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-    }
+    
+    // 使用新的統一函式
+    await fetchAndApplyGlobalData(true);
 }
 
 /**
