@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.7 (Final Polish: Font Hierarchy)
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.8 (Final Font Hierarchy Fix)
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -116,7 +116,7 @@ export function renderClosedPositionsTable() {
                         <div class="text-right">
                             {/* 【核心修改】總損益字體放大為 text-2xl */}
                             <p class="font-semibold text-2xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</p>
-                            <p class="text-sm font-medium ${returnClass}">${formatNumber(returnRate, 2)}%</p>
+                            <p class="font-medium text-base ${returnClass}">${formatNumber(returnRate, 2)}%</p>
                         </div>
                     </div>
                 </div>
