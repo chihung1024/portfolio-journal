@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.1.0 - Note Feature Removed
+// == 狀態管理模組 (state.js) v4.2.0 - Nested Collapse State
 // =========================================================================================
 
 // 應用程式的核心狀態
@@ -19,7 +19,7 @@ let state = {
 
     isSyncing: false,
 
-    // 【新增】用於引導式流程的暫存數據
+    // 用於引導式流程的暫存數據
     tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
     tempMembershipEdit: null, // 儲存 { txId }
 
@@ -30,7 +30,11 @@ let state = {
     // 平倉紀錄相關狀態
     closedPositions: [],
     // ========================= 【核心修改 - 開始】 =========================
-    activeClosedPosition: null, // 追蹤當前展開的平倉紀錄 symbol
+    // 升級資料結構以支援巢狀摺疊。
+    // null: 全部收合
+    // { symbol: 'QQQ', expandedSales: new Set() }: QQQ 已展開，但其下的平倉交易全部收合
+    // { symbol: 'QQQ', expandedSales: new Set(['2025-04-23']) }: QQQ 已展開，且 4/23 的平倉交易也已展開
+    activeClosedPosition: null,
     // ========================= 【核心修改 - 結束】 =========================
 
 
