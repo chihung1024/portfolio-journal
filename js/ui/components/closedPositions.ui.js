@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.6 (Final Fix: Logic & Symmetric Layout)
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.7 (Final Polish: Font Hierarchy)
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -7,10 +7,17 @@ import { getState } from '../../state.js';
 import { formatNumber, isTwStock } from '../utils.js';
 
 /**
+ * 輔助函式：計算兩個日期之間的天數差異
+ */
+function calculateHoldingDays(dateStr1, dateStr2) {
+    const date1 = new Date(dateStr1);
+    const date2 = new Date(dateStr2);
+    const differenceInTime = date2.getTime() - date1.getTime();
+    return Math.round(differenceInTime / (1000 * 3600 * 24));
+}
+
+/**
  * 渲染單筆平倉紀錄的詳細交易明細 (故事線視圖)，修正了數據篩選邏輯
- * @param {object} lot - 單一的 closedLot 物件，代表一次賣出操作及其配對的買入
- * @param {string} symbol - 股票代碼
- * @returns {string} HTML string
  */
 function renderSaleLotDetails(lot, symbol) {
     const buysHtml = lot.transactions
@@ -62,11 +69,11 @@ function renderClosedPositionDetails(position, expandedSales) {
                         </div>
                     </div>
                     <div class="text-right">
+                        {/* 【核心修改】展開細節的損益字體調整為 text-xl */}
                         <p class="font-bold text-xl ${returnClass}">${formatNumber(lot.realizedPL, 0)}</p>
                         <p class="font-semibold text-base ${returnClass}">(${formatNumber(returnRate, 2)}%)</p>
                     </div>
                 </div>
-
                 ${isSaleExpanded ? `
                 <div class="pt-2 pb-1 pl-6">
                     ${renderSaleLotDetails(lot, position.symbol)}
@@ -78,6 +85,7 @@ function renderClosedPositionDetails(position, expandedSales) {
 
     return `<div class="px-2 sm:px-4 py-4 bg-gray-50/70 border-t border-gray-200">${sellBlocksHtml}</div>`;
 }
+
 
 /**
  * 渲染整個平倉紀錄的主列表
@@ -106,7 +114,8 @@ export function renderClosedPositionsTable() {
                            <h3 class="font-bold text-xl text-indigo-700">${pos.symbol}</h3>
                         </div>
                         <div class="text-right">
-                            <p class="font-semibold text-xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</p>
+                            {/* 【核心修改】總損益字體放大為 text-2xl */}
+                            <p class="font-semibold text-2xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</p>
                             <p class="text-sm font-medium ${returnClass}">${formatNumber(returnRate, 2)}%</p>
                         </div>
                     </div>
@@ -115,7 +124,6 @@ export function renderClosedPositionsTable() {
             </div>`;
     }).join('');
 
-    // 【核心修正】行動版與桌面版使用同一套卡片佈局，達到一致性體驗
     container.innerHTML = `<div class="space-y-4 p-2">${mainContent}</div>`;
     lucide.createIcons();
 }
