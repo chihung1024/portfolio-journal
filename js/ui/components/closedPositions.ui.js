@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.5 (Mobile-First Responsive Overhaul)
+// == 平倉紀錄 UI 模組 (closedPositions.ui.js) - v2.6 (Ultimate Mobile Responsive Fix)
 // == 職責：渲染平倉紀錄頁籤的內容，包括可展開的交易明細。
 // =========================================================================================
 
@@ -17,7 +17,7 @@ function calculateHoldingDays(dateStr1, dateStr2) {
 }
 
 /**
- * 渲染單筆平倉紀錄的詳細交易明細 (故事線視圖)，支援巢狀摺疊
+ * 渲染單筆平倉紀錄的詳細交易明細 (故事線視圖)，支援巢狀摺疊與終極自適應
  */
 function renderClosedPositionDetails(position, expandedSales) {
     if (!position.closedLots || position.closedLots.length === 0) {
@@ -47,14 +47,25 @@ function renderClosedPositionDetails(position, expandedSales) {
         const saleId = `${position.symbol}|${sellDate}`;
         const isSaleExpanded = expandedSales.has(saleId);
 
+        // ========================= 【核心修改 - 開始】 =========================
+        // 徹底重構「買入紀錄」的渲染邏輯，使其在行動裝置上堆疊顯示，在桌面端網格顯示
         const buysHtml = matchedBuys.map(buy => `
-            <div class="grid grid-cols-4 gap-4 text-sm items-center py-2.5 px-4">
+            <div class="hidden sm:grid grid-cols-4 gap-4 text-sm items-center py-2.5 px-4">
                 <div class="text-gray-700">${buy.date.split('T')[0]}</div>
                 <div class="text-right font-mono text-gray-800">${formatNumber(buy.usedQty, isTwStock(buy.symbol) ? 0 : 4)}</div>
                 <div class="text-right font-mono text-gray-800">${formatNumber(buy.price, 2)}</div>
                 <div class="text-right text-gray-700">${calculateHoldingDays(buy.date.split('T')[0], sellDate)} 天</div>
             </div>
+            <div class="sm:hidden p-3 text-sm">
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                    <div><p class="text-xs text-gray-500">買入日期</p><p class="font-medium text-gray-800">${buy.date.split('T')[0]}</p></div>
+                    <div><p class="text-xs text-gray-500">持有天期</p><p class="font-medium text-gray-800">${calculateHoldingDays(buy.date.split('T')[0], sellDate)} 天</p></div>
+                    <div><p class="text-xs text-gray-500">配對股數</p><p class="font-mono font-medium text-gray-800">${formatNumber(buy.usedQty, isTwStock(buy.symbol) ? 0 : 4)}</p></div>
+                    <div><p class="text-xs text-gray-500">成本價</p><p class="font-mono font-medium text-gray-800">${formatNumber(buy.price, 2)}</p></div>
+                </div>
+            </div>
         `).join('<hr class="border-gray-100">');
+        // ========================= 【核心修改 - 結束】 =========================
 
         return `
             <div class="mb-6 last:mb-0">
@@ -70,7 +81,7 @@ function renderClosedPositionDetails(position, expandedSales) {
                 </div>
 
                 ${isSaleExpanded ? `
-                <div class="pl-8 sm:pl-0">
+                <div class="sm:pl-8">
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 border border-gray-200 bg-white rounded-lg p-4">
                         <div><p class="text-sm text-gray-500">成本</p><p class="font-semibold text-lg text-gray-800">${formatNumber(totalCostBasis, 0)}</p></div>
                         <div><p class="text-sm text-gray-500">收入</p><p class="font-semibold text-lg text-gray-800">${formatNumber(totalProceeds, 0)}</p></div>
@@ -84,7 +95,7 @@ function renderClosedPositionDetails(position, expandedSales) {
                         </div>
                     </div>
                     <div class="mt-4 border border-gray-200 rounded-lg overflow-hidden">
-                        <div class="grid grid-cols-4 gap-4 text-sm font-semibold text-gray-500 bg-gray-50 py-2 px-4 border-b border-gray-200">
+                        <div class="hidden sm:grid grid-cols-4 gap-4 text-sm font-semibold text-gray-500 bg-gray-50 py-2 px-4 border-b border-gray-200">
                             <div>買入日期</div><div class="text-right">配對股數</div><div class="text-right">成本價</div><div class="text-right">持有天期</div>
                         </div>
                         <div>${buysHtml}</div>
@@ -95,20 +106,29 @@ function renderClosedPositionDetails(position, expandedSales) {
         `;
     }).join('');
 
-    return `<div class="px-4 sm:px-6 py-5 bg-gray-50/70 border-t border-gray-200">${sellBlocksHtml}</div>`;
+    return `<div class="px-2 sm:px-6 py-5 bg-gray-50/70 border-t border-gray-200">${sellBlocksHtml}</div>`;
 }
 
 /**
- * 渲染整個平倉紀錄的主列表 (桌面版使用 Table)
+ * 渲染整個平倉紀錄的主列表
  */
-function renderDesktopTable(closedPositions, activeClosedPosition) {
+export function renderClosedPositionsTable() {
+    const { closedPositions, activeClosedPosition } = getState();
+    const container = document.getElementById('closed-positions-tab');
+    if (!container) return;
+
+    if (!closedPositions || closedPositions.length === 0) {
+        container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有已平倉的股票紀錄。</p>`;
+        return;
+    }
+
     const tableHeader = `<thead class="bg-gray-50"><tr><th class="w-12 px-3 py-3 text-left text-xs font-medium text-gray-500"></th><th class="px-4 py-3 text-left text-sm font-medium text-gray-600 tracking-wider">代碼</th><th class="px-4 py-3 text-right text-sm font-medium text-gray-600 tracking-wider">總已實現損益 (TWD)</th><th class="px-4 py-3 text-right text-sm font-medium text-gray-600 tracking-wider">報酬率</th></tr></thead>`;
     
-    const tableBody = closedPositions.map(pos => {
+    const desktopTableBody = closedPositions.map(pos => {
         const isSymbolExpanded = activeClosedPosition && activeClosedPosition.symbol === pos.symbol;
-        const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-600';
+        const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-500';
         const returnRate = pos.totalCostBasis > 0 ? (pos.totalRealizedPL / pos.totalCostBasis) * 100 : 0;
-        const rowClass = isSymbolExpanded ? 'bg-gray-50 hover:bg-gray-100' : 'hover:bg-gray-50';
+        const rowClass = isSymbolExpanded ? 'bg-indigo-50 hover:bg-indigo-100' : 'hover:bg-gray-50';
 
         return `
             <tbody class="border-b border-gray-200 last:border-b-0">
@@ -122,17 +142,7 @@ function renderDesktopTable(closedPositions, activeClosedPosition) {
             </tbody>`;
     }).join('');
 
-    return `<table class="min-w-full">
-                ${tableHeader}
-                ${tableBody}
-            </table>`;
-}
-
-/**
- * 渲染整個平倉紀錄的主列表 (行動裝置版使用 Card)
- */
-function renderMobileCards(closedPositions, activeClosedPosition) {
-    return closedPositions.map(pos => {
+    const mobileCards = closedPositions.map(pos => {
         const isSymbolExpanded = activeClosedPosition && activeClosedPosition.symbol === pos.symbol;
         const returnClass = pos.totalRealizedPL >= 0 ? 'text-red-500' : 'text-green-500';
         const returnRate = pos.totalCostBasis > 0 ? (pos.totalRealizedPL / pos.totalCostBasis) * 100 : 0;
@@ -153,29 +163,17 @@ function renderMobileCards(closedPositions, activeClosedPosition) {
                 ${isSymbolExpanded ? renderClosedPositionDetails(pos, activeClosedPosition.expandedSales) : ''}
             </div>`;
     }).join('');
-}
-
-
-/**
- * 渲染整個平倉紀錄表格
- */
-export function renderClosedPositionsTable() {
-    const { closedPositions, activeClosedPosition } = getState();
-    const container = document.getElementById('closed-positions-tab');
-    if (!container) return;
-
-    if (!closedPositions || closedPositions.length === 0) {
-        container.innerHTML = `<p class="text-center py-10 text-gray-500">沒有已平倉的股票紀錄。</p>`;
-        return;
-    }
 
     container.innerHTML = `
         <div class="overflow-x-auto">
             <div class="hidden sm:block">
-                ${renderDesktopTable(closedPositions, activeClosedPosition)}
+                <table class="min-w-full">
+                    ${tableHeader}
+                    ${desktopTableBody}
+                </table>
             </div>
             <div class="sm:hidden space-y-4 p-2">
-                ${renderMobileCards(closedPositions, activeClosedPosition)}
+                ${mobileCards}
             </div>
         </div>`;
 
