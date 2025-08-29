@@ -1,10 +1,10 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
+// == 暫存區事件處理模組 (staging.events.js) - v3.0 (Optimistic Update)
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
-// 【核心修改】引入 submitBatch 和 updateAppWithData
-import { submitBatch, updateAppWithData } from '../api.js';
+// 【核心修改】引入新的 submitBatchActions API
+import { submitBatchActions } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
@@ -19,6 +19,7 @@ async function refreshCurrentView() {
     const activeTab = document.querySelector('.tab-content:not(.hidden)');
     if (!activeTab) return;
 
+    // 短暫延遲確保 DOM 更新
     await new Promise(resolve => setTimeout(resolve, 50));
 
     switch (activeTab.id) {
@@ -34,6 +35,11 @@ async function refreshCurrentView() {
             break;
         case 'groups-tab':
             await renderGroupsTab();
+            break;
+        // 預設情況下，也刷新持股列表，因為任何交易都可能影響它
+        default:
+            const { holdings } = getState();
+            await renderHoldingsTable(holdings);
             break;
     }
 }
@@ -104,8 +110,9 @@ async function renderStagingModal() {
     lucide.createIcons();
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 處理提交所有暫存操作的完整流程
+ * 【重構】處理提交所有暫存操作的完整流程，採用樂觀更新策略
  */
 async function submitAllActions() {
     const { closeModal } = await import('../ui/modals.js');
@@ -118,21 +125,28 @@ async function submitAllActions() {
             return;
         }
         
-        const result = await submitBatch(netActions);
+        // 1. 呼叫新的非阻塞 API
+        const result = await submitBatchActions(netActions);
         
         if (result.success) {
+            // 2. API 請求成功後，立即清空本地暫存區
             await stagingService.clearActions();
             
-            // ========================= 【核心修改 - 開始】 =========================
-            // 嚴格等待 UI 更新完成後，才結束整個函式
-            await updateAppWithData(result.data, result.data.tempIdMap);
-            // ========================= 【核心修改 - 結束】 =========================
+            // 3. 立即根據當前的前端狀態刷新 UI (樂觀更新)
+            // 這會讓使用者感覺操作已瞬間完成
+            await refreshCurrentView();
+            
+            // 4. (可選) 後續可以加入一個監聽機制，等待後端真正完成計算後，
+            //    再調用 fetchAndApplyGlobalData() 來同步最終的權威數據，
+            //    但對於使用者體感，當前的立即刷新已經是巨大提升。
         }
 
     } catch (error) {
         console.error("提交暫存區時發生最終錯誤:", error);
+        // 錯誤已在 api.js 中顯示，此處僅記錄日誌
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
