@@ -18,74 +18,10 @@
         .chart-range-btn.active { background-color: #4f46e5; color: white; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        .bg-staging-create { background-color: #e6fffa; }
-        .bg-staging-update { background-color: #feffeb; }
-        .bg-staging-delete { background-color: #fff5f5; text-decoration: line-through; }
-
-        /* ========================= 【核心修改 - 開始】 ========================= */
-        /* 通用禁用按鈕樣式 */
-        .btn-disabled {
-            background-color: #e5e7eb; /* 淺灰色 */
-            color: #9ca3af; /* 深灰色文字 */
-            opacity: 0.7;
-            cursor: not-allowed;
-            pointer-events: none; /* 徹底禁止點擊 */
-        }
-        .btn-disabled:hover {
-            background-color: #e5e7eb; /* 懸停時不變色 */
-        }
-        
-        /* 成本線視覺化樣式 */
-        .cost-basis-container {
-            position: relative;
-            height: 2.5rem; /* 給予容器足夠的高度 */
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-        .cost-basis-container::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 10%; /* 線條不佔滿整個儲存格 */
-            right: 10%;
-            height: 2px; /* 線條粗細 */
-            background-color: #d1d5db; /* 灰色 */
-            transform: translateY(-50%);
-        }
-        .price-above-cost, .price-below-cost {
-            position: absolute;
-            width: 100%;
-            transition: transform 0.3s ease-out;
-        }
-        .price-above-cost {
-            transform: translateY(calc(-50% + var(--price-offset, 0%)));
-            bottom: 50%;
-        }
-        .price-below-cost {
-            transform: translateY(calc(50% + var(--price-offset, 0%)));
-            top: 50%;
-        }
-        .cost-value {
-            font-size: 0.75rem;
-            color: #6b7280;
-            background-color: white; /* 讓成本數字背景為白色，能蓋住線條 */
-            padding: 0 4px;
-            z-index: 1; /* 確保在線上層 */
-            position: relative;
-        }
-        
-        /* 手機端列表模式展開動畫 */
-        .holding-details-container {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.4s ease-in-out;
-        }
-        .holding-details-container.expanded {
-            max-height: 500px; /* 一個足夠大的值 */
-        }
-        /* ========================= 【核心修改 - 結束】 ========================= */
+        /* 【新增】暫存區狀態顏色 */
+        .bg-staging-create { background-color: #e6fffa; } /* 淺綠 */
+        .bg-staging-update { background-color: #feffeb; } /* 淺黃 */
+        .bg-staging-delete { background-color: #fff5f5; text-decoration: line-through; } /* 淺紅 + 刪除線 */
     </style>
 </head>
 <body class="text-gray-800">
