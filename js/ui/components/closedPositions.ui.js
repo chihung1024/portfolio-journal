@@ -69,7 +69,6 @@ function renderClosedPositionDetails(position, expandedSales) {
                         </div>
                     </div>
                     <div class="text-right">
-                        {/* 【核心修改】展開細節的損益字體調整為 text-xl */}
                         <p class="font-bold text-xl ${returnClass}">${formatNumber(lot.realizedPL, 0)}</p>
                         <p class="font-semibold text-base ${returnClass}">(${formatNumber(returnRate, 2)}%)</p>
                     </div>
@@ -114,7 +113,6 @@ export function renderClosedPositionsTable() {
                            <h3 class="font-bold text-xl text-indigo-700">${pos.symbol}</h3>
                         </div>
                         <div class="text-right">
-                            {/* 【核心修改】總損益字體放大為 text-2xl */}
                             <p class="font-semibold text-2xl ${returnClass}">${formatNumber(pos.totalRealizedPL, 0)}</p>
                             <p class="font-medium text-base ${returnClass}">${formatNumber(returnRate, 2)}%</p>
                         </div>
