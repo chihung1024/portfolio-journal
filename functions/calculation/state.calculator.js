@@ -67,13 +67,7 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
         if (!state[sym]) {
             state[sym] = { lots: [], currency: e.currency || "USD" };
         }
-        // ========================= 【核心修正 - 開始】 =========================
-        // 關鍵修正：只有在事件本身帶有 currency 屬性時才更新。
-        // 這可以防止像 'split' 這種沒有 currency 的事件，錯誤地將已設定的幣別覆寫為 undefined。
-        if (e.currency) {
-            state[sym].currency = e.currency;
-        }
-        // ========================= 【核心修正 - 結束】 =========================
+        state[sym].currency = e.currency;
 
         if (e.eventType === 'transaction') {
             const fx = findFxRate(market, e.currency, toDate(e.date));
