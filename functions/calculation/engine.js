@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.0 - Purity Refined)
+// == 檔案：functions/calculation/engine.js (v2.1 - Net Profit Unification)
 // == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
@@ -30,21 +30,16 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         };
     }
     
-    // ========================= 【核心修正 - 開始】 =========================
-    // 步驟 1: 建立一個只包含當前計算範圍內股票代碼的 Set，以便高效查詢。
     const symbolsInScope = new Set(txs.map(t => t.symbol.toUpperCase()));
 
-    // 步驟 2: 根據範圍內的股票代碼，過濾拆股和股利事件，確保數據純淨。
     const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
     const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
-    // ========================= 【核心修正 - 結束】 =========================
 
 
     // 確保計算所需的市場數據都存在
     await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
     const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
-    // 【修改】將過濾後的、乾淨的數據傳遞下去
     const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
     if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
 
@@ -75,15 +70,37 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
     const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(fullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
     
-    // 呼叫核心指標計算，它現在會回傳包含完整當日損益的持股數據
     const portfolioResult = metrics.calculateCoreMetrics(evts, market);
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 採用新的、基於每日損益累加的淨利歷史計算方法
     const netProfitHistory = {};
-    let cumulativeCashflow = 0;
-    Object.keys(fullHistory).sort().forEach(dateStr => {
-        cumulativeCashflow += (dailyCashflows[dateStr] || 0);
-        netProfitHistory[dateStr] = fullHistory[dateStr] - cumulativeCashflow;
-    });
+    let cumulativeNetProfit = 0;
+    // 確保從第一筆交易日開始計算
+    const sortedDates = Object.keys(fullHistory).sort();
+    
+    if (sortedDates.length > 0) {
+        // 找到計算範圍內的第一個日期，並從前一天的淨利開始累加 (通常是0)
+        const firstDateInScope = toDate(sortedDates[0]);
+        const dayBeforeFirst = new Date(firstDateInScope);
+        dayBeforeFirst.setDate(dayBeforeFirst.getDate() - 1);
+        
+        // 嘗試從舊歷史中獲取基線淨利，若無則為 0
+        cumulativeNetProfit = existingHistory ? (existingHistory[dayBeforeFirst.toISOString().split('T')[0]] || 0) : 0;
+    
+        for (const dateStr of sortedDates) {
+            const today = toDate(dateStr);
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+
+            // 調用新的 calculateDailyPL 函式
+            const dailyPL = metrics.calculateDailyPL(today, yesterday, evts, market);
+            cumulativeNetProfit += dailyPL;
+            netProfitHistory[dateStr] = cumulativeNetProfit;
+        }
+    }
+    // ========================= 【核心修改 - 結束】 =========================
+
 
     const { holdingsToUpdate } = portfolioResult.holdings;
     
@@ -101,8 +118,8 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         twrHistory,
         benchmarkHistory,
         netProfitHistory,
-        evts, // 回傳 evts 給快照使用
-        market // 【修正】將準備好的 market 物件一併回傳
+        evts, 
+        market 
     };
 }
 
