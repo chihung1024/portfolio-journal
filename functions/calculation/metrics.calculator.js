@@ -69,9 +69,9 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 
 /**
- * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
- * This version implements the Modified Dietz method as suggested, providing a robust
- * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
+ * [FINAL VERSION 4.0] Calculates the final state of holdings including daily profit/loss.
+ * This version corrects the cash flow calculation logic to respect user-provided
+ * exchange rates, ensuring consistency with the net profit history calculation.
  * @param {object} pf - The portfolio state object from the end of the calculation period.
  * @param {object} market - The market data object.
  * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
@@ -121,42 +121,47 @@ function calculateFinalHoldings(pf, market, allEvts) {
 
             let dailyCashFlowTWD = 0;
             let dailyQuantityChange = 0;
+            
+            // ========================= 【核心修改 - 開始】 =========================
+            // 此處的現金流計算邏輯現在與 calculateDailyCashflows 函式完全一致，
+            // 確保了在計算當日損益時，會優先採用使用者手動輸入的匯率。
             todaysTransactions.forEach(tx => {
-                const fx = findFxRate(market, tx.currency, toDate(tx.date));
-                const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
+                const currency = tx.currency || 'USD';
+                const fx = (tx.exchangeRate && currency !== 'TWD') ? tx.exchangeRate : findFxRate(market, currency, toDate(tx.date));
+                const costTWD = getTotalCost(tx) * (currency === "TWD" ? 1 : fx);
+                
                 if (tx.type === 'buy') {
+                    // 買入是正現金流入 (Contribution)
                     dailyCashFlowTWD += costTWD;
                     dailyQuantityChange += tx.quantity;
                 } else {
+                    // 賣出是負現金流入 (Withdrawal)
                     dailyCashFlowTWD -= costTWD;
                     dailyQuantityChange -= tx.quantity;
                 }
             });
+            // ========================= 【核心修改 - 結束】 =========================
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
-            // ================== 【核心修正 v3 - 開始】 ==================
-            // 準確抓取「今天」和「昨天」各自對應的匯率
             const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
             const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
-            // ================== 【核心修正 v3 - 結束】 ==================
 
             const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
             
+            // 損益公式: P&L = (期末價值 - 期初價值) - 當期淨現金流
+            // 我們的 dailyCashFlowTWD 已是淨值 (買入為正, 賣出為負)
             const daily_pl_twd = endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
             const mktVal = endingMarketValueTWD;
 
-            // ================== 【採納您建議的公式進行修改】 ==================
             let daily_change_percent = 0;
+            // 分母 = 期初價值 + 當期淨現金流
             const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
 
             if (Math.abs(denominator) > 1e-9) {
-                // 公式: (當日終值 / (前日終值 + 當日現金流)) - 1
-                // 也就是: (當日損益 / (前日終值 + 當日現金流))
                 daily_change_percent = (daily_pl_twd / denominator) * 100;
             }
-            // ================== 【修改結束】 ==================
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -169,7 +174,7 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
-                daily_change_percent: daily_change_percent, // 使用最終修正後的百分比
+                daily_change_percent: daily_change_percent,
                 daily_pl_twd: daily_pl_twd
             };
         }
