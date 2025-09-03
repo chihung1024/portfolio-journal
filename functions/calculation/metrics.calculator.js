@@ -1,6 +1,5 @@
-
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - FINAL & COMPLETE VERSION
+// == 核心指標計算模組 (metrics.calculator.js) - v4.0 (Net Profit Unification)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -67,6 +66,68 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
     }
     return { twrHistory, benchmarkHistory };
 }
+
+
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】計算指定日期的每日損益 (Daily Profit/Loss)
+ * @param {Date} today - 要計算的目標日期
+ * @param {Date} yesterday - 目標日期的前一天
+ * @param {Array} allEvts - 所有的事件
+ * @param {object} market - 市場數據
+ * @returns {number} - 計算出的當日總損益 (TWD)
+ */
+function calculateDailyPL(today, yesterday, allEvts, market) {
+    // 1. 獲取昨日收盤時的持股狀態
+    const stateYesterday = getPortfolioStateOnDate(allEvts, yesterday, market);
+    let beginningMarketValueTWD = 0;
+
+    for (const sym in stateYesterday) {
+        const h = stateYesterday[sym];
+        const qty_start_of_day = h.lots.reduce((s, l) => s + l.quantity, 0);
+
+        if (Math.abs(qty_start_of_day) > 1e-9) {
+            const priceInfo = findNearest(market[sym]?.prices, yesterday);
+            if (priceInfo) {
+                const priceBefore = priceInfo.value;
+                const fx = findFxRate(market, h.currency, yesterday);
+                beginningMarketValueTWD += qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : fx);
+            }
+        }
+    }
+
+    // 2. 獲取今日收盤時的市值
+    const stateToday = getPortfolioStateOnDate(allEvts, today, market);
+    let endingMarketValueTWD = 0;
+     for (const sym in stateToday) {
+        const h = stateToday[sym];
+        const qty_end_of_day = h.lots.reduce((s, l) => s + l.quantity, 0);
+        if (Math.abs(qty_end_of_day) > 1e-9) {
+            const priceInfo = findNearest(market[sym]?.prices, today);
+             if (priceInfo) {
+                const priceToday = priceInfo.value;
+                const fx = findFxRate(market, h.currency, today);
+                endingMarketValueTWD += qty_end_of_day * priceToday * (h.currency === "TWD" ? 1 : fx);
+            }
+        }
+    }
+
+    // 3. 計算今日發生的現金流
+    const todaysTransactions = allEvts.filter(e =>
+        e.eventType === 'transaction' &&
+        toDate(e.date).getTime() === today.getTime()
+    );
+    let dailyCashFlowTWD = 0;
+    todaysTransactions.forEach(tx => {
+        const fx = findFxRate(market, tx.currency, toDate(tx.date));
+        const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
+        dailyCashFlowTWD += (tx.type === 'buy' ? costTWD : -costTWD);
+    });
+
+    // 4. 根據公式計算當日損益
+    return endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
+}
+// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -136,11 +197,8 @@ function calculateFinalHoldings(pf, market, allEvts) {
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
-            // ================== 【核心修正 v3 - 開始】 ==================
-            // 準確抓取「今天」和「昨天」各自對應的匯率
             const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
             const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
-            // ================== 【核心修正 v3 - 結束】 ==================
 
             const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
@@ -148,16 +206,12 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const daily_pl_twd = endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
             const mktVal = endingMarketValueTWD;
 
-            // ================== 【採納您建議的公式進行修改】 ==================
             let daily_change_percent = 0;
             const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
 
             if (Math.abs(denominator) > 1e-9) {
-                // 公式: (當日終值 / (前日終值 + 當日現金流)) - 1
-                // 也就是: (當日損益 / (前日終值 + 當日現金流))
                 daily_change_percent = (daily_pl_twd / denominator) * 100;
             }
-            // ================== 【修改結束】 ==================
 
             holdingsToUpdate[sym] = {
                 symbol: sym,
@@ -170,7 +224,7 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
                 returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
-                daily_change_percent: daily_change_percent, // 使用最終修正後的百分比
+                daily_change_percent: daily_change_percent,
                 daily_pl_twd: daily_pl_twd
             };
         }
@@ -423,5 +477,6 @@ module.exports = {
     createCashflowsForXirr,
     calculateXIRR,
     calculateDailyCashflows,
-    calculateCoreMetrics
+    calculateCoreMetrics,
+    calculateDailyPL // 【新增】導出新函式
 };
