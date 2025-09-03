@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.0 (Net Profit Unification)
+// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -68,7 +68,6 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【新增】計算指定日期的每日損益 (Daily Profit/Loss)
  * @param {Date} today - 要計算的目標日期
@@ -113,21 +112,46 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
     }
 
     // 3. 計算今日發生的現金流
-    const todaysTransactions = allEvts.filter(e =>
-        e.eventType === 'transaction' &&
-        toDate(e.date).getTime() === today.getTime()
-    );
     let dailyCashFlowTWD = 0;
-    todaysTransactions.forEach(tx => {
-        const fx = findFxRate(market, tx.currency, toDate(tx.date));
-        const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
-        dailyCashFlowTWD += (tx.type === 'buy' ? costTWD : -costTWD);
-    });
+    
+    const todaysEvents = allEvts.filter(e => toDate(e.date).getTime() === today.getTime());
+
+    for (const e of todaysEvents) {
+        if (e.eventType === 'transaction') {
+            const fx = findFxRate(market, e.currency, toDate(e.date));
+            const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+            dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
+        } 
+        // ========================= 【核心修改 - 開始】 =========================
+        // 在此處加入對配息事件的處理
+        else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
+            let dividendAmountTWD = 0;
+            if (e.eventType === 'confirmed_dividend') {
+                const fx = findFxRate(market, e.currency, toDate(e.date));
+                dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
+            } else { // implicit_dividend
+                const stateOnExDate = getPortfolioStateOnDate(allEvts, toDate(e.ex_date), market);
+                const shares = stateOnExDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
+                if (shares > 0) {
+                    const currency = stateOnExDate[e.symbol.toUpperCase()]?.currency || 'USD';
+                    const fx = findFxRate(market, currency, toDate(e.date));
+                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
+                    dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
+                }
+            }
+            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
+            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
+            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
+            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
+            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
+            dailyCashFlowTWD -= dividendAmountTWD;
+        }
+        // ========================= 【核心修改 - 結束】 =========================
+    }
 
     // 4. 根據公式計算當日損益
     return endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
@@ -478,5 +502,5 @@ module.exports = {
     calculateXIRR,
     calculateDailyCashflows,
     calculateCoreMetrics,
-    calculateDailyPL // 【新增】導出新函式
+    calculateDailyPL
 };
