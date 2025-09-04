@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v5.0 - Architecture Refactor)
-// == 描述：v5.0 架構重構，移除引擎中 netProfitHistory 的計算邏輯，為新的快照機制做準備。
+// == 檔案：functions/calculation/engine.js (v2.1 - Net Profit Unification)
+// == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
 const { toDate, findNearest, findFxRate, isTwStock } = require('./helpers');
@@ -11,8 +11,8 @@ const dataProvider = require('./data.provider');
 /**
  * 核心計算函式
  * @param {Array} txs - 用於計算的交易紀錄
- * @param {Array} allUserSplits - 使用者所有的拆股事件
- * @param {Array} allUserDividends - 使用者所有的股利事件
+ * @param {Array} allUserSplits - 【修改】傳入使用者所有的拆股事件
+ * @param {Array} allUserDividends - 【修改】傳入使用者所有的股利事件
  * @param {string} benchmarkSymbol - 比較基準
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
  * @param {Object} [existingHistory=null] - (可選) 已有的歷史數據
@@ -26,9 +26,7 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
             fullHistory: {},
             twrHistory: {},
             benchmarkHistory: {},
-            // 【v5.0 修改】移除 netProfitHistory
-            evts: [], // 回傳空陣列避免後續出錯
-            market: {}
+            netProfitHistory: {}
         };
     }
     
@@ -43,17 +41,7 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
     const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
-    if (!firstBuyDate) {
-        return { // 【v5.0 修改】確保回傳結構一致
-            summaryData: {},
-            holdingsToUpdate: {},
-            fullHistory: {},
-            twrHistory: {},
-            benchmarkHistory: {},
-            evts: [],
-            market: {}
-        };
-    }
+    if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
 
     let calculationStartDate = firstBuyDate;
     let oldHistory = {};
@@ -84,10 +72,34 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     
     const portfolioResult = metrics.calculateCoreMetrics(evts, market);
 
-    // ========================= 【v5.0 核心修改 - 開始】 =========================
-    // 移除所有 netProfitHistory 的計算邏輯。
-    // 這個責任將轉移到 performRecalculation.js 中，它會使用 metrics.calculateDailyPL 來生成快照。
-    // ========================= 【v5.0 核心修改 - 結束】 =========================
+    // ========================= 【核心修改 - 開始】 =========================
+    // 採用新的、基於每日損益累加的淨利歷史計算方法
+    const netProfitHistory = {};
+    let cumulativeNetProfit = 0;
+    // 確保從第一筆交易日開始計算
+    const sortedDates = Object.keys(fullHistory).sort();
+    
+    if (sortedDates.length > 0) {
+        // 找到計算範圍內的第一個日期，並從前一天的淨利開始累加 (通常是0)
+        const firstDateInScope = toDate(sortedDates[0]);
+        const dayBeforeFirst = new Date(firstDateInScope);
+        dayBeforeFirst.setDate(dayBeforeFirst.getDate() - 1);
+        
+        // 嘗試從舊歷史中獲取基線淨利，若無則為 0
+        cumulativeNetProfit = existingHistory ? (existingHistory[dayBeforeFirst.toISOString().split('T')[0]] || 0) : 0;
+    
+        for (const dateStr of sortedDates) {
+            const today = toDate(dateStr);
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+
+            // 調用新的 calculateDailyPL 函式
+            const dailyPL = metrics.calculateDailyPL(today, yesterday, evts, market);
+            cumulativeNetProfit += dailyPL;
+            netProfitHistory[dateStr] = cumulativeNetProfit;
+        }
+    }
+    // ========================= 【核心修改 - 結束】 =========================
 
 
     const { holdingsToUpdate } = portfolioResult.holdings;
@@ -105,7 +117,7 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         fullHistory,
         twrHistory,
         benchmarkHistory,
-        // 【v5.0 修改】不再回傳 netProfitHistory
+        netProfitHistory,
         evts, 
         market 
     };
