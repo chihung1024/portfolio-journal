@@ -1,19 +1,15 @@
 // =========================================================================================
-// == 儀表板 UI 模組 (dashboard.js) v2.0 - UI & Responsiveness Refined
+// == 儀表板 UI 模組 (dashboard.js) v2.1 - Restored updateDashboardSummary
 // == 職責：處理頂部儀表板數據卡片的更新。
 // =========================================================================================
 
 import { formatNumber } from "./utils.js";
 
 /**
- * [新增] 輔助函式，用於更新單一數據卡片的內容與樣式
+ * 輔助函式，用於更新單一數據卡片的內容與樣式
  * @param {string} mainElementId - 主要數值元素的 ID
  * @param {number|string} value - 要顯示的主要數值
  * @param {object} options - 其他選項
- * @param {string|null} secondaryElementId - (可選) 次要數值元素 (如百分比) 的 ID
- * @param {number|string|null} secondaryValue - (可選) 要顯示的次要數值
- * @param {string} formatType - 'number', 'percent', 'percent_xirr'
- * @param {boolean|null} hasColor - 數值是否需要根據正負顯示不同顏色
  */
 function updateCard(mainElementId, value, options = {}) {
     const { secondaryElementId = null, secondaryValue = null, formatType = 'number', hasColor = false } = options;
@@ -62,20 +58,42 @@ function updateCard(mainElementId, value, options = {}) {
     }
 }
 
+/**
+ * 【已恢復並修正】更新儀表板頂部的總結數據
+ * @param {object} summary - 包含總結數據的物件
+ */
+export function updateDashboardSummary(summary) {
+    if (!summary) return;
 
+    // 【修正】將股息加入總損益計算
+    const totalPL = summary.realized_pl + summary.unrealized_pl + summary.total_dividends;
+    const totalReturn = summary.total_cost > 0 ? (totalPL / summary.total_cost) * 100 : 0;
+
+    updateCard('total-assets', summary.market_value, { formatType: 'number' });
+    updateCard('daily-pl', summary.daily_pl, {
+        secondaryElementId: 'daily-pl-percent',
+        secondaryValue: summary.daily_return,
+        formatType: 'number',
+        hasColor: true
+    });
+    updateCard('unrealized-pl', summary.unrealized_pl, { formatType: 'number', hasColor: true });
+    updateCard('realized-pl', summary.realized_pl, { formatType: 'number', hasColor: true });
+    updateCard('total-pl', totalPL, { formatType: 'number', hasColor: true });
+    updateCard('total-return', totalReturn, { formatType: 'percent', hasColor: true });
+    updateCard('xirr-value', summary.xirr, { formatType: 'percent_xirr', hasColor: true });
+}
+
+// This function seems to be outdated or for a different purpose, 
+// but we'll keep it to avoid breaking other parts of the code that might still use it.
 export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr) {
     const holdingsArray = Object.values(currentHoldings);
     const totalMarketValue = holdingsArray.reduce((sum, h) => sum + (h.marketValueTWD || 0), 0);
     const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
     const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
     
-    // ================== 【計算邏輯不變】 ==================
     const yesterdayTotalMarketValue = totalMarketValue - totalDailyPL;
     const totalDailyReturnPercent = yesterdayTotalMarketValue !== 0 ? (totalDailyPL / yesterdayTotalMarketValue) * 100 : 0;
     
-    // ================== 【修改的程式碼開始】 ==================
-    
-    // 使用新的輔助函式更新所有卡片
     updateCard('total-assets', totalMarketValue, { formatType: 'number' });
     
     updateCard('daily-pl', totalDailyPL, { 
@@ -92,6 +110,4 @@ export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr
     updateCard('total-return', overallReturn, { formatType: 'percent', hasColor: true });
     
     updateCard('xirr-value', xirr, { formatType: 'percent_xirr', hasColor: true });
-    
-    // ================== 【修改的程式碼結束】 ==================
 }
