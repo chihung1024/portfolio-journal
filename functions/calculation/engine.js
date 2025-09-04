@@ -1,14 +1,11 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v3.0 - Centralized Accounting Model)
-// == 職責：協調計算流程，所有狀態計算均調用唯一的中央狀態計算機。
+// == 檔案：functions/calculation/engine.js (v2.1 - Net Profit Unification)
+// == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
-const { toDate } = require('./helpers');
-// ========================= 【核心修改】 =========================
-// 引入重構後的 state.calculator 和 metrics.calculator
-const { prepareEvents, dailyValue, calculatePortfolioState } = require('./state.calculator');
+const { toDate, findNearest, findFxRate, isTwStock } = require('./helpers');
+const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./state.calculator');
 const metrics = require('./metrics.calculator');
-// ==========================================================
 const dataProvider = require('./data.provider');
 
 /**
@@ -65,41 +62,45 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     let curDate = new Date(calculationStartDate);
     while (curDate <= todayForCalc) {
         const dateStr = curDate.toISOString().split('T')[0];
-        // ========================= 【核心修改】 =========================
-        // 調用新的 dailyValue，它現在依賴於唯一的中央狀態計算機
-        const { pf: stateOnDate } = calculatePortfolioState(evts, market, curDate);
-        partialHistory[dateStr] = dailyValue(stateOnDate, market, curDate, evts);
-        // ==========================================================
+        partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
         curDate.setDate(curDate.getDate() + 1);
     }
     const fullHistory = { ...oldHistory, ...partialHistory };
-    
-    const netProfitHistory = {};
-    const sortedDates = Object.keys(fullHistory).sort();
-
-    for (const dateStr of sortedDates) {
-        const targetDate = toDate(dateStr);
-        // ========================= 【核心修改】 =========================
-        // 調用簡化後的 metrics calculator，它會隱含地調用中央狀態計算機
-        const dailyMetrics = metrics.calculateCoreMetrics(evts, market, targetDate);
-        // ==========================================================
-        netProfitHistory[dateStr] = dailyMetrics.totalRealizedPL + dailyMetrics.totalUnrealizedPL;
-    }
-    
-    // ========================= 【核心修改】 =========================
-    // 再次調用簡化後的 metrics calculator 來獲取最終的即時數據
-    const portfolioResult = metrics.calculateCoreMetrics(evts, market, null);
-    // ==========================================================
-    
-    if (sortedDates.length > 0) {
-        const lastDate = sortedDates[sortedDates.length - 1];
-        const realTimeTotalProfit = portfolioResult.totalRealizedPL + portfolioResult.totalUnrealizedPL;
-        netProfitHistory[lastDate] = realTimeTotalProfit;
-    }
-
 
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
     const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(fullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
+    
+    const portfolioResult = metrics.calculateCoreMetrics(evts, market);
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 採用新的、基於每日損益累加的淨利歷史計算方法
+    const netProfitHistory = {};
+    let cumulativeNetProfit = 0;
+    // 確保從第一筆交易日開始計算
+    const sortedDates = Object.keys(fullHistory).sort();
+    
+    if (sortedDates.length > 0) {
+        // 找到計算範圍內的第一個日期，並從前一天的淨利開始累加 (通常是0)
+        const firstDateInScope = toDate(sortedDates[0]);
+        const dayBeforeFirst = new Date(firstDateInScope);
+        dayBeforeFirst.setDate(dayBeforeFirst.getDate() - 1);
+        
+        // 嘗試從舊歷史中獲取基線淨利，若無則為 0
+        cumulativeNetProfit = existingHistory ? (existingHistory[dayBeforeFirst.toISOString().split('T')[0]] || 0) : 0;
+    
+        for (const dateStr of sortedDates) {
+            const today = toDate(dateStr);
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+
+            // 調用新的 calculateDailyPL 函式
+            const dailyPL = metrics.calculateDailyPL(today, yesterday, evts, market);
+            cumulativeNetProfit += dailyPL;
+            netProfitHistory[dateStr] = cumulativeNetProfit;
+        }
+    }
+    // ========================= 【核心修改 - 結束】 =========================
+
 
     const { holdingsToUpdate } = portfolioResult.holdings;
     
