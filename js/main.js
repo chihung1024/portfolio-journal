@@ -163,6 +163,7 @@ async function loadHoldingsInBackground() {
             
             setState({ holdings: holdingsObject });
             
+            const { summary } = getState();
             updateDashboardSummary(summary);
             renderHoldingsTable(holdingsObject);
             console.log("持股數據載入完成。");
