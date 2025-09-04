@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
+// == 核心指標計算模組 (metrics.calculator.js) - v5.0 (Architecture Refactor)
+// == 描述：v5.0 架構重構，統一每日損益(calculateDailyPL)與核心指標(calculateCoreMetrics)的股利處理邏輯。
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -69,7 +70,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 
 /**
- * 【新增】計算指定日期的每日損益 (Daily Profit/Loss)
+ * 【v5.0 架構核心】計算指定日期的每日損益 (Daily Profit/Loss)，已整合所有股利類型
  * @param {Date} today - 要計算的目標日期
  * @param {Date} yesterday - 目標日期的前一天
  * @param {Array} allEvts - 所有的事件
@@ -122,31 +123,35 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
         } 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在此處加入對配息事件的處理
+        // ========================= 【v5.0 核心修改 - 開始】 =========================
+        // 在此處加入對所有類型股利事件的處理，與 calculateCoreMetrics 邏輯看齊
         else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
+
             if (e.eventType === 'confirmed_dividend') {
                 const fx = findFxRate(market, e.currency, toDate(e.date));
                 dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
             } else { // implicit_dividend
+                // 對於 implicit_dividend，需要回溯到除息日當天的持股狀態來計算
                 const stateOnExDate = getPortfolioStateOnDate(allEvts, toDate(e.ex_date), market);
-                const shares = stateOnExDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
-                if (shares > 0) {
-                    const currency = stateOnExDate[e.symbol.toUpperCase()]?.currency || 'USD';
+                const sym = e.symbol.toUpperCase();
+                const shares = stateOnExDate[sym]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
+                
+                if (Math.abs(shares) > 1e-9) {
+                    const currency = stateOnExDate[sym]?.currency || 'USD';
                     const fx = findFxRate(market, currency, toDate(e.date));
-                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
+                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30));
+                    // 核心邏輯：空方部位應支付股利，視為負收入 (虧損)
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
             // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
             // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
-            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
-            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
-            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
+            // 這樣，公式 P/L = MVE - MVB - CF 就會變成 P/L = MVE - MVB - (Tx_CF - Div_CF)，
+            // 最終結果相當於在損益中加上了股利收入。
             dailyCashFlowTWD -= dividendAmountTWD;
         }
-        // ========================= 【核心修改 - 結束】 =========================
+        // ========================= 【v5.0 核心修改 - 結束】 =========================
     }
 
     // 4. 根據公式計算當日損益
