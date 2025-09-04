@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v5.0 (Total Profit Unification)
+// == 核心指標計算模組 (metrics.calculator.js) - v6.0 (Historical Price Unification)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -145,17 +145,17 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
     return endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
 }
 
-
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
- * This version implements the Modified Dietz method as suggested, providing a robust
- * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
- * @param {object} pf - The portfolio state object from the end of the calculation period.
- * @param {object} market - The market data object.
- * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
- * @returns {{holdingsToUpdate: object}} - An object containing the updated holdings.
+ * 計算最終持股狀態，包含每日損益
+ * @param {object} pf - 當前投資組合狀態
+ * @param {object} market - 市場數據
+ * @param {Array} allEvts - 所有事件
+ * @param {Date} [asOfDate=null] - (可選) 指定計算的日期，用於歷史快照
+ * @returns {{holdingsToUpdate: object}} - 更新後的持股物件
  */
-function calculateFinalHoldings(pf, market, allEvts) {
+function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
+// ========================= 【核心修改 - 結束】 =========================
     const holdingsToUpdate = {};
     
     for (const sym in pf) {
@@ -167,29 +167,25 @@ function calculateFinalHoldings(pf, market, allEvts) {
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
 
             const symbolPrices = market[sym]?.prices || {};
-            const availableDates = Object.keys(symbolPrices).sort((a, b) => b.localeCompare(a));
-
-            let latestPrice = 0, priceBefore = 0;
-            let latestDateStr = new Date().toISOString().split('T')[0];
-            let beforeDateStr = new Date().toISOString().split('T')[0];
-
-            if (availableDates.length > 0) {
-                latestDateStr = availableDates[0];
-                latestPrice = symbolPrices[latestDateStr];
-                if (availableDates.length > 1) {
-                    beforeDateStr = availableDates[1];
-                    priceBefore = symbolPrices[beforeDateStr];
-                } else {
-                    beforeDateStr = latestDateStr;
-                    priceBefore = latestPrice;
-                }
-            }
             
-            const latestPriceDate = new Date(latestDateStr);
+            // ========================= 【核心修改 - 開始】 =========================
+            const finalDate = asOfDate ? toDate(asOfDate) : new Date();
+            const latestPriceInfo = findNearest(symbolPrices, finalDate);
+            const latestPrice = latestPriceInfo ? latestPriceInfo.value : 0;
+            const latestPriceDate = latestPriceInfo ? toDate(latestPriceInfo.date) : finalDate;
+
+            // 尋找昨日價格
+            const yesterday = new Date(latestPriceDate);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const priceBeforeInfo = findNearest(symbolPrices, yesterday);
+            const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : latestPrice;
+            const beforeDateStr = priceBeforeInfo ? priceBeforeInfo.date : (latestPriceInfo ? latestPriceInfo.date : null);
+            // ========================= 【核心修改 - 結束】 =========================
+
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym && toDate(e.date) > latestPriceDate);
             const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
             
-            const today = new Date(latestDateStr);
+            const today = new Date(latestPriceDate);
             today.setUTCHours(0, 0, 0, 0);
             const todaysTransactions = allEvts.filter(e =>
                 e.eventType === 'transaction' &&
@@ -213,20 +209,22 @@ function calculateFinalHoldings(pf, market, allEvts) {
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
-            const latestFx = findFxRate(market, h.currency, new Date(latestDateStr));
-            const beforeFx = findFxRate(market, h.currency, new Date(beforeDateStr));
+            const latestFx = findFxRate(market, h.currency, latestPriceDate);
+            const beforeFx = findFxRate(market, h.currency, beforeDateStr ? new Date(beforeDateStr) : latestPriceDate);
 
             const beginningMarketValueTWD = qty_start_of_day * priceBefore * (h.currency === "TWD" ? 1 : beforeFx);
             const endingMarketValueTWD = qty_end_of_day * unadjustedPrice * (h.currency === "TWD" ? 1 : latestFx);
             
-            const daily_pl_twd = endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
+            // 如果是計算歷史快照，則當日損益無意義，設為0
+            const daily_pl_twd = asOfDate ? 0 : endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
             const mktVal = endingMarketValueTWD;
 
             let daily_change_percent = 0;
-            const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
-
-            if (Math.abs(denominator) > 1e-9) {
-                daily_change_percent = (daily_pl_twd / denominator) * 100;
+            if (!asOfDate) {
+                const denominator = beginningMarketValueTWD + dailyCashFlowTWD;
+                if (Math.abs(denominator) > 1e-9) {
+                    daily_change_percent = (daily_pl_twd / denominator) * 100;
+                }
             }
 
             holdingsToUpdate[sym] = {
@@ -345,7 +343,16 @@ function calculateDailyCashflows(evts, market) {
     }, {});
 }
 
-function calculateCoreMetrics(evts, market) {
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 核心指標計算函式
+ * @param {Array} evts - 用於計算的事件
+ * @param {object} market - 市場數據
+ * @param {Date} [asOfDate=null] - (可選) 指定計算的日期，用於歷史快照
+ * @returns {object} - 包含所有核心指標的物件
+ */
+function calculateCoreMetrics(evts, market, asOfDate = null) {
+// ========================= 【核心修改 - 結束】 =========================
     const pf = {};
     let totalRealizedPL = 0;
     let totalBuyCostTWD = 0; 
@@ -474,7 +481,9 @@ function calculateCoreMetrics(evts, market) {
         }
     }
 
-    const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts);
+    // ========================= 【核心修改 - 開始】 =========================
+    const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts, asOfDate);
+    // ========================= 【核心修改 - 結束】 =========================
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
 
@@ -484,15 +493,13 @@ function calculateCoreMetrics(evts, market) {
     
     const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
     
-    // ========================= 【核心修改 - 開始】 =========================
     return { 
         holdings: { holdingsToUpdate }, 
         totalRealizedPL, 
-        totalUnrealizedPL, // 新增回傳 totalUnrealizedPL
+        totalUnrealizedPL,
         xirr, 
         overallReturnRate 
     };
-    // ========================= 【核心修改 - 結束】 =========================
 }
 
 module.exports = {
