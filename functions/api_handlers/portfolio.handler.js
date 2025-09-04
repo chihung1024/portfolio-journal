@@ -1,13 +1,14 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_syntax_fix)
+// == 檔案：functions/api_handlers/portfolio.handler.js (v5.0 - Architecture Refactor)
+// == 描述：v5.0 架構重構，更新 API 以支援新的每日損益快照讀取機制。
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
+const { z } = require("zod"); // 引入 zod 進行驗證
 
 const ALL_GROUP_ID = 'all';
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【新增】更新 Benchmark 的核心邏輯函式
  * @param {string} uid - 使用者 ID
@@ -24,11 +25,10 @@ async function updateBenchmarkCore(uid, benchmarkSymbol) {
 
 // 將核心邏輯導出
 exports.updateBenchmarkCore = updateBenchmarkCore;
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
- * 【舊 API - 保留】獲取使用者所有核心資料 (預設為 'all' 群組)
+ * 【舊 API - v5.0 修改】移除 netProfitHistory 的回傳
  */
 exports.getData = async (uid, res) => {
     const [txs, splits, holdings, summaryResult] = await Promise.all([
@@ -43,7 +43,7 @@ exports.getData = async (uid, res) => {
     const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
     const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
-    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    // 【v5.0 修改】不再回傳 netProfitHistory
 
     return res.status(200).send({
         success: true,
@@ -55,7 +55,6 @@ exports.getData = async (uid, res) => {
             history,
             twrHistory,
             benchmarkHistory,
-            netProfitHistory,
         }
     });
 };
@@ -118,17 +117,48 @@ exports.getTransactionsAndSplits = async (uid, res) => {
     return res.status(200).send({ success: true, data: { transactions, splits } });
 };
 
+// ========================= 【v5.0 核心修改 - 開始】 =========================
 /**
- * 【新增】API：只獲取所有圖表的歷史數據
+ * 【v5.0 重構】API：獲取圖表數據。現在能夠按需查詢每日損益快照。
  */
-exports.getChartData = async (uid, res) => {
-    const summaryResult = await d1Client.query('SELECT history, twrHistory, benchmarkHistory, netProfitHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+exports.getChartData = async (uid, data, res) => { // 新增 data 參數
+    // 增加參數驗證
+    const schema = z.object({
+        groupId: z.string().optional().default('all'),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+    });
+    const validatedData = schema.parse(data || {});
+    const { groupId, startDate, endDate } = validatedData;
+
+    // 1. 查詢 TWR 和資產歷史 (邏輯不變)
+    const summaryResult = await d1Client.query('SELECT history, twrHistory, benchmarkHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, groupId]);
     
     const summaryRow = summaryResult[0] || {};
     const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
     const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
     const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
-    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+    
+    // 2. 查詢新的每日損益快照表
+    let dailyPLSnapshots = [];
+    // 預設查詢整個歷史
+    let sql = 'SELECT date, pl_twd FROM daily_pl_snapshots WHERE uid = ? AND group_id = ? ORDER BY date ASC';
+    const params = [uid, groupId];
+
+    // 如果提供了日期範圍，則修改查詢語句
+    if (startDate && endDate) {
+        sql = 'SELECT date, pl_twd FROM daily_pl_snapshots WHERE uid = ? AND group_id = ? AND date >= ? AND date <= ? ORDER BY date ASC';
+        params.push(startDate, endDate);
+    }
+
+    const plResults = await d1Client.query(sql, params);
+    if (plResults) {
+        // 將結果轉換為前端易於處理的物件格式 { 'YYYY-MM-DD': 123.45 }
+        dailyPLSnapshots = plResults.reduce((acc, row) => {
+            acc[row.date.split('T')[0]] = row.pl_twd;
+            return acc;
+        }, {});
+    }
 
     return res.status(200).send({
         success: true,
@@ -136,10 +166,12 @@ exports.getChartData = async (uid, res) => {
             portfolioHistory: history,
             twrHistory,
             benchmarkHistory,
-            netProfitHistory
+            // 【v5.0 修改】回傳新的每日損益數據，而非舊的累積數據
+            dailyPLSnapshots: dailyPLSnapshots
         }
     });
 };
+// ========================= 【v5.0 核心修改 - 結束】 =========================
 
 
 /**
