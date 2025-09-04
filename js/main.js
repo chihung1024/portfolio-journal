@@ -21,7 +21,7 @@ import { renderTransactionsTable } from './ui/components/transactions.ui.js';
 // ========================= 【核心修改 - 開始】 =========================
 import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
 // ========================= 【核心修改 - 結束】 =========================
-import { updateDashboard, updateDashboardSummary } from './ui/dashboard.js';
+import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
 import { renderGroupsTab } from './ui/components/groups.ui.js';
@@ -54,7 +54,7 @@ async function refreshDashboardAndHoldings() {
             summary: summary
         });
 
-        updateDashboardSummary(summary);
+        updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable(holdingsObject);
         console.log("Live refresh complete.");
 
@@ -136,7 +136,7 @@ export async function loadInitialDashboard() {
         });
         // ========================= 【核心修改 - 結束】 =========================
 
-        updateDashboardSummary(summary);
+        updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable({});
         document.getElementById('benchmark-symbol-input').value = summary?.benchmarkSymbol || 'SPY';
 
@@ -164,7 +164,7 @@ async function loadHoldingsInBackground() {
             setState({ holdings: holdingsObject });
             
             const { summary } = getState();
-            updateDashboardSummary(summary);
+            updateDashboard(holdingsObject, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
             renderHoldingsTable(holdingsObject);
             console.log("持股數據載入完成。");
         }
