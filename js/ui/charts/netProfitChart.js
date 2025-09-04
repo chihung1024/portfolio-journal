@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 淨利圖表模組 (netProfitChart.js)
+// == 淨利圖表模組 (netProfitChart.js) - v5.0 (Architecture Refactor)
+// == 描述：v5.0 架構重構，改為在客戶端(Client-side)累加每日損益快照來生成圖表。
 // =========================================================================================
 
 import { getState, setState } from '../../state.js';
@@ -44,24 +45,35 @@ export function initializeNetProfitChart() {
  * 更新淨利圖表的數據
  * @param {string} seriesName - 要顯示在圖例上的系列名稱
  */
-export function updateNetProfitChart(seriesName = '累積淨利') { // 提供預設值
-    const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
+export function updateNetProfitChart(seriesName = '累積淨利') {
+    // 【v5.0 修改】數據源從 netProfitHistory 改為 dailyPLSnapshots
+    const { netProfitChart, dailyPLSnapshots, netProfitDateRange } = getState();
     if (!netProfitChart) return;
 
-    const filteredHistory = filterHistoryByDateRange(netProfitHistory, netProfitDateRange);
-    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
-        netProfitChart.updateSeries([{ data: [] }]);
+    // 【v5.0 修改】篩選器現在作用於每日損益數據上
+    const filteredDailyPL = filterHistoryByDateRange(dailyPLSnapshots, netProfitDateRange);
+    if (!filteredDailyPL || Object.keys(filteredDailyPL).length === 0) {
+        netProfitChart.updateSeries([{ name: seriesName, data: [] }]);
         return;
     }
 
-    const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-    
-    const baseValue = sortedEntries[0][1];
-    const chartData = sortedEntries.map(([date, value]) => [
-        new Date(date).getTime(),
-        value - baseValue
-    ]);
+    // ========================= 【v5.0 核心修改 - 開始】 =========================
+    // == 新增：在前端進行客戶端累加 (Client-side Accumulation)
+    // =========================================================================================
+    const sortedDates = Object.keys(filteredDailyPL).sort();
+    const chartData = [];
+    let cumulativeProfit = 0;
 
-    // 【核心修改】更新 series 時同時更新 name 和 data
+    for (const dateStr of sortedDates) {
+        cumulativeProfit += filteredDailyPL[dateStr];
+        chartData.push([
+            new Date(dateStr).getTime(),
+            cumulativeProfit
+        ]);
+    }
+
+    // ========================= 【v5.0 核心修改 - 結束】 =========================
+
+    // 【v5.0 修改】移除舊的 rebase 邏輯，因為累加是從 0 開始的，天然地實現了 rebase 效果
     netProfitChart.updateSeries([{ name: seriesName, data: chartData }]);
 }
