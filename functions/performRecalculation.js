@@ -1,14 +1,13 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
+// == 檔案：functions/performRecalculation.js (v_final_robust_netprofit_fix)
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
 const dataProvider = require('./calculation/data.provider');
 const { toDate, isTwStock } = require('./calculation/helpers');
-const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
+const { getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
-// 【修改】導入新的計算引擎
 const { runCalculationEngine } = require('./calculation/engine');
 
 
@@ -118,18 +117,18 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】一次性抓取所有需要的原始數據
+        // ========================= 【核心修改 - 開始】 =========================
         const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
             d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
-            d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+            // 一次性讀取所有需要的歷史數據
+            d1Client.query('SELECT history, netProfitHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
-        // ========================= 【核心修正 - 結束】 =========================
+        // ========================= 【核心修改 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
@@ -142,12 +141,11 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
-
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
-        // ========================= 【核心修正 - 結束】 =========================
         
         let oldHistory = {};
+        // ========================= 【核心修改 - 開始】 =========================
+        let oldNetProfitHistory = {}; // 新增變數來儲存舊的淨利歷史
+        // ========================= 【核心修改 - 結束】 =========================
         let baseSnapshot = null;
         
         if (createSnapshot === false) {
@@ -162,29 +160,36 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         if (baseSnapshot) {
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshot.snapshot_date]);
-            if (summaryResult[0] && summaryResult[0].history) {
-                oldHistory = JSON.parse(summaryResult[0].history);
-                Object.keys(oldHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldHistory[date]; });
+            if (summaryResult[0]) {
+                if (summaryResult[0].history) {
+                    oldHistory = JSON.parse(summaryResult[0].history);
+                    Object.keys(oldHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldHistory[date]; });
+                }
+                // ========================= 【核心修改 - 開始】 =========================
+                if (summaryResult[0].netProfitHistory) {
+                    oldNetProfitHistory = JSON.parse(summaryResult[0].netProfitHistory);
+                    // 同樣地，只保留快照日期之前的數據
+                    Object.keys(oldNetProfitHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldNetProfitHistory[date]; });
+                }
+                // ========================= 【核心修改 - 結束】 =========================
             }
         } else {
             console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
+        // ========================= 【核心修改 - 開始】 =========================
         const result = await runCalculationEngine(
             txs,
             allUserSplits,
             allUserDividends,
             benchmarkSymbol,
             baseSnapshot,
-            oldHistory
+            oldHistory,
+            oldNetProfitHistory // 將舊的淨利歷史傳入引擎
         );
-        // ========================= 【核心修正 - 結束】 =========================
+        // ========================= 【核心修改 - 結束】 =========================
 
-
-        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
