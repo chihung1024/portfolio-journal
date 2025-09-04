@@ -1,14 +1,14 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v5.0 - Architecture Refactor)
-// == 描述：v5.0 架構重構，實現每日損益快照 (Daily P/L Snapshot) 的生成與儲存機制。
+// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
+// == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
 const dataProvider = require('./calculation/data.provider');
 const { toDate, isTwStock } = require('./calculation/helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
-// 【v5.0 修改】從 metrics 中額外導入 calculateDailyPL
-const { calculateCoreMetrics, calculateDailyPL, calculateTwrHistory } = require('./calculation/metrics.calculator');
+const metrics = require('./calculation/metrics.calculator');
+// 【修改】導入新的計算引擎
 const { runCalculationEngine } = require('./calculation/engine');
 
 
@@ -17,73 +17,11 @@ const sanitizeNumber = (value) => {
     return isFinite(num) ? num : 0;
 };
 
-// ========================= 【v5.0 核心修改 - 開始】 =========================
-/**
- * 【新增函式】維護每日損益快照 (Daily Profit/Loss Snapshots)
- * @param {string} uid - 使用者 ID
- * @param {string} groupId - 群組 ID
- * @param {Array} evts - 所有的事件
- * @param {object} market - 市場數據
- * @param {string|null} modifiedTxDate - (可選) 發生變更的最早日期
- */
-async function maintainDailyPLSnapshots(uid, groupId, evts, market, modifiedTxDate) {
-    if (evts.length === 0) {
-        console.log(`[${uid}|G:${groupId}] No events, clearing daily P/L snapshots.`);
-        await d1Client.query('DELETE FROM daily_pl_snapshots WHERE uid = ? AND group_id = ?', [uid, groupId]);
-        return;
-    }
-    
-    const firstEventDate = toDate(evts[0].date);
-    // 決定需要開始重新計算的日期
-    const startDate = modifiedTxDate ? toDate(modifiedTxDate) : firstEventDate;
-
-    // 刪除從變更點開始的所有舊快照，為寫入新快照做準備
-    await d1Client.query(
-        'DELETE FROM daily_pl_snapshots WHERE uid = ? AND group_id = ? AND date >= ?',
-        [uid, groupId, startDate.toISOString().split('T')[0]]
-    );
-
-    const snapshotOps = [];
-    const todayForCalc = new Date();
-    todayForCalc.setUTCHours(0, 0, 0, 0);
-    
-    let currentDate = new Date(startDate);
-
-    console.log(`[${uid}|G:${groupId}] Starting daily P/L snapshot generation from ${currentDate.toISOString().split('T')[0]}...`);
-
-    // 從起始日開始，逐日計算並生成快照，直到今天
-    while (currentDate <= todayForCalc) {
-        const yesterday = new Date(currentDate);
-        yesterday.setDate(currentDate.getDate() - 1);
-        
-        const dailyPL = calculateDailyPL(currentDate, yesterday, evts, market);
-        
-        // 只有在損益非零時才儲存，節省空間
-        if (Math.abs(dailyPL) > 1e-9) {
-            snapshotOps.push({
-                sql: `INSERT INTO daily_pl_snapshots (uid, group_id, date, pl_twd) VALUES (?, ?, ?, ?)`,
-                params: [uid, groupId, currentDate.toISOString().split('T')[0], sanitizeNumber(dailyPL)]
-            });
-        }
-        
-        currentDate.setDate(currentDate.getDate() + 1);
-    }
-
-    if (snapshotOps.length > 0) {
-        await d1Client.batch(snapshotOps);
-        console.log(`[${uid}|G:${groupId}] Successfully generated and saved ${snapshotOps.length} daily P/L snapshots.`);
-    } else {
-        console.log(`[${uid}|G:${groupId}] No new daily P/L snapshots needed.`);
-    }
-}
-// ========================= 【v5.0 核心修改 - 結束】 =========================
-
-
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
     const logPrefix = `[${uid}|G:${groupId}]`;
-    console.log(`${logPrefix} 開始維護資產快照... 強制建立最新快照: ${createSnapshot}`);
+    console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
     if (!market || Object.keys(newFullHistory).length === 0) {
-        console.log(`${logPrefix} 沒有歷史數據或市場數據，跳過資產快照維護。`);
+        console.log(`${logPrefix} 沒有歷史數據或市場數據，跳過快照維護。`);
         return;
     }
     const snapshotOps = [];
@@ -116,9 +54,9 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
     if (snapshotOps.length > 0) {
         await d1Client.batch(snapshotOps);
-        console.log(`${logPrefix} 成功建立或更新了 ${snapshotOps.length} 筆資產快照。`);
+        console.log(`${logPrefix} 成功建立或更新了 ${snapshotOps.length} 筆快照。`);
     } else {
-        console.log(`${logPrefix} 資產快照鏈完整，無需操作。`);
+        console.log(`${logPrefix} 快照鏈完整，無需操作。`);
     }
 }
 
@@ -171,19 +109,17 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
 }
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 儲存式重算程序開始 (v5.0 - Daily PL Snapshot) ---`);
+    console.log(`--- [${uid}] 儲存式重算程序開始 (v_snapshot_integrated) ---`);
     try {
         const ALL_GROUP_ID = 'all';
 
         if (createSnapshot === true) {
             console.log(`[${uid}] 收到強制完整重算指令 (createSnapshot=true)，正在清除所有舊快照...`);
-            await d1Client.batch([
-                { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', params: [uid, ALL_GROUP_ID] },
-                // 【v5.0 新增】同時清除每日損益快照
-                { sql: 'DELETE FROM daily_pl_snapshots WHERE uid = ? AND group_id = ?', params: [uid, ALL_GROUP_ID] }
-            ]);
+            await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】一次性抓取所有需要的原始數據
         const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -193,20 +129,23 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
+        // ========================= 【核心修正 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM user_dividends WHERE uid = ?', params: [uid] },
-                { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] },
-                // 【v5.0 新增】同時清除每日損益快照
-                { sql: 'DELETE FROM daily_pl_snapshots WHERE uid = ?', params: [uid] }
+                { sql: 'DELETE FROM portfolio_snapshots WHERE uid = ?', params: [uid] }
             ]);
             return;
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
+        // ========================= 【核心修正 - 結束】 =========================
         
         let oldHistory = {};
         let baseSnapshot = null;
@@ -232,6 +171,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
         const result = await runCalculationEngine(
             txs,
             allUserSplits,
@@ -240,24 +181,22 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             baseSnapshot,
             oldHistory
         );
+        // ========================= 【核心修正 - 結束】 =========================
 
+
+        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
             fullHistory: newFullHistory,
             twrHistory,
             benchmarkHistory,
-            // 【v5.0 修改】不再從引擎接收 netProfitHistory
+            netProfitHistory,
             evts,
             market
         } = result;
 
         await maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
-        // ========================= 【v5.0 核心修改 - 開始】 =========================
-        // 在所有計算完成後，呼叫新的函式來維護每日損益快照
-        await maintainDailyPLSnapshots(uid, ALL_GROUP_ID, evts, market, modifiedTxDate);
-        // ========================= 【v5.0 核心修改 - 結束】 =========================
-
 
         await d1Client.query('DELETE FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         await d1Client.query('DELETE FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
@@ -274,10 +213,9 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             ]
         }));
         
-        // 【v5.0 修改】不再將 netProfitHistory 存入 portfolio_summary
         const summaryOps = [{
-            sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), new Date().toISOString()]
+            sql: `INSERT INTO portfolio_summary (uid, group_id, summary_data, history, twrHistory, benchmarkHistory, netProfitHistory, lastUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            params: [uid, ALL_GROUP_ID, JSON.stringify(summaryData), JSON.stringify(newFullHistory), JSON.stringify(twrHistory), JSON.stringify(benchmarkHistory), JSON.stringify(netProfitHistory), new Date().toISOString()]
         }];
         if (summaryOps.length > 0) await d1Client.batch(summaryOps);
         if (holdingsOps.length > 0) await d1Client.batch(holdingsOps);
