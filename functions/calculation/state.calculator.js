@@ -1,9 +1,67 @@
 // =========================================================================================
-// == 投資組合狀態計算模組 (state.calculator.js) - v9.0 (Centralized Accounting Engine)
-// == 職責：作為系統唯一的真實來源(Single Source of Truth)，計算任何時間點的投資組合狀態。
+// == 投資組合狀態計算模組 (state.calculator.js) - v9.1 (Restore prepareEvents)
+// == 職責：作為系統唯一的真實來源(Single Source of Truth)，準備事件流並計算任何時間點的投資組合狀態。
 // =========================================================================================
 
 const { toDate, findFxRate, getTotalCost, findNearest, isTwStock } = require('./helpers');
+
+/**
+ * 【恢復】準備所有計算所需的統一事件流 (Event Stream)
+ */
+function prepareEvents(txs, splits, market, userDividends) {
+    const firstBuyDateMap = {};
+    txs.forEach(tx => {
+        if (tx.type === "buy") {
+            const sym = tx.symbol.toUpperCase();
+            const d = toDate(tx.date);
+            if (!firstBuyDateMap[sym] || d < firstBuyDateMap[sym]) {
+                firstBuyDateMap[sym] = d;
+            }
+        }
+    });
+
+    const evts = [
+        ...txs.map(t => ({ ...t, eventType: "transaction" })),
+        ...splits.map(s => ({ ...s, eventType: "split" }))
+    ];
+
+    const confirmedDividendKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
+    
+    userDividends.forEach(ud => {
+        evts.push({
+            eventType: 'confirmed_dividend',
+            date: toDate(ud.pay_date),
+            symbol: ud.symbol.toUpperCase(),
+            amount: ud.total_amount,
+            currency: ud.currency
+        });
+    });
+
+    Object.keys(market).forEach(sym => {
+        if (market[sym]?.dividends) {
+            Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
+                const dividendDate = toDate(dateStr);
+                if (confirmedDividendKeys.has(`${sym.toUpperCase()}_${dateStr}`)) return;
+                if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
+                    const payDate = new Date(dividendDate);
+                    payDate.setMonth(payDate.getMonth() + 1);
+                    evts.push({
+                        eventType: "implicit_dividend",
+                        date: payDate,
+                        ex_date: dividendDate,
+                        symbol: sym.toUpperCase(),
+                        amount_per_share: amount
+                    });
+                }
+            });
+        }
+    });
+
+    evts.sort((a, b) => toDate(a.date) - toDate(b.date));
+    const firstTx = evts.find(e => e.eventType === 'transaction');
+    return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
+}
+
 
 /**
  * 【中央會計引擎】根據所有事件，計算出截至某一天的投資組合最終狀態。
@@ -16,7 +74,6 @@ function calculatePortfolioState(allEvts, market, targetDate = null) {
     const pf = {};
     let totalRealizedPL = 0;
 
-    // 如果有指定目標日期，則只考慮該日期之前 (包含當天) 的事件
     const relevantEvents = targetDate
         ? allEvts.filter(e => toDate(e.date) <= toDate(targetDate))
         : allEvts;
@@ -113,7 +170,7 @@ function calculatePortfolioState(allEvts, market, targetDate = null) {
                     const fx = findFxRate(market, e.currency, toDate(e.date));
                     divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
                 } else { // implicit_dividend
-                    const stateOnExDate = calculatePortfolioState(allEvts, market, toDate(e.ex_date)).pf;
+                    const { pf: stateOnExDate } = calculatePortfolioState(allEvts, market, toDate(e.ex_date));
                     const shares = stateOnExDate[sym]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
                     if (shares > 0) {
                         const currency = stateOnExDate[sym]?.currency || 'USD';
@@ -139,11 +196,6 @@ function calculatePortfolioState(allEvts, market, targetDate = null) {
 
 /**
  * 根據給定的持股狀態，計算其在特定日期的市場總價值 (TWD)
- * @param {object} state - 從 calculatePortfolioState 獲取的 pf 物件
- * @param {object} market - 市場數據
- * @param {Date} date - 目標日期
- * @param {Array} allEvts - 所有事件(用於查找未來拆股)
- * @returns {number} - 市場總價值 (TWD)
  */
 function dailyValue(state, market, date, allEvts) {
     let totalPortfolioValue = 0;
@@ -176,7 +228,7 @@ function dailyValue(state, market, date, allEvts) {
 
 // 導出新的、唯一的狀態計算機和相關函式
 module.exports = {
+    prepareEvents, // 【恢復】導出 prepareEvents
     calculatePortfolioState,
     dailyValue,
-    // 舊的 getPortfolioStateOnDate 已被徹底移除
 };
