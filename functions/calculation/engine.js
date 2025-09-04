@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.3 - Historical Price Unification)
+// == 檔案：functions/calculation/engine.js (v2.4 - Real-time Data Alignment)
 // == 職責：純粹的、可重用的投資組合計算引擎
 // =========================================================================================
 
@@ -67,7 +67,6 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     }
     const fullHistory = { ...oldHistory, ...partialHistory };
     
-    // ========================= 【核心修改 - 開始】 =========================
     const netProfitHistory = {};
     const sortedDates = Object.keys(fullHistory).sort();
 
@@ -75,14 +74,20 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
         const targetDate = toDate(dateStr);
         const eventsUpToDate = evts.filter(e => toDate(e.date) <= targetDate);
         
-        // 【關鍵】調用核心計算時，傳入當天的日期作為 asOfDate
         const dailyMetrics = metrics.calculateCoreMetrics(eventsUpToDate, market, targetDate);
         
         netProfitHistory[dateStr] = dailyMetrics.totalRealizedPL + dailyMetrics.totalUnrealizedPL;
     }
     
-    // 為了計算儀表板的最終數據（包含今日即時損益），我們需要再呼叫一次，且不傳入 asOfDate
     const portfolioResult = metrics.calculateCoreMetrics(evts, market, null);
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    // 【最終對齊】強制將圖表的最後一個數據點，覆蓋為儀表板的即時計算總和
+    if (sortedDates.length > 0) {
+        const lastDate = sortedDates[sortedDates.length - 1];
+        const realTimeTotalProfit = portfolioResult.totalRealizedPL + portfolioResult.totalUnrealizedPL;
+        netProfitHistory[lastDate] = realTimeTotalProfit;
+    }
     // ========================= 【核心修改 - 結束】 =========================
 
 
