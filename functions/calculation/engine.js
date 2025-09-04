@@ -1,11 +1,14 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.4 - Real-time Data Alignment)
-// == 職責：純粹的、可重用的投資組合計算引擎
+// == 檔案：functions/calculation/engine.js (v3.0 - Centralized Accounting Model)
+// == 職責：協調計算流程，所有狀態計算均調用唯一的中央狀態計算機。
 // =========================================================================================
 
-const { toDate, findNearest, findFxRate, isTwStock } = require('./helpers');
-const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./state.calculator');
+const { toDate } = require('./helpers');
+// ========================= 【核心修改】 =========================
+// 引入重構後的 state.calculator 和 metrics.calculator
+const { prepareEvents, dailyValue, calculatePortfolioState } = require('./state.calculator');
 const metrics = require('./metrics.calculator');
+// ==========================================================
 const dataProvider = require('./data.provider');
 
 /**
@@ -62,7 +65,11 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     let curDate = new Date(calculationStartDate);
     while (curDate <= todayForCalc) {
         const dateStr = curDate.toISOString().split('T')[0];
-        partialHistory[dateStr] = dailyValue(getPortfolioStateOnDate(evts, curDate, market), market, curDate, evts);
+        // ========================= 【核心修改】 =========================
+        // 調用新的 dailyValue，它現在依賴於唯一的中央狀態計算機
+        const { pf: stateOnDate } = calculatePortfolioState(evts, market, curDate);
+        partialHistory[dateStr] = dailyValue(stateOnDate, market, curDate, evts);
+        // ==========================================================
         curDate.setDate(curDate.getDate() + 1);
     }
     const fullHistory = { ...oldHistory, ...partialHistory };
@@ -72,23 +79,23 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
 
     for (const dateStr of sortedDates) {
         const targetDate = toDate(dateStr);
-        const eventsUpToDate = evts.filter(e => toDate(e.date) <= targetDate);
-        
-        const dailyMetrics = metrics.calculateCoreMetrics(eventsUpToDate, market, targetDate);
-        
+        // ========================= 【核心修改】 =========================
+        // 調用簡化後的 metrics calculator，它會隱含地調用中央狀態計算機
+        const dailyMetrics = metrics.calculateCoreMetrics(evts, market, targetDate);
+        // ==========================================================
         netProfitHistory[dateStr] = dailyMetrics.totalRealizedPL + dailyMetrics.totalUnrealizedPL;
     }
     
+    // ========================= 【核心修改】 =========================
+    // 再次調用簡化後的 metrics calculator 來獲取最終的即時數據
     const portfolioResult = metrics.calculateCoreMetrics(evts, market, null);
+    // ==========================================================
     
-    // ========================= 【核心修改 - 開始】 =========================
-    // 【最終對齊】強制將圖表的最後一個數據點，覆蓋為儀表板的即時計算總和
     if (sortedDates.length > 0) {
         const lastDate = sortedDates[sortedDates.length - 1];
         const realTimeTotalProfit = portfolioResult.totalRealizedPL + portfolioResult.totalUnrealizedPL;
         netProfitHistory[lastDate] = realTimeTotalProfit;
     }
-    // ========================= 【核心修改 - 結束】 =========================
 
 
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
