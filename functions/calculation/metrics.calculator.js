@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
+// == 核心指標計算模組 (metrics.calculator.js) - v4.2 (Daily P/L Unification)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -122,8 +122,6 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
         } 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在此處加入對配息事件的處理
         else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
@@ -139,14 +137,8 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
-            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
-            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
-            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
-            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
-            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
             dailyCashFlowTWD -= dividendAmountTWD;
         }
-        // ========================= 【核心修改 - 結束】 =========================
     }
 
     // 4. 根據公式計算當日損益
@@ -155,9 +147,9 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
 
 
 /**
- * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
- * This version implements the Modified Dietz method as suggested, providing a robust
- * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
+ * [FINAL VERSION 4.2] Calculates the final state of holdings including daily profit/loss.
+ * This version aligns the daily P/L calculation with the net profit history by including
+ * dividend cash flows, ensuring metric consistency across the application.
  * @param {object} pf - The portfolio state object from the end of the calculation period.
  * @param {object} market - The market data object.
  * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
@@ -199,25 +191,49 @@ function calculateFinalHoldings(pf, market, allEvts) {
             
             const today = new Date(latestDateStr);
             today.setUTCHours(0, 0, 0, 0);
-            const todaysTransactions = allEvts.filter(e =>
-                e.eventType === 'transaction' &&
+
+            // ========================= 【核心修改 - 開始】 =========================
+            // 找出所有今天發生的事件 (交易 + 股利)
+            const todaysEvents = allEvts.filter(e =>
                 e.symbol.toUpperCase() === sym &&
                 toDate(e.date).getTime() === today.getTime()
             );
 
             let dailyCashFlowTWD = 0;
             let dailyQuantityChange = 0;
-            todaysTransactions.forEach(tx => {
-                const fx = findFxRate(market, tx.currency, toDate(tx.date));
-                const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
-                if (tx.type === 'buy') {
-                    dailyCashFlowTWD += costTWD;
-                    dailyQuantityChange += tx.quantity;
-                } else {
-                    dailyCashFlowTWD -= costTWD;
-                    dailyQuantityChange -= tx.quantity;
+            
+            todaysEvents.forEach(e => {
+                if (e.eventType === 'transaction') {
+                    const tx = e;
+                    const fx = findFxRate(market, tx.currency, toDate(tx.date));
+                    const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
+                    if (tx.type === 'buy') {
+                        dailyCashFlowTWD += costTWD;
+                        dailyQuantityChange += tx.quantity;
+                    } else {
+                        dailyCashFlowTWD -= costTWD;
+                        dailyQuantityChange -= tx.quantity;
+                    }
+                } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
+                    // 將股利視為負現金流，以符合 Modified Dietz 公式的分子定義
+                    let dividendAmountTWD = 0;
+                    if (e.eventType === 'confirmed_dividend') {
+                        const fx = findFxRate(market, e.currency, toDate(e.date));
+                        dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
+                    } else { // implicit_dividend
+                         const stateOnExDate = getPortfolioStateOnDate(allEvts, toDate(e.ex_date), market);
+                         const shares = stateOnExDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
+                         if (shares > 0) {
+                             const currency = stateOnExDate[e.symbol.toUpperCase()]?.currency || 'USD';
+                             const fx = findFxRate(market, currency, toDate(e.date));
+                             const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
+                             dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
+                         }
+                    }
+                    dailyCashFlowTWD -= dividendAmountTWD;
                 }
             });
+            // ========================= 【核心修改 - 結束】 =========================
 
             const qty_start_of_day = qty_end_of_day - dailyQuantityChange;
 
