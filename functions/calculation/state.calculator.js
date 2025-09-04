@@ -1,13 +1,9 @@
 // =========================================================================================
-// == 投資組合狀態計算模組 (state.calculator.js) - v9.1 (Restore prepareEvents)
-// == 職責：作為系統唯一的真實來源(Single Source of Truth)，準備事件流並計算任何時間點的投資組合狀態。
+// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION
 // =========================================================================================
 
 const { toDate, findFxRate, getTotalCost, findNearest, isTwStock } = require('./helpers');
 
-/**
- * 【恢復】準備所有計算所需的統一事件流 (Event Stream)
- */
 function prepareEvents(txs, splits, market, userDividends) {
     const firstBuyDateMap = {};
     txs.forEach(tx => {
@@ -62,140 +58,83 @@ function prepareEvents(txs, splits, market, userDividends) {
     return { evts, firstBuyDate: firstTx ? toDate(firstTx.date) : null };
 }
 
+function getPortfolioStateOnDate(allEvts, targetDate, market) {
+    const state = {};
+    const pastEvents = allEvts.filter(e => toDate(e.date) <= toDate(targetDate));
 
-/**
- * 【中央會計引擎】根據所有事件，計算出截至某一天的投資組合最終狀態。
- * @param {Array} allEvts - 所有的事件 (交易、配息、拆股)
- * @param {object} market - 市場數據
- * @param {Date} [targetDate=null] - (可選) 計算的目標日期。若為 null，則計算至最新。
- * @returns {object} - 包含持股狀態 (pf) 和總已實現損益 (totalRealizedPL) 的物件
- */
-function calculatePortfolioState(allEvts, market, targetDate = null) {
-    const pf = {};
-    let totalRealizedPL = 0;
-
-    const relevantEvents = targetDate
-        ? allEvts.filter(e => toDate(e.date) <= toDate(targetDate))
-        : allEvts;
-
-    for (const e of relevantEvents) {
+    for (const e of pastEvents) {
         const sym = e.symbol.toUpperCase();
-        if (!pf[sym]) {
-            pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0 };
+        if (!state[sym]) {
+            state[sym] = { lots: [], currency: e.currency || "USD" };
         }
-        pf[sym].currency = e.currency;
+        state[sym].currency = e.currency;
 
-        switch (e.eventType) {
-            case "transaction": {
-                const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
-                
-                if (e.type === "buy") {
-                    const buyCostOriginal = getTotalCost(e);
-                    let buyQty = e.quantity;
+        if (e.eventType === 'transaction') {
+            const fx = findFxRate(market, e.currency, toDate(e.date));
+            const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+
+            if (e.type === 'buy') {
+                let buyQty = e.quantity;
+                // 優先用買入來補回空頭倉位
+                state[sym].lots.sort((a, b) => a.date - b.date); // 確保按時間順序補回
+                while (buyQty > 0 && state[sym].lots.length > 0 && state[sym].lots[0].quantity < 0) {
+                    const shortLot = state[sym].lots[0];
+                    const qtyToCover = Math.min(buyQty, -shortLot.quantity);
                     
-                    pf[sym].lots.sort((a,b) => a.date - b.date);
-                    while (buyQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity < 0) {
-                        const shortLot = pf[sym].lots[0];
-                        const qtyToCover = Math.min(buyQty, -shortLot.quantity);
-                        
-                        const proceedsFromShortTWD = qtyToCover * shortLot.pricePerShareOriginal * shortLot.fxRateBuy;
-                        const costToCoverTWD = (buyCostOriginal / e.quantity) * qtyToCover * fx;
-                        const realizedPL = proceedsFromShortTWD - costToCoverTWD;
-                        
-                        totalRealizedPL += realizedPL;
-                        pf[sym].realizedPLTWD += realizedPL;
-                        
-                        shortLot.quantity += qtyToCover;
-                        buyQty -= qtyToCover;
+                    shortLot.quantity += qtyToCover;
+                    buyQty -= qtyToCover;
 
-                        if (Math.abs(shortLot.quantity) < 1e-9) {
-                            pf[sym].lots.shift();
-                        }
+                    if (Math.abs(shortLot.quantity) < 1e-9) {
+                        state[sym].lots.shift();
                     }
+                }
+                // 如果還有剩餘的買入數量，則建立新的多頭倉位
+                if (buyQty > 1e-9) {
+                    state[sym].lots.push({
+                        quantity: buyQty,
+                        pricePerShareTWD: costTWD / (e.quantity || 1), // 成本以原始交易計算
+                        pricePerShareOriginal: e.price,
+                        date: toDate(e.date)
+                    });
+                }
+            } else { // sell
+                let sellQty = e.quantity;
+                // 優先賣出現有的多頭倉位
+                state[sym].lots.sort((a, b) => a.date - b.date); // 確保按 FIFO 賣出
+                while (sellQty > 0 && state[sym].lots.length > 0 && state[sym].lots[0].quantity > 0) {
+                    const longLot = state[sym].lots[0];
+                    const qtyToSell = Math.min(sellQty, longLot.quantity);
                     
-                    if (buyQty > 1e-9) {
-                        pf[sym].lots.push({ 
-                            quantity: buyQty, 
-                            pricePerShareOriginal: buyCostOriginal / e.quantity, 
-                            fxRateBuy: fx,
-                            date: toDate(e.date) 
-                        });
-                    }
-                } else { // sell
-                    let sellQty = e.quantity;
-                    const proceedsPerShareOriginal = getTotalCost(e) / e.quantity;
+                    longLot.quantity -= qtyToSell;
+                    sellQty -= qtyToSell;
 
-                    pf[sym].lots.sort((a,b) => a.date - b.date);
-                    while (sellQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity > 0) {
-                        const longLot = pf[sym].lots[0];
-                        const qtyToSell = Math.min(sellQty, longLot.quantity);
-
-                        const costOfGoodsSold = qtyToSell * longLot.pricePerShareOriginal * longLot.fxRateBuy;
-                        const proceedsFromSale = qtyToSell * proceedsPerShareOriginal * fx;
-                        const realizedPL = proceedsFromSale - costOfGoodsSold;
-
-                        totalRealizedPL += realizedPL;
-                        pf[sym].realizedPLTWD += realizedPL;
-
-                        longLot.quantity -= qtyToSell;
-                        sellQty -= qtyToSell;
-
-                        if (longLot.quantity < 1e-9) {
-                            pf[sym].lots.shift();
-                        }
-                    }
-
-                    if (sellQty > 1e-9) {
-                        pf[sym].lots.push({
-                            quantity: -sellQty,
-                            pricePerShareOriginal: proceedsPerShareOriginal,
-                            fxRateBuy: fx,
-                            date: toDate(e.date)
-                        });
+                    if (longLot.quantity < 1e-9) {
+                        state[sym].lots.shift();
                     }
                 }
-                break;
-            }
-            case "split": {
-                pf[sym].lots.forEach(l => {
-                    l.quantity *= e.ratio;
-                    l.pricePerShareOriginal /= e.ratio;
-                });
-                break;
-            }
-            case "confirmed_dividend":
-            case "implicit_dividend": {
-                let divTWD = 0;
-                if (e.eventType === 'confirmed_dividend') {
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
-                    divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
-                } else { // implicit_dividend
-                    const { pf: stateOnExDate } = calculatePortfolioState(allEvts, market, toDate(e.ex_date));
-                    const shares = stateOnExDate[sym]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
-                    if (shares > 0) {
-                        const currency = stateOnExDate[sym]?.currency || 'USD';
-                        const fx = findFxRate(market, currency, toDate(e.date));
-                        const postTaxAmount = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30));
-                        divTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
-                    }
+                // 如果還有剩餘的賣出數量，則建立新的空頭倉位
+                if (sellQty > 1e-9) {
+                    state[sym].lots.push({
+                        quantity: -sellQty, // 數量為負
+                        pricePerShareTWD: costTWD / (e.quantity || 1), // 這裡記錄的是賣出收入
+                        pricePerShareOriginal: e.price,
+                        date: toDate(e.date)
+                    });
                 }
-
-                if (divTWD !== 0) {
-                    const currentQty = pf[sym].lots.reduce((s, l) => s + l.quantity, 0);
-                    const plEffect = currentQty >= 0 ? divTWD : -divTWD;
-                    totalRealizedPL += plEffect;
-                    pf[sym].realizedPLTWD += plEffect;
-                }
-                break;
             }
+        } else if (e.eventType === 'split') {
+            state[sym].lots.forEach(lot => {
+                lot.quantity *= e.ratio;
+                lot.pricePerShareTWD /= e.ratio;
+                lot.pricePerShareOriginal /= e.ratio;
+            });
         }
     }
-
-    return { pf, totalRealizedPL };
+    return state;
 }
 
 /**
- * 根據給定的持股狀態，計算其在特定日期的市場總價值 (TWD)
+ * 根據當日持股狀態，計算其市場總價值 (TWD) - 最終修正版
  */
 function dailyValue(state, market, date, allEvts) {
     let totalPortfolioValue = 0;
@@ -207,28 +146,29 @@ function dailyValue(state, market, date, allEvts) {
         if (Math.abs(qty) < 1e-9) continue;
 
         const priceInfo = findNearest(market[sym]?.prices, date);
+
         if (!priceInfo) continue;
         
         const { date: priceDate, value: price } = priceInfo;
 
         const futureSplits = allEvts.filter(e => 
             e.eventType === 'split' && 
-            e.symbol.toUpperCase() === sym && 
+            e.symbol.toUpperCase() === sym.toUpperCase() && 
             toDate(e.date) > toDate(priceDate)
         );
         const adjustmentRatio = futureSplits.reduce((acc, split) => acc * split.ratio, 1);
         const unadjustedPrice = price * adjustmentRatio;
         
         const fx = findFxRate(market, s.currency, date);
+
         totalPortfolioValue += (qty * unadjustedPrice * (s.currency === "TWD" ? 1 : fx));
     }
 
     return totalPortfolioValue;
 }
 
-// 導出新的、唯一的狀態計算機和相關函式
 module.exports = {
-    prepareEvents, // 【恢復】導出 prepareEvents
-    calculatePortfolioState,
+    prepareEvents,
+    getPortfolioStateOnDate,
     dailyValue,
 };
