@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
+// == 核心指標計算模組 (metrics.calculator.js) - v5.0 (Total Profit Unification)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -122,8 +122,6 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
         } 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在此處加入對配息事件的處理
         else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
@@ -139,14 +137,8 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
-            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
-            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
-            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
-            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
-            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
             dailyCashFlowTWD -= dividendAmountTWD;
         }
-        // ========================= 【核心修改 - 結束】 =========================
     }
 
     // 4. 根據公式計算當日損益
@@ -491,8 +483,16 @@ function calculateCoreMetrics(evts, market) {
     const totalInvestedCost = totalBuyCostTWD;
     
     const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
-
-    return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    return { 
+        holdings: { holdingsToUpdate }, 
+        totalRealizedPL, 
+        totalUnrealizedPL, // 新增回傳 totalUnrealizedPL
+        xirr, 
+        overallReturnRate 
+    };
+    // ========================= 【核心修改 - 結束】 =========================
 }
 
 module.exports = {
