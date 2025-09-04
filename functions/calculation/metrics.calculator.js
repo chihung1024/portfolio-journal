@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v7.0 (Strict TWD-based Accounting)
-// == 職責：採用嚴格的台幣本位會計模型，統一所有損益計算的匯率基準。
+// == 核心指標計算模組 (metrics.calculator.js) - v8.0 (Final Accounting Model Refactor)
+// == 職責：採用分離成本與匯率的會計模型，從根本上確保數據一致性。
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -163,8 +163,11 @@ function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
         const qty_end_of_day = h.lots.reduce((s, l) => s + l.quantity, 0);
 
         if (Math.abs(qty_end_of_day) > 1e-9) {
-            const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareTWD, 0);
+            // ========================= 【核心修改】 =========================
+            // 動態計算 TWD 總成本
+            const totCostTWD = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal * l.fxRateBuy, 0);
             const totCostOrg = h.lots.reduce((s, l) => s + l.quantity * l.pricePerShareOriginal, 0);
+            // ==========================================================
 
             const symbolPrices = market[sym]?.prices || {};
             
@@ -194,7 +197,7 @@ function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
             let dailyCashFlowTWD = 0;
             let dailyQuantityChange = 0;
             todaysTransactions.forEach(tx => {
-                const fx = findFxRate(market, tx.currency, toDate(tx.date));
+                const fx = (tx.exchangeRate && tx.currency !== 'TWD') ? tx.exchangeRate : findFxRate(market, tx.currency, toDate(tx.date));
                 const costTWD = getTotalCost(tx) * (tx.currency === "TWD" ? 1 : fx);
                 if (tx.type === 'buy') {
                     dailyCashFlowTWD += costTWD;
@@ -316,10 +319,7 @@ function calculateDailyCashflows(evts, market) {
         let flow = 0;
         if (e.eventType === 'transaction') {
             const currency = e.currency || 'USD';
-            // ========================= 【核心修改 - 開始】 =========================
-            // 統一使用與 CoreMetrics 一致的匯率邏輯
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
-            // ========================= 【核心修改 - 結束】 =========================
             flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
@@ -366,26 +366,23 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
 
         switch (e.eventType) {
             case "transaction": {
-                // ========================= 【核心修改 - 開始】 =========================
-                // 嚴格使用此匯率進行所有TWD換算，確保一致性
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
-                // ========================= 【核心修改 - 結束】 =========================
                 
                 if (e.type === "buy") {
-                    const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+                    const buyCostOriginal = getTotalCost(e);
+                    const buyCostTWD = buyCostOriginal * (e.currency === "TWD" ? 1 : fx);
                     totalBuyCostTWD += buyCostTWD; 
 
                     let buyQty = e.quantity;
-                    const buyPricePerShareTWD = buyCostTWD / (e.quantity || 1);
                     
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (buyQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity < 0) {
                         const shortLot = pf[sym].lots[0];
                         const qtyToCover = Math.min(buyQty, -shortLot.quantity);
                         
-                        const proceedsFromShort = qtyToCover * shortLot.pricePerShareTWD;
-                        const costToCover = qtyToCover * buyPricePerShareTWD;
-                        const realizedPL = proceedsFromShort - costToCover;
+                        const proceedsFromShortTWD = qtyToCover * shortLot.pricePerShareOriginal * shortLot.fxRateBuy;
+                        const costToCoverTWD = (buyCostOriginal / e.quantity) * qtyToCover * fx;
+                        const realizedPL = proceedsFromShortTWD - costToCoverTWD;
                         
                         totalRealizedPL += realizedPL;
                         pf[sym].realizedPLTWD += realizedPL;
@@ -399,24 +396,31 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
                     }
                     
                     if (buyQty > 1e-9) {
+                        // ========================= 【核心修改】 =========================
+                        // 不再儲存 pricePerShareTWD，改為分別儲存原始價格和買入時匯率
                         pf[sym].lots.push({ 
                             quantity: buyQty, 
-                            pricePerShareOriginal: e.price, 
-                            pricePerShareTWD: buyPricePerShareTWD, 
+                            pricePerShareOriginal: buyCostOriginal / e.quantity, 
+                            fxRateBuy: fx,
                             date: toDate(e.date) 
                         });
+                        // ==========================================================
                     }
                 } else { // sell
                     let sellQty = e.quantity;
-                    const sellPricePerShareTWD = (getTotalCost(e) / (e.quantity || 1)) * (e.currency === "TWD" ? 1 : fx);
+                    const proceedsPerShareOriginal = getTotalCost(e) / e.quantity;
+                    const proceedsTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
 
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (sellQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity > 0) {
                         const longLot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, longLot.quantity);
 
-                        const costOfGoodsSold = qtyToSell * longLot.pricePerShareTWD;
-                        const proceedsFromSale = qtyToSell * sellPricePerShareTWD;
+                        // ========================= 【核心修改】 =========================
+                        // 動態計算 TWD 成本
+                        const costOfGoodsSold = qtyToSell * longLot.pricePerShareOriginal * longLot.fxRateBuy;
+                        const proceedsFromSale = qtyToSell * proceedsPerShareOriginal * fx;
+                        // ==========================================================
                         const realizedPL = proceedsFromSale - costOfGoodsSold;
 
                         totalRealizedPL += realizedPL;
@@ -433,8 +437,8 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
                     if (sellQty > 1e-9) {
                         pf[sym].lots.push({
                             quantity: -sellQty,
-                            pricePerShareOriginal: e.price,
-                            pricePerShareTWD: sellPricePerShareTWD,
+                            pricePerShareOriginal: proceedsPerShareOriginal,
+                            fxRateBuy: fx, // 對於空頭倉位，"fxRateBuy" 實為 "fxRateShort"
                             date: toDate(e.date)
                         });
                     }
@@ -444,8 +448,8 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
             case "split": {
                 pf[sym].lots.forEach(l => {
                     l.quantity *= e.ratio;
-                    l.pricePerShareTWD /= e.ratio;
                     l.pricePerShareOriginal /= e.ratio;
+                    // fxRateBuy 保持不變
                 });
                 break;
             }
