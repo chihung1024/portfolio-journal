@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v6.0 (Historical Price Unification)
+// == 核心指標計算模組 (metrics.calculator.js) - v7.0 (Strict TWD-based Accounting)
+// == 職責：採用嚴格的台幣本位會計模型，統一所有損益計算的匯率基準。
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -145,7 +146,7 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
     return endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
 }
 
-// ========================= 【核心修改 - 開始】 =========================
+
 /**
  * 計算最終持股狀態，包含每日損益
  * @param {object} pf - 當前投資組合狀態
@@ -155,7 +156,6 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
  * @returns {{holdingsToUpdate: object}} - 更新後的持股物件
  */
 function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
-// ========================= 【核心修改 - 結束】 =========================
     const holdingsToUpdate = {};
     
     for (const sym in pf) {
@@ -168,7 +168,6 @@ function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
 
             const symbolPrices = market[sym]?.prices || {};
             
-            // ========================= 【核心修改 - 開始】 =========================
             const finalDate = asOfDate ? toDate(asOfDate) : new Date();
             const latestPriceInfo = findNearest(symbolPrices, finalDate);
             const latestPrice = latestPriceInfo ? latestPriceInfo.value : 0;
@@ -180,7 +179,6 @@ function calculateFinalHoldings(pf, market, allEvts, asOfDate = null) {
             const priceBeforeInfo = findNearest(symbolPrices, yesterday);
             const priceBefore = priceBeforeInfo ? priceBeforeInfo.value : latestPrice;
             const beforeDateStr = priceBeforeInfo ? priceBeforeInfo.date : (latestPriceInfo ? latestPriceInfo.date : null);
-            // ========================= 【核心修改 - 結束】 =========================
 
             const futureSplits = allEvts.filter(e => e.eventType === 'split' && e.symbol.toUpperCase() === sym && toDate(e.date) > latestPriceDate);
             const unadjustedPrice = (latestPrice ?? 0) * futureSplits.reduce((acc, split) => acc * split.ratio, 1);
@@ -318,7 +316,10 @@ function calculateDailyCashflows(evts, market) {
         let flow = 0;
         if (e.eventType === 'transaction') {
             const currency = e.currency || 'USD';
+            // ========================= 【核心修改 - 開始】 =========================
+            // 統一使用與 CoreMetrics 一致的匯率邏輯
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
+            // ========================= 【核心修改 - 結束】 =========================
             flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
@@ -343,7 +344,7 @@ function calculateDailyCashflows(evts, market) {
     }, {});
 }
 
-// ========================= 【核心修改 - 開始】 =========================
+
 /**
  * 核心指標計算函式
  * @param {Array} evts - 用於計算的事件
@@ -352,7 +353,6 @@ function calculateDailyCashflows(evts, market) {
  * @returns {object} - 包含所有核心指標的物件
  */
 function calculateCoreMetrics(evts, market, asOfDate = null) {
-// ========================= 【核心修改 - 結束】 =========================
     const pf = {};
     let totalRealizedPL = 0;
     let totalBuyCostTWD = 0; 
@@ -366,7 +366,10 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
 
         switch (e.eventType) {
             case "transaction": {
+                // ========================= 【核心修改 - 開始】 =========================
+                // 嚴格使用此匯率進行所有TWD換算，確保一致性
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
+                // ========================= 【核心修改 - 結束】 =========================
                 
                 if (e.type === "buy") {
                     const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
@@ -481,9 +484,7 @@ function calculateCoreMetrics(evts, market, asOfDate = null) {
         }
     }
 
-    // ========================= 【核心修改 - 開始】 =========================
     const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts, asOfDate);
-    // ========================= 【核心修改 - 結束】 =========================
     const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
     const xirr = calculateXIRR(xirrFlows);
 
