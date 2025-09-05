@@ -1,20 +1,16 @@
-// =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v3.0 - 整合暫存區狀態)
-// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
-// =========================================================================================
+// js/ui/components/groups.ui.js
 
-import { getState } from '../../state.js';
-import { stagingService } from '../../staging.service.js'; // 【核心修改】
+import state from '../../state.js';
+import { stagingService } from '../../staging.service.js';
 
 /**
  * 渲染群組管理分頁的內容
  */
 export async function renderGroupsTab() {
-    const { groups } = getState();
+    const { groups } = state;
     const container = document.getElementById('groups-content');
     if (!container) return;
 
-    // 【核心修改】從暫存區獲取群組相關的操作
     const stagedActions = await stagingService.getStagedActions();
     const groupActions = stagedActions.filter(a => a.entity === 'group');
     const stagedActionMap = new Map();
@@ -22,7 +18,6 @@ export async function renderGroupsTab() {
         stagedActionMap.set(action.payload.id, action);
     });
 
-    // 結合 state 中的數據和暫存區的數據
     let combinedGroups = [...groups];
 
     stagedActionMap.forEach((action, groupId) => {
@@ -43,7 +38,6 @@ export async function renderGroupsTab() {
         }
     });
     
-    // 按創建時間排序 (假設 state 中有 created_at)
     combinedGroups.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
 
@@ -53,8 +47,7 @@ export async function renderGroupsTab() {
     }
 
     container.innerHTML = combinedGroups.map(group => {
-        // 【核心修改】根據暫存狀態決定背景色
-        let stagingClass = 'bg-gray-50'; // 預設
+        let stagingClass = 'bg-gray-50';
         if (group._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
         else if (group._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
         else if (group._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
@@ -85,17 +78,16 @@ export async function renderGroupsTab() {
 }
 
 /**
- * 【核心修改】渲染群組編輯/新增彈出視窗的內容 (現在為 async)
+ * 渲染群組編輯/新增彈出視窗的內容
  * @param {Object|null} groupToEdit - (可選) 要編輯的群組物件
  */
 export async function renderGroupModal(groupToEdit = null) {
-    const { transactions } = getState();
+    const { transactions } = state;
     const form = document.getElementById('group-form');
     form.reset();
 
     let finalGroupData = groupToEdit ? { ...groupToEdit } : null;
 
-    // 如果是編輯模式，檢查暫存區是否有更新的版本
     if (groupToEdit) {
         const stagedActions = await stagingService.getStagedActions();
         const stagedUpdate = stagedActions.find(a => a.entity === 'group' && a.type === 'UPDATE' && a.payload.id === groupToEdit.id);
