@@ -1,65 +1,50 @@
-// =========================================================================================
-// == 拆股事件 UI 模組 (splits.ui.js) v2.0 - 整合暫存區狀態
-// =========================================================================================
+// js/ui/components/splits.ui.js
 
-import { getState } from '../../state.js';
-import { stagingService } from '../../staging.service.js'; // 【核心修改】
+import state from '../../state.js';
 
-export async function renderSplitsTable() {
-    const { userSplits } = getState();
-    const tableBody = document.getElementById('splits-table-body');
-    if (!tableBody) return;
+export function renderSplitsTable() {
+    const splits = state.splits || [];
+    const container = document.getElementById('splits-table');
+    if (!container) return;
 
-    // 【核心修改】從暫存區獲取拆股相關的操作
-    const stagedActions = await stagingService.getStagedActions();
-    const splitActions = stagedActions.filter(a => a.entity === 'split');
-    const stagedActionMap = new Map();
-    splitActions.forEach(action => {
-        stagedActionMap.set(action.payload.id, action);
-    });
+    const sortedSplits = [...splits].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    // 結合 state 中的數據和暫存區的數據
-    let combinedSplits = [...userSplits];
+    const tableHTML = `
+        <div class="table-container">
+            <table class="min-w-full">
+                <thead class="bg-gray-100">
+                    <tr>
+                        <th class="px-4 py-2 text-left">股票代號</th>
+                        <th class="px-4 py-2 text-left">分割日期</th>
+                        <th class="px-4 py-2 text-center">分割比例</th>
+                        <th class="px-4 py-2 text-right">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${sortedSplits.map(split => `
+                        <tr class="border-b" data-id="${split.id}">
+                            <td class="px-4 py-2">${split.symbol}</td>
+                            <td class="px-4 py-2">${split.date}</td>
+                            <td class="px-4 py-2 text-center">${split.from_factor} for ${split.to_factor}</td>
+                            <td class="px-4 py-2 text-right">
+                                <button class="edit-split-btn text-blue-500 hover:text-blue-700 p-1">
+                                    <i data-lucide="edit" class="w-4 h-4"></i>
+                                </button>
+                                <button class="delete-split-btn text-red-500 hover:text-red-700 p-1">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
 
-    stagedActionMap.forEach((action, splitId) => {
-        const existingIndex = combinedSplits.findIndex(s => s.id === splitId);
-        
-        if (action.type === 'CREATE') {
-            if (existingIndex === -1) {
-                combinedSplits.push({ ...action.payload, _staging_status: 'CREATE' });
-            }
-        } 
-        // 拆股事件沒有更新(UPDATE)操作
-        else if (action.type === 'DELETE') {
-            if (existingIndex > -1) {
-                combinedSplits[existingIndex]._staging_status = 'DELETE';
-            }
-        }
-    });
-    
-    // 按日期重新排序
-    combinedSplits.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    if (combinedSplits.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-10 text-gray-500">沒有自定義拆股事件。</td></tr>`;
-        return;
+    if (sortedSplits.length === 0) {
+        container.innerHTML = `<p>沒有股票分割資料。</p>`;
+    } else {
+        container.innerHTML = tableHTML;
+        lucide.createIcons();
     }
-    
-    tableBody.innerHTML = combinedSplits.map(s => {
-        // 【核心修改】根據暫存狀態決定背景色
-        let stagingClass = '';
-        if (s._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
-        else if (s._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
-
-        return `
-            <tr class="${stagingClass}">
-                <td class="px-6 py-4 whitespace-nowrap">${s.date.split('T')[0]}</td>
-                <td class="px-6 py-4 whitespace-nowrap font-medium">${s.symbol.toUpperCase()}</td>
-                <td class="px-6 py-4 whitespace-nowrap">${s.ratio}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
-                    <button data-id="${s.id}" class="delete-split-btn text-red-600 hover:text-red-900">刪除</button>
-                </td>
-            </tr>
-        `;
-    }).join('');
 }
