@@ -238,4 +238,280 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 marketValueTWD: mktVal,
                 unrealizedPLTWD: mktVal - totCostTWD,
                 realizedPLTWD: h.realizedPLTWD,
-                returnRate: totCostTWD
+                returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
+                daily_change_percent: daily_change_percent,
+                daily_pl_twd: daily_pl_twd
+            };
+        }
+    }
+    return { holdingsToUpdate };
+}
+
+function createCashflowsForXirr(evts, holdings, market) {
+    const flows = [];
+    evts.forEach(e => {
+        let amt = 0;
+        let flowDate = toDate(e.date);
+        if (e.eventType === "transaction") {
+            const currency = e.currency || 'USD';
+            const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, flowDate);
+            amt = (e.type === "buy" ? -getTotalCost(e) : getTotalCost(e)) * (currency === 'TWD' ? 1 : fx);
+        } else if (e.eventType === "confirmed_dividend") {
+            // ========================= 【核心修改 - 開始】 =========================
+            // 優先使用手動輸入的台幣金額
+            if (e.total_amount_twd && e.total_amount_twd > 0) {
+                amt = e.total_amount_twd;
+            } else {
+                const fx = findFxRate(market, e.currency, flowDate);
+                amt = e.amount * (e.currency === 'TWD' ? 1 : fx);
+            }
+            // ========================= 【核心修改 - 結束】 =========================
+        } else if (e.eventType === "implicit_dividend") {
+            const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
+            const sym = e.symbol.toUpperCase();
+            const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
+            if (shares > 0) {
+                const currency = stateOnDate[sym]?.currency || 'USD';
+                const fx = findFxRate(market, currency, flowDate);
+                const postTaxAmount = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30));
+                amt = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
+            }
+        }
+        if (Math.abs(amt) > 1e-6) {
+            flows.push({ date: flowDate, amount: amt });
+        }
+    });
+
+    const totalMarketValue = Object.values(holdings).reduce((s, h) => s + h.marketValueTWD, 0);
+    if (Math.abs(totalMarketValue) > 0) {
+        flows.push({ date: new Date(), amount: totalMarketValue });
+    }
+
+    const combined = flows.reduce((acc, flow) => {
+        const dateStr = flow.date.toISOString().slice(0, 10);
+        acc[dateStr] = (acc[dateStr] || 0) + flow.amount;
+        return acc;
+    }, {});
+
+    return Object.entries(combined)
+        .filter(([, amount]) => Math.abs(amount) > 1e-6)
+        .map(([date, amount]) => ({ date: new Date(date), amount }))
+        .sort((a, b) => a.date - b.date);
+}
+
+function calculateXIRR(flows) {
+    if (flows.length < 2) return null;
+    const amounts = flows.map(f => f.amount);
+    if (!amounts.some(v => v < 0) || !amounts.some(v => v > 0)) return null;
+
+    const dates = flows.map(f => f.date);
+    const epoch = dates[0].getTime();
+    const years = dates.map(d => (d.getTime() - epoch) / (365.25 * 24 * 60 * 60 * 1000));
+
+    let guess = 0.1;
+    let npv;
+    for (let i = 0; i < 50; i++) {
+        npv = amounts.reduce((sum, amount, j) => sum + amount / Math.pow(1 + guess, years[j]), 0);
+        if (Math.abs(npv) < 1e-6) return guess;
+        const derivative = amounts.reduce((sum, amount, j) => sum - years[j] * amount / Math.pow(1 + guess, years[j] + 1), 0);
+        if (Math.abs(derivative) < 1e-9) break;
+        guess -= npv / derivative;
+    }
+    return (npv && Math.abs(npv) < 1e-6) ? guess : null;
+}
+
+function calculateDailyCashflows(evts, market) {
+    return evts.reduce((acc, e) => {
+        const dateStr = toDate(e.date).toISOString().split('T')[0];
+        let flow = 0;
+        if (e.eventType === 'transaction') {
+            const currency = e.currency || 'USD';
+            const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
+            flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
+        } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
+            let dividendAmountTWD = 0;
+            if (e.eventType === 'confirmed_dividend') {
+                // 【核心修改】優先使用手動輸入的台幣金額
+                if (e.total_amount_twd && e.total_amount_twd > 0) {
+                    dividendAmountTWD = e.total_amount_twd;
+                } else {
+                    const fx = findFxRate(market, e.currency, toDate(e.date));
+                    dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
+                }
+            } else { 
+                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
+                const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
+                if (shares > 0) {
+                    const currency = stateOnDate[e.symbol.toUpperCase()]?.currency || 'USD';
+                    const fx = findFxRate(market, currency, toDate(e.date));
+                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
+                    dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
+                }
+            }
+            flow = -1 * dividendAmountTWD;
+        }
+
+        if (flow !== 0) acc[dateStr] = (acc[dateStr] || 0) + flow;
+        return acc;
+    }, {});
+}
+
+function calculateCoreMetrics(evts, market) {
+    const pf = {};
+    let totalRealizedPL = 0;
+    let totalBuyCostTWD = 0; 
+
+    for (const e of evts) {
+        const sym = e.symbol.toUpperCase();
+        if (!pf[sym]) {
+            pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0 };
+        }
+        pf[sym].currency = e.currency;
+
+        switch (e.eventType) {
+            case "transaction": {
+                const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
+                
+                if (e.type === "buy") {
+                    const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+                    totalBuyCostTWD += buyCostTWD; 
+
+                    let buyQty = e.quantity;
+                    const buyPricePerShareTWD = buyCostTWD / (e.quantity || 1);
+                    
+                    pf[sym].lots.sort((a,b) => a.date - b.date);
+                    while (buyQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity < 0) {
+                        const shortLot = pf[sym].lots[0];
+                        const qtyToCover = Math.min(buyQty, -shortLot.quantity);
+                        
+                        const proceedsFromShort = qtyToCover * shortLot.pricePerShareTWD;
+                        const costToCover = qtyToCover * buyPricePerShareTWD;
+                        const realizedPL = proceedsFromShort - costToCover;
+                        
+                        totalRealizedPL += realizedPL;
+                        pf[sym].realizedPLTWD += realizedPL;
+                        
+                        shortLot.quantity += qtyToCover;
+                        buyQty -= qtyToCover;
+
+                        if (Math.abs(shortLot.quantity) < 1e-9) {
+                            pf[sym].lots.shift();
+                        }
+                    }
+                    
+                    if (buyQty > 1e-9) {
+                        pf[sym].lots.push({ 
+                            quantity: buyQty, 
+                            pricePerShareOriginal: e.price, 
+                            pricePerShareTWD: buyPricePerShareTWD, 
+                            date: toDate(e.date) 
+                        });
+                    }
+                } else { // sell
+                    let sellQty = e.quantity;
+                    const sellPricePerShareTWD = (getTotalCost(e) / (e.quantity || 1)) * (e.currency === "TWD" ? 1 : fx);
+
+                    pf[sym].lots.sort((a,b) => a.date - b.date);
+                    while (sellQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity > 0) {
+                        const longLot = pf[sym].lots[0];
+                        const qtyToSell = Math.min(sellQty, longLot.quantity);
+
+                        const costOfGoodsSold = qtyToSell * longLot.pricePerShareTWD;
+                        const proceedsFromSale = qtyToSell * sellPricePerShareTWD;
+                        const realizedPL = proceedsFromSale - costOfGoodsSold;
+
+                        totalRealizedPL += realizedPL;
+                        pf[sym].realizedPLTWD += realizedPL;
+
+                        longLot.quantity -= qtyToSell;
+                        sellQty -= qtyToSell;
+
+                        if (longLot.quantity < 1e-9) {
+                            pf[sym].lots.shift();
+                        }
+                    }
+
+                    if (sellQty > 1e-9) {
+                        pf[sym].lots.push({
+                            quantity: -sellQty,
+                            pricePerShareOriginal: e.price,
+                            pricePerShareTWD: sellPricePerShareTWD,
+                            date: toDate(e.date)
+                        });
+                    }
+                }
+                break;
+            }
+            case "split": {
+                pf[sym].lots.forEach(l => {
+                    l.quantity *= e.ratio;
+                    l.pricePerShareTWD /= e.ratio;
+                    l.pricePerShareOriginal /= e.ratio;
+                });
+                break;
+            }
+            case "confirmed_dividend": {
+                const currentQty = pf[sym].lots.reduce((s, l) => s + l.quantity, 0);
+                // ========================= 【核心修改 - 開始】 =========================
+                // 優先使用手動輸入的台幣金額
+                let divTWD = 0;
+                if (e.total_amount_twd && e.total_amount_twd > 0) {
+                    divTWD = e.total_amount_twd;
+                } else {
+                    const fx = findFxRate(market, e.currency, toDate(e.date));
+                    divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
+                }
+                // ========================= 【核心修改 - 結束】 =========================
+                
+                if (currentQty >= 0) {
+                    totalRealizedPL += divTWD;
+                    pf[sym].realizedPLTWD += divTWD;
+                } else {
+                    totalRealizedPL -= divTWD;
+                    pf[sym].realizedPLTWD -= divTWD;
+                }
+                break;
+            }
+            case "implicit_dividend": {
+                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
+                const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
+                if (shares < -1e-9) {
+                     const currency = stateOnDate[sym]?.currency || 'USD';
+                     const fx = findFxRate(market, currency, toDate(e.date));
+                     const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * Math.abs(shares) * (currency === "TWD" ? 1 : fx);
+                     totalRealizedPL -= divTWD;
+                     pf[sym].realizedPLTWD -= divTWD;
+                } else if (shares > 1e-9) {
+                    const currency = stateOnDate[sym]?.currency || 'USD';
+                    const fx = findFxRate(market, currency, toDate(e.date));
+                    const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx);
+                    totalRealizedPL += divTWD;
+                    pf[sym].realizedPLTWD += divTWD;
+                }
+                break;
+            }
+        }
+    }
+
+    const { holdingsToUpdate } = calculateFinalHoldings(pf, market, evts);
+    const xirrFlows = createCashflowsForXirr(evts, holdingsToUpdate, market);
+    const xirr = calculateXIRR(xirrFlows);
+
+    const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
+    const totalProfitAndLoss = totalRealizedPL + totalUnrealizedPL;
+    const totalInvestedCost = totalBuyCostTWD;
+    
+    const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
+
+    return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
+}
+
+module.exports = {
+    calculateTwrHistory,
+    calculateFinalHoldings,
+    createCashflowsForXirr,
+    calculateXIRR,
+    calculateDailyCashflows,
+    calculateCoreMetrics,
+    calculateDailyPL
+};
