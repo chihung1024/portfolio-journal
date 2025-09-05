@@ -1,5 +1,7 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
+// == 核心指標計算模組 (metrics.calculator.js) - v5.0 (P&L Refactor)
+// == 職責：提供 TWR、XIRR、最終持股狀態等核心指標的計算函式。
+// ==      移除了舊有的、有缺陷的每日損益計算，為新的時間線模型做準備。
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -69,7 +71,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 
 /**
- * 【新增】計算指定日期的每日損益 (Daily Profit/Loss)
+ * 【重構】計算指定日期的每日損益 (Daily Profit/Loss)，修正股利重複計算問題
  * @param {Date} today - 要計算的目標日期
  * @param {Date} yesterday - 目標日期的前一天
  * @param {Array} allEvts - 所有的事件
@@ -111,7 +113,7 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
         }
     }
 
-    // 3. 計算今日發生的現金流
+    // 3. 計算今日發生的現金流 (僅限外部資金流動，如買賣)
     let dailyCashFlowTWD = 0;
     
     const todaysEvents = allEvts.filter(e => toDate(e.date).getTime() === today.getTime());
@@ -120,36 +122,17 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
         if (e.eventType === 'transaction') {
             const fx = findFxRate(market, e.currency, toDate(e.date));
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+            // 買入是正現金流 (資金注入)，賣出是負現金流 (資金抽出)
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
-        } 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在此處加入對配息事件的處理
-        else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
-            let dividendAmountTWD = 0;
-            if (e.eventType === 'confirmed_dividend') {
-                const fx = findFxRate(market, e.currency, toDate(e.date));
-                dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-            } else { // implicit_dividend
-                const stateOnExDate = getPortfolioStateOnDate(allEvts, toDate(e.ex_date), market);
-                const shares = stateOnExDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
-                if (shares > 0) {
-                    const currency = stateOnExDate[e.symbol.toUpperCase()]?.currency || 'USD';
-                    const fx = findFxRate(market, currency, toDate(e.date));
-                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
-                    dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
-                }
-            }
-            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
-            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
-            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
-            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
-            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
-            dailyCashFlowTWD -= dividendAmountTWD;
         }
-        // ========================= 【核心修改 - 結束】 =========================
+        // ========================= 【核心修正 - 開始】 =========================
+        // 移除此處對配息事件的處理。
+        // 股利是內部產生的收益，不應計為外部現金流。
+        // 它將在 calculateCoreMetrics 中被正確地計入已實現損益。
+        // ========================= 【核心修正 - 結束】 =========================
     }
 
-    // 4. 根據公式計算當日損益
+    // 4. 根據公式計算當日損益: P/L = 市值變化 - 現金流
     return endingMarketValueTWD - beginningMarketValueTWD - dailyCashFlowTWD;
 }
 
@@ -322,36 +305,10 @@ function calculateXIRR(flows) {
     return (npv && Math.abs(npv) < 1e-6) ? guess : null;
 }
 
-function calculateDailyCashflows(evts, market) {
-    return evts.reduce((acc, e) => {
-        const dateStr = toDate(e.date).toISOString().split('T')[0];
-        let flow = 0;
-        if (e.eventType === 'transaction') {
-            const currency = e.currency || 'USD';
-            const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, toDate(e.date));
-            flow = (e.type === 'buy' ? 1 : -1) * getTotalCost(e) * (currency === 'TWD' ? 1 : fx);
-        } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
-            let dividendAmountTWD = 0;
-            if (e.eventType === 'confirmed_dividend') {
-                const fx = findFxRate(market, e.currency, toDate(e.date));
-                dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-            } else { 
-                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
-                const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
-                if (shares > 0) {
-                    const currency = stateOnDate[e.symbol.toUpperCase()]?.currency || 'USD';
-                    const fx = findFxRate(market, currency, toDate(e.date));
-                    const postTaxAmount = e.amount_per_share * (1 - (isTwStock(e.symbol) ? 0.0 : 0.30));
-                    dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
-                }
-            }
-            flow = -1 * dividendAmountTWD;
-        }
-
-        if (flow !== 0) acc[dateStr] = (acc[dateStr] || 0) + flow;
-        return acc;
-    }, {});
-}
+/**
+ * 【移除】此函式的功能已被整合或廢棄，為避免混淆，予以移除。
+ * calculateDailyCashflows
+ */
 
 function calculateCoreMetrics(evts, market) {
     const pf = {};
@@ -500,7 +457,6 @@ module.exports = {
     calculateFinalHoldings,
     createCashflowsForXirr,
     calculateXIRR,
-    calculateDailyCashflows,
     calculateCoreMetrics,
     calculateDailyPL
 };
