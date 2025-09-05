@@ -1,9 +1,9 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v3.0 - Unified P&L Timeline)
+// == 檔案：functions/calculation/engine.js (v3.1 - Dependency Fix)
 // == 職責：純粹的、可重用的投資組合計算引擎，實現以損益時間線為核心的單一事實來源模型。
 // =========================================================================================
 
-const { toDate } = require('./helpers');
+const { toDate, findFxRate, getTotalCost } = require('./helpers'); // 【修正】補上遺漏的 findFxRate 和 getTotalCost
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./state.calculator');
 const metrics = require('./metrics.calculator');
 const dataProvider = require('./data.provider');
