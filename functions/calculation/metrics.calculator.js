@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
+// == 核心指標計算模組 (metrics.calculator.js) - v5.0 (Unified Profit Model)
+// == 職責：提供精確的投資組合狀態與指標計算，並廢除有瑕疵的獨立已實現損益算法。
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -69,7 +70,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
 
 
 /**
- * 【新增】計算指定日期的每日損益 (Daily Profit/Loss)
+ * 計算指定日期的每日損益 (Daily Profit/Loss)，此為系統唯一的損益計算標準
  * @param {Date} today - 要計算的目標日期
  * @param {Date} yesterday - 目標日期的前一天
  * @param {Array} allEvts - 所有的事件
@@ -77,7 +78,7 @@ function calculateTwrHistory(dailyPortfolioValues, evts, market, benchmarkSymbol
  * @returns {number} - 計算出的當日總損益 (TWD)
  */
 function calculateDailyPL(today, yesterday, allEvts, market) {
-    // 1. 獲取昨日收盤時的持股狀態
+    // 1. 獲取昨日收盤時的持股狀態與市值
     const stateYesterday = getPortfolioStateOnDate(allEvts, yesterday, market);
     let beginningMarketValueTWD = 0;
 
@@ -113,7 +114,6 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
 
     // 3. 計算今日發生的現金流
     let dailyCashFlowTWD = 0;
-    
     const todaysEvents = allEvts.filter(e => toDate(e.date).getTime() === today.getTime());
 
     for (const e of todaysEvents) {
@@ -122,8 +122,6 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
         } 
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在此處加入對配息事件的處理
         else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
@@ -139,14 +137,9 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
-            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
-            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
-            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
-            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
-            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
+            // 股利是內部收益，計為負現金流以平衡損益公式
             dailyCashFlowTWD -= dividendAmountTWD;
         }
-        // ========================= 【核心修改 - 結束】 =========================
     }
 
     // 4. 根據公式計算當日損益
@@ -155,13 +148,7 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
 
 
 /**
- * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
- * This version implements the Modified Dietz method as suggested, providing a robust
- * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
- * @param {object} pf - The portfolio state object from the end of the calculation period.
- * @param {object} market - The market data object.
- * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
- * @returns {{holdingsToUpdate: object}} - An object containing the updated holdings.
+ * 計算最終持股狀態，包含每日價格變動，但不獨立計算已實現損益
  */
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
@@ -241,13 +228,12 @@ function calculateFinalHoldings(pf, market, allEvts) {
                 symbol: sym,
                 quantity: qty_end_of_day,
                 currency: h.currency,
-                avgCostOriginal: totCostOrg !== 0 ? totCostOrg / qty_end_of_day : 0,
+                avgCostOriginal: totCostOrg !== 0 ? Math.abs(totCostOrg / qty_end_of_day) : 0,
                 totalCostTWD: totCostTWD,
                 currentPriceOriginal: unadjustedPrice,
                 marketValueTWD: mktVal,
                 unrealizedPLTWD: mktVal - totCostTWD,
-                realizedPLTWD: h.realizedPLTWD,
-                returnRate: totCostTWD !== 0 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
+                returnRate: Math.abs(totCostTWD) > 1e-9 ? ((mktVal - totCostTWD) / Math.abs(totCostTWD)) * 100 : 0,
                 daily_change_percent: daily_change_percent,
                 daily_pl_twd: daily_pl_twd
             };
@@ -353,44 +339,43 @@ function calculateDailyCashflows(evts, market) {
     }, {});
 }
 
+// ========================= 【核心修改 - 開始】 =========================
+// == 重構：移除獨立的已實現損益計算，使其職責更單純
+// =========================================================================================
+/**
+ * 計算投資組合的核心狀態，主要用於獲取最終持股部位的成本與未實現損益
+ * @param {Array} evts - 所有事件
+ * @param {Object} market - 市場數據
+ * @returns {Object} 包含 holdingsToUpdate, xirr, overallReturnRate
+ */
 function calculateCoreMetrics(evts, market) {
     const pf = {};
-    let totalRealizedPL = 0;
-    let totalBuyCostTWD = 0; 
+    let totalBuyCostTWD = 0; // 只追蹤總投入成本，用於計算總報酬率
 
     for (const e of evts) {
         const sym = e.symbol.toUpperCase();
         if (!pf[sym]) {
-            pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0 };
+            pf[sym] = { lots: [], currency: e.currency || "USD" };
         }
         pf[sym].currency = e.currency;
 
         switch (e.eventType) {
             case "transaction": {
                 const fx = (e.exchangeRate && e.currency !== 'TWD') ? e.exchangeRate : findFxRate(market, e.currency, toDate(e.date));
-                
+                const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
+
                 if (e.type === "buy") {
-                    const buyCostTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
-                    totalBuyCostTWD += buyCostTWD; 
+                    totalBuyCostTWD += costTWD; 
 
                     let buyQty = e.quantity;
-                    const buyPricePerShareTWD = buyCostTWD / (e.quantity || 1);
+                    const buyPricePerShareTWD = costTWD / (e.quantity || 1);
                     
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (buyQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity < 0) {
                         const shortLot = pf[sym].lots[0];
                         const qtyToCover = Math.min(buyQty, -shortLot.quantity);
-                        
-                        const proceedsFromShort = qtyToCover * shortLot.pricePerShareTWD;
-                        const costToCover = qtyToCover * buyPricePerShareTWD;
-                        const realizedPL = proceedsFromShort - costToCover;
-                        
-                        totalRealizedPL += realizedPL;
-                        pf[sym].realizedPLTWD += realizedPL;
-                        
                         shortLot.quantity += qtyToCover;
                         buyQty -= qtyToCover;
-
                         if (Math.abs(shortLot.quantity) < 1e-9) {
                             pf[sym].lots.shift();
                         }
@@ -406,23 +391,14 @@ function calculateCoreMetrics(evts, market) {
                     }
                 } else { // sell
                     let sellQty = e.quantity;
-                    const sellPricePerShareTWD = (getTotalCost(e) / (e.quantity || 1)) * (e.currency === "TWD" ? 1 : fx);
+                    const sellPricePerShareTWD = costTWD / (e.quantity || 1);
 
                     pf[sym].lots.sort((a,b) => a.date - b.date);
                     while (sellQty > 0 && pf[sym].lots.length > 0 && pf[sym].lots[0].quantity > 0) {
                         const longLot = pf[sym].lots[0];
                         const qtyToSell = Math.min(sellQty, longLot.quantity);
-
-                        const costOfGoodsSold = qtyToSell * longLot.pricePerShareTWD;
-                        const proceedsFromSale = qtyToSell * sellPricePerShareTWD;
-                        const realizedPL = proceedsFromSale - costOfGoodsSold;
-
-                        totalRealizedPL += realizedPL;
-                        pf[sym].realizedPLTWD += realizedPL;
-
                         longLot.quantity -= qtyToSell;
                         sellQty -= qtyToSell;
-
                         if (longLot.quantity < 1e-9) {
                             pf[sym].lots.shift();
                         }
@@ -447,38 +423,6 @@ function calculateCoreMetrics(evts, market) {
                 });
                 break;
             }
-            case "confirmed_dividend": {
-                const currentQty = pf[sym].lots.reduce((s, l) => s + l.quantity, 0);
-                const fx = findFxRate(market, e.currency, toDate(e.date));
-                const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
-                
-                if (currentQty >= 0) {
-                    totalRealizedPL += divTWD;
-                    pf[sym].realizedPLTWD += divTWD;
-                } else {
-                    totalRealizedPL -= divTWD;
-                    pf[sym].realizedPLTWD -= divTWD;
-                }
-                break;
-            }
-            case "implicit_dividend": {
-                const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
-                const shares = stateOnDate[sym]?.lots.reduce((s, l) => s + l.quantity, 0) || 0;
-                if (shares < -1e-9) {
-                     const currency = stateOnDate[sym]?.currency || 'USD';
-                     const fx = findFxRate(market, currency, toDate(e.date));
-                     const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * Math.abs(shares) * (currency === "TWD" ? 1 : fx);
-                     totalRealizedPL -= divTWD;
-                     pf[sym].realizedPLTWD -= divTWD;
-                } else if (shares > 1e-9) {
-                    const currency = stateOnDate[sym]?.currency || 'USD';
-                    const fx = findFxRate(market, currency, toDate(e.date));
-                    const divTWD = e.amount_per_share * (1 - (isTwStock(sym) ? 0.0 : 0.30)) * shares * (currency === "TWD" ? 1 : fx);
-                    totalRealizedPL += divTWD;
-                    pf[sym].realizedPLTWD += divTWD;
-                }
-                break;
-            }
         }
     }
 
@@ -487,13 +431,14 @@ function calculateCoreMetrics(evts, market) {
     const xirr = calculateXIRR(xirrFlows);
 
     const totalUnrealizedPL = Object.values(holdingsToUpdate).reduce((sum, h) => sum + h.unrealizedPLTWD, 0);
-    const totalProfitAndLoss = totalRealizedPL + totalUnrealizedPL;
-    const totalInvestedCost = totalBuyCostTWD;
-    
-    const overallReturnRate = totalInvestedCost > 0 ? (totalProfitAndLoss / totalInvestedCost) * 100 : 0;
+    // 總報酬率的分母仍使用總投入成本，這是一個常用的參考指標
+    const overallReturnRate = totalBuyCostTWD > 0 ? ((totalUnrealizedPL /* + totalRealizedPL */) / totalBuyCostTWD) * 100 : 0;
 
-    return { holdings: { holdingsToUpdate }, totalRealizedPL, xirr, overallReturnRate };
+    // 不再回傳 totalRealizedPL，因為它將由 engine 統一計算
+    return { holdingsToUpdate, xirr, overallReturnRate, totalUnrealizedPL, totalBuyCostTWD };
 }
+// ========================= 【核心修改 - 結束】 =========================
+
 
 module.exports = {
     calculateTwrHistory,
