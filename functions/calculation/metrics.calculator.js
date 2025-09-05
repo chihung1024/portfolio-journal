@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 核心指標計算模組 (metrics.calculator.js) - v4.2 (TWD Override Logic)
+// == 核心指標計算模組 (metrics.calculator.js) - v4.1 (Dividend P/L Fix)
 // =========================================================================================
 
 const { toDate, isTwStock, getTotalCost, findNearest, findFxRate } = require('./helpers');
@@ -122,16 +122,13 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
             const costTWD = getTotalCost(e) * (e.currency === "TWD" ? 1 : fx);
             dailyCashFlowTWD += (e.type === 'buy' ? costTWD : -costTWD);
         } 
+        // ========================= 【核心修改 - 開始】 =========================
+        // 在此處加入對配息事件的處理
         else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
-                // 【核心修改】優先使用手動輸入的台幣金額
-                if (e.total_amount_twd && e.total_amount_twd > 0) {
-                    dividendAmountTWD = e.total_amount_twd;
-                } else {
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
-                    dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-                }
+                const fx = findFxRate(market, e.currency, toDate(e.date));
+                dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
             } else { // implicit_dividend
                 const stateOnExDate = getPortfolioStateOnDate(allEvts, toDate(e.ex_date), market);
                 const shares = stateOnExDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
@@ -142,8 +139,14 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
                     dividendAmountTWD = postTaxAmount * shares * (currency === "TWD" ? 1 : fx);
                 }
             }
+            // 損益公式中的現金流是指外部投入或抽出的資金。配息是內部產生的收益，
+            // 為了讓公式平衡，我們將其視為「負的現金流」(Negative Cashflow)。
+            // Ending_Value - Beginning_Value - (Transaction_CF + Dividend_CF)
+            // 這裡的 Dividend_CF 應該是 -dividendAmountTWD，所以公式變為
+            // Ending_Value - Beginning_Value - Transaction_CF + dividendAmountTWD
             dailyCashFlowTWD -= dividendAmountTWD;
         }
+        // ========================= 【核心修改 - 結束】 =========================
     }
 
     // 4. 根據公式計算當日損益
@@ -153,6 +156,12 @@ function calculateDailyPL(today, yesterday, allEvts, market) {
 
 /**
  * [FINAL VERSION 3.0] Calculates the final state of holdings including daily profit/loss.
+ * This version implements the Modified Dietz method as suggested, providing a robust
+ * and unified formula for daily_change_percent that correctly handles all cash flow scenarios.
+ * @param {object} pf - The portfolio state object from the end of the calculation period.
+ * @param {object} market - The market data object.
+ * @param {Array} allEvts - The complete list of all events (transactions, splits, etc.).
+ * @returns {{holdingsToUpdate: object}} - An object containing the updated holdings.
  */
 function calculateFinalHoldings(pf, market, allEvts) {
     const holdingsToUpdate = {};
@@ -257,15 +266,8 @@ function createCashflowsForXirr(evts, holdings, market) {
             const fx = (e.exchangeRate && currency !== 'TWD') ? e.exchangeRate : findFxRate(market, currency, flowDate);
             amt = (e.type === "buy" ? -getTotalCost(e) : getTotalCost(e)) * (currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === "confirmed_dividend") {
-            // ========================= 【核心修改 - 開始】 =========================
-            // 優先使用手動輸入的台幣金額
-            if (e.total_amount_twd && e.total_amount_twd > 0) {
-                amt = e.total_amount_twd;
-            } else {
-                const fx = findFxRate(market, e.currency, flowDate);
-                amt = e.amount * (e.currency === 'TWD' ? 1 : fx);
-            }
-            // ========================= 【核心修改 - 結束】 =========================
+            const fx = findFxRate(market, e.currency, flowDate);
+            amt = e.amount * (e.currency === 'TWD' ? 1 : fx);
         } else if (e.eventType === "implicit_dividend") {
             const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
             const sym = e.symbol.toUpperCase();
@@ -331,13 +333,8 @@ function calculateDailyCashflows(evts, market) {
         } else if (e.eventType === 'confirmed_dividend' || e.eventType === 'implicit_dividend') {
             let dividendAmountTWD = 0;
             if (e.eventType === 'confirmed_dividend') {
-                // 【核心修改】優先使用手動輸入的台幣金額
-                if (e.total_amount_twd && e.total_amount_twd > 0) {
-                    dividendAmountTWD = e.total_amount_twd;
-                } else {
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
-                    dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
-                }
+                const fx = findFxRate(market, e.currency, toDate(e.date));
+                dividendAmountTWD = e.amount * (e.currency === 'TWD' ? 1 : fx);
             } else { 
                 const stateOnDate = getPortfolioStateOnDate(evts, toDate(e.ex_date), market);
                 const shares = stateOnDate[e.symbol.toUpperCase()]?.lots.reduce((sum, lot) => sum + lot.quantity, 0) || 0;
@@ -452,16 +449,8 @@ function calculateCoreMetrics(evts, market) {
             }
             case "confirmed_dividend": {
                 const currentQty = pf[sym].lots.reduce((s, l) => s + l.quantity, 0);
-                // ========================= 【核心修改 - 開始】 =========================
-                // 優先使用手動輸入的台幣金額
-                let divTWD = 0;
-                if (e.total_amount_twd && e.total_amount_twd > 0) {
-                    divTWD = e.total_amount_twd;
-                } else {
-                    const fx = findFxRate(market, e.currency, toDate(e.date));
-                    divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
-                }
-                // ========================= 【核心修改 - 結束】 =========================
+                const fx = findFxRate(market, e.currency, toDate(e.date));
+                const divTWD = e.amount * (e.currency === "TWD" ? 1 : fx);
                 
                 if (currentQty >= 0) {
                     totalRealizedPL += divTWD;

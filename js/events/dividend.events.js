@@ -1,24 +1,27 @@
 // =========================================================================================
-// == 配息事件處理模組 (dividend.events.js) v2.2 - TWD Override Support
+// == 配息事件處理模組 (dividend.events.js) v2.1 - Robust Delete Logic
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
-import { stagingService } from '../staging.service.js';
+import { stagingService } from '../staging.service.js'; // 【核心修改】
 import { showNotification } from '../ui/notifications.js';
 import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
 
 /**
- * 操作成功存入暫存區後，更新 UI
+ * 【新增】操作成功存入暫存區後，更新 UI
  */
 async function handleStagingSuccess() {
     showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
     
+    // 立即重新渲染配息列表以顯示暫存狀態
     const { pendingDividends, confirmedDividends } = getState();
     await renderDividendsManagementTab(pendingDividends, confirmedDividends);
 }
 
 
 async function handleBulkConfirm() {
+    // 注意：批次確認是一個特殊操作，它本身就是一個批次，因此我們維持直接呼叫 API
+    // 暫存區主要處理單筆的 CUD 操作
     const { pendingDividends } = getState();
     if (pendingDividends.length === 0) {
         showNotification('info', '沒有需要確認的配息。');
@@ -45,7 +48,6 @@ async function handleDividendFormSubmit(e) {
     const id = document.getElementById('dividend-id').value;
     const isEditing = !!id;
 
-    // ========================= 【核心修改 - 開始】 =========================
     const dividendData = {
         symbol: document.getElementById('dividend-symbol').value,
         ex_dividend_date: document.getElementById('dividend-ex-date').value,
@@ -54,20 +56,20 @@ async function handleDividendFormSubmit(e) {
         quantity_at_ex_date: parseFloat(document.getElementById('dividend-quantity').value),
         amount_per_share: parseFloat(document.getElementById('dividend-original-amount-ps').value),
         total_amount: parseFloat(document.getElementById('dividend-total-amount').value),
-        total_amount_twd: parseFloat(document.getElementById('dividend-total-amount-twd').value) || null, // 新增：讀取實收台幣金額，若無則為 null
         tax_rate: parseFloat(document.getElementById('dividend-tax-rate').value) || 0,
         notes: document.getElementById('dividend-notes').value.trim()
     };
-    // ========================= 【核心修改 - 結束】 =========================
     
     const { closeModal } = await import('../ui/modals.js');
     closeModal('dividend-modal');
 
+    // 【核心修改】將操作寫入暫存區
     try {
         if (isEditing) {
             dividendData.id = id;
             await stagingService.addAction('UPDATE', 'dividend', dividendData);
         } else {
+            // 對於從 "待確認" 轉來的配息，我們視為 "新增" 一筆已確認配息
             dividendData.id = `temp_dividend_${Date.now()}`;
             await stagingService.addAction('CREATE', 'dividend', dividendData);
         }
@@ -81,6 +83,8 @@ async function handleDeleteDividend(button) {
     const dividendId = button.dataset.id;
     const { showConfirm } = await import('../ui/modals.js');
 
+    // ========================= 【核心修改 - 開始】 =========================
+    // 統一邏輯：在刪除前，先合併 state 與暫存區的數據，確保拿到最新版本的物件。
     const { confirmedDividends } = getState();
     const stagedActions = await stagingService.getStagedActions();
     const stagedDividends = stagedActions
@@ -98,6 +102,7 @@ async function handleDeleteDividend(button) {
     });
 
     const dividendToDelete = combined.find(d => d.id === dividendId);
+    // ========================= 【核心修改 - 結束】 =========================
 
     if (!dividendToDelete) {
         showNotification('error', '找不到要刪除的配息紀錄。');
