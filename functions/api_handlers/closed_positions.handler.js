@@ -5,25 +5,25 @@ import { closedPositionsCalculator } from '../calculation/closed_positions.calcu
  * @param {object} context - The context object from the Pages function.
  * @returns {Promise<Response>} - A Response object with the closed positions data.
  */
-export async function onRequestGet({ env }) {
+export async function onRequestGet(context) {
   try {
+    const { env } = context;
     const closedPositions = await closedPositionsCalculator.calculate(env);
 
     // Add last transaction date to each closed position
     const closedPositionsWithLastDate = closedPositions.map(position => {
       const sellTransactions = position.transactions.filter(t => t.type === 'sell');
+
       if (sellTransactions.length === 0) {
-        // This case should ideally not happen for a closed position, but as a fallback:
+        // This should not happen for a closed position, but as a robust fallback:
         return { ...position, lastTransactionDate: null };
       }
 
-      const lastTransactionDate = sellTransactions.reduce((latest, current) => {
-        const latestDate = new Date(latest.date);
-        const currentDate = new Date(current.date);
-        return currentDate > latestDate ? current : latest;
-      }).date;
+      // Sort transactions by date descending to find the most recent one.
+      // This approach is more robust and readable than using reduce().
+      const lastTransaction = sellTransactions.sort((a, b) => new Date(b.date) - new Date(a.date))[0];
 
-      return { ...position, lastTransactionDate };
+      return { ...position, lastTransactionDate: lastTransaction.date };
     });
 
     const response = {
