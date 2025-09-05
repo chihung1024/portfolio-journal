@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v3.4 (Dividend Sync Fix)
+// == 批次操作處理模組 (batch.handler.js) - v3.3 (Group View Sync)
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -134,26 +134,13 @@ exports.submitBatch = async (uid, data, res) => {
         const { tempIdMap } = await processBatchActions(uid, data.actions);
         await performRecalculation(uid, null, false);
         
-        // ========================= 【核心修改 - 開始】 =========================
-        // 在回傳前，重新查詢所有相關數據，確保包含最新的配息列表
-        const [
-            txs, 
-            splits, 
-            holdings, 
-            summaryResult, 
-            groups,
-            pendingDividends,
-            confirmedDividends
-        ] = await Promise.all([
+        const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
             d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
             d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
-            d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid]),
-            d1Client.query('SELECT * FROM user_pending_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid]),
-            d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY pay_date DESC', [uid])
+            d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
         ]);
-        // ========================= 【核心修改 - 結束】 =========================
 
         const summaryRow = summaryResult[0] || {};
         const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
@@ -162,15 +149,7 @@ exports.submitBatch = async (uid, data, res) => {
             success: true, 
             message: '批次操作成功。',
             data: {
-                summary: summaryData, 
-                holdings, 
-                transactions: txs, 
-                splits, 
-                groups,
-                // ========================= 【核心修改】 =========================
-                pendingDividends,     // 將最新的待確認配息加入回應
-                confirmedDividends,   // 將最新的已確認配息加入回應
-                // ==========================================================
+                summary: summaryData, holdings, transactions: txs, splits, groups,
                 tempIdMap: tempIdMap 
             }
         });
@@ -193,19 +172,24 @@ exports.submitBatchAndExecute = async (uid, data, res) => {
 
         if (nextAction) {
             switch (nextAction.type) {
+                // ========================= 【核心修改 - 開始】 =========================
                 case 'CALCULATE_GROUP': {
                     console.log(`[Combined Action] 提交後，接續計算群組: ${nextAction.payload.groupId}`);
                     resultData = await calculateGroupOnDemandCore(uid, nextAction.payload.groupId);
                     
+                    // Bug Fix: 確保即使群組計算完成後，也能取得最新的全局 splits 和 groups 列表
+                    // 這樣可以避免前端在更新時因缺少最新數據而出錯
                     const [splits, groups] = await Promise.all([
                         d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
                         d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
                     ]);
                     
+                    // transactions 已經由 calculateGroupOnDemandCore 正確回傳，這裡只需補充其他全局數據
                     resultData.splits = splits;
                     resultData.groups = groups;
                     break;
                 }
+                // ========================= 【核心修改 - 結束】 =========================
                 
                 case 'UPDATE_BENCHMARK': {
                     console.log(`[Combined Action] 提交後，接續更新 Benchmark 為: ${nextAction.payload.benchmarkSymbol}`);
