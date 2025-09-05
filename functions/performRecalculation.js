@@ -4,8 +4,10 @@
 // =========================================================================================
 
 const { d1Client } = require('./d1.client');
+const dataProvider = require('./calculation/data.provider');
 const { toDate, isTwStock } = require('./calculation/helpers');
-const { getPortfolioStateOnDate } = require('./calculation/state.calculator');
+const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
+const metrics = require('./calculation/metrics.calculator');
 // 【修改】導入新的計算引擎
 const { runCalculationEngine } = require('./calculation/engine');
 
@@ -116,8 +118,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心簡化 - 開始】 =========================
-        // 一次性抓取所有需要的原始數據
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】一次性抓取所有需要的原始數據
         const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -127,7 +129,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
-        // ========================= 【核心簡化 - 結束】 =========================
+        // ========================= 【核心修正 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
@@ -140,6 +142,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
+        // ========================= 【核心修正 - 結束】 =========================
         
         let oldHistory = {};
         let baseSnapshot = null;
@@ -165,8 +171,8 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修改 - 開始】 =========================
-        // 呼叫統一的、已重構的計算引擎
+        // ========================= 【核心修正 - 開始】 =========================
+        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
         const result = await runCalculationEngine(
             txs,
             allUserSplits,
@@ -175,8 +181,10 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             baseSnapshot,
             oldHistory
         );
+        // ========================= 【核心修正 - 結束】 =========================
 
-        // 從引擎的回傳結果中獲取計算好的數據
+
+        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
@@ -187,7 +195,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             evts,
             market
         } = result;
-        // ========================= 【核心修改 - 結束】 =========================
 
         await maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot, ALL_GROUP_ID);
 
