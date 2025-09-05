@@ -1,49 +1,88 @@
-import { closedPositionsCalculator } from '../calculation/closed_positions.calculator';
+// =========================================================================================
+// == 平倉紀錄 API 處理模組 (closed_positions.handler.js) - v2.1 (Dividend-Aware)
+// == 職責：處理獲取平倉紀錄的 API 請求，調用計算機並回傳結果。
+// =========================================================================================
+
+const { d1Client } = require('../d1.client');
+const { z } = require("zod");
+const dataProvider = require('../calculation/data.provider');
+const { calculateFifoClosedPositions } = require('../calculation/closed_positions.calculator');
 
 /**
- * Handles the request for closed positions data.
- * @param {object} context - The context object from the Pages function.
- * @returns {Promise<Response>} - A Response object with the closed positions data.
+ * 獲取並計算指定範圍內的平倉紀錄
  */
-export async function onRequestGet(context) {
-  try {
-    const { env } = context;
-    const closedPositions = await closedPositionsCalculator.calculate(env);
-
-    // Add last transaction date to each closed position
-    const closedPositionsWithLastDate = closedPositions.map(position => {
-      const sellTransactions = position.transactions.filter(t => t.type === 'sell');
-
-      if (sellTransactions.length === 0) {
-        // This should not happen for a closed position, but as a robust fallback:
-        return { ...position, lastTransactionDate: null };
-      }
-
-      // Sort transactions by date descending to find the most recent one.
-      // This approach is more robust and readable than using reduce().
-      const lastTransaction = sellTransactions.sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-
-      return { ...position, lastTransactionDate: lastTransaction.date };
+exports.getClosedPositions = async (uid, data, res) => {
+    const schema = z.object({
+        groupId: z.string().optional().nullable(),
     });
 
-    const response = {
-      success: true,
-      data: closedPositionsWithLastDate,
-    };
+    const validatedData = schema.parse(data);
+    const groupId = validatedData.groupId;
 
-    return new Response(JSON.stringify(response), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (error) {
-    console.error('Error fetching closed positions:', error);
-    const errorResponse = {
-      success: false,
-      message: 'Failed to fetch closed positions',
-      error: error.message,
-    };
-    return new Response(JSON.stringify(errorResponse), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
+    try {
+        let transactions;
+
+        if (groupId && groupId !== 'all') {
+            transactions = await d1Client.query(
+                `SELECT t.* FROM transactions t 
+                 JOIN group_transaction_inclusions g ON t.id = g.transaction_id
+                 WHERE t.uid = ? AND g.group_id = ? 
+                 ORDER BY t.symbol, t.date ASC`,
+                [uid, groupId]
+            );
+        } else {
+            transactions = await d1Client.query(
+                'SELECT * FROM transactions WHERE uid = ? ORDER BY symbol, date ASC',
+                [uid]
+            );
+        }
+
+        if (!transactions || transactions.length === 0) {
+            return res.status(200).send({ success: true, data: [] });
+        }
+
+        const market = await dataProvider.getMarketDataFromDb(transactions, 'SPY');
+
+        const txsBySymbol = transactions.reduce((acc, tx) => {
+            const symbol = tx.symbol.toUpperCase();
+            if (!acc[symbol]) acc[symbol] = [];
+            acc[symbol].push(tx);
+            return acc;
+        }, {});
+        
+        // 【核心修改】一次性獲取所有相關股票的股利數據
+        const allSymbols = Object.keys(txsBySymbol);
+        const placeholders = allSymbols.map(() => '?').join(',');
+        const allDividends = await d1Client.query(
+            `SELECT * FROM user_dividends WHERE uid = ? AND symbol IN (${placeholders})`,
+            [uid, ...allSymbols]
+        );
+        const dividendsBySymbol = allDividends.reduce((acc, div) => {
+            const symbol = div.symbol.toUpperCase();
+            if (!acc[symbol]) acc[symbol] = [];
+            acc[symbol].push(div);
+            return acc;
+        }, {});
+
+        const closedPositionResults = [];
+        for (const symbol in txsBySymbol) {
+            // 【核心修改】傳入特定股票的交易和股利數據
+            const symbolDividends = dividendsBySymbol[symbol] || [];
+            const result = calculateFifoClosedPositions(symbol, txsBySymbol[symbol], symbolDividends, market);
+            if (result) {
+               closedPositionResults.push(result);
+            }
+        }
+        
+        closedPositionResults.sort((a, b) => b.totalRealizedPL - a.totalRealizedPL);
+
+        return res.status(200).send({
+            success: true,
+            data: closedPositionResults,
+        });
+
+    } catch (error) {
+        console.error(`[${uid}] 獲取平倉紀錄時發生錯誤:`, error);
+        res.status(500).send({ success: false, message: `伺服器內部錯誤：${error.message}` });
+    }
+};
