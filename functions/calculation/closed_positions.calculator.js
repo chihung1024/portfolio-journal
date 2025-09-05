@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 平倉紀錄計算機 (closed_positions.calculator.js) - v2.0 (Dividend-Aware & Robust FIFO)
+// == 平倉紀錄計算機 (closed_positions.calculator.js) - v2.1 (TWD Override Aware)
 // == 職責：採用 FIFO (先進先出) 原則，計算並產生詳細的平倉損益報告。
 // =========================================================================================
 
@@ -37,14 +37,23 @@ function calculateFifoClosedPositions(symbol, transactions, dividends, market) {
     const normalizedTxs = transactions.map(tx => normalizeTransaction(tx, market));
     normalizedTxs.sort((a, b) => new Date(a.date) - new Date(b.date));
     
+    // ========================= 【核心修改 - 開始】 =========================
+    // 在處理股利時，優先使用手動輸入的 total_amount_twd
     const dividendsTwd = dividends.map(d => {
-        const fxRate = findFxRate(market, d.currency, new Date(d.pay_date));
+        let totalAmountTWD = 0;
+        if (d.total_amount_twd && d.total_amount_twd > 0) {
+            totalAmountTWD = d.total_amount_twd;
+        } else {
+            const fxRate = findFxRate(market, d.currency, new Date(d.pay_date));
+            totalAmountTWD = d.total_amount * (d.currency === 'TWD' ? 1 : fxRate);
+        }
         return {
             ...d,
             pay_date: d.pay_date.split('T')[0],
-            _totalAmountTWD: d.total_amount * (d.currency === 'TWD' ? 1 : fxRate)
+            _totalAmountTWD: totalAmountTWD
         };
     }).sort((a, b) => new Date(a.pay_date) - new Date(b.pay_date));
+    // ========================= 【核心修改 - 結束】 =========================
 
     const buysQueue = normalizedTxs.filter(t => t.type === 'buy').map(t => ({ ...t, remainingQty: t.quantity }));
     const sells = normalizedTxs.filter(t => t.type === 'sell');
@@ -93,13 +102,10 @@ function calculateFifoClosedPositions(symbol, transactions, dividends, market) {
         if (Math.abs(sellQtyToMatch) < 1e-9) {
             const closingDate = sell.date.split('T')[0];
             
-            // 計算此平倉期間內的股利收入
             const dividendsForThisLot = dividendsTwd.filter(d => 
                 d.pay_date >= openingDate && d.pay_date <= closingDate
             );
             
-            //【注意】此為簡化歸因，實際應按每日持股比例分配。但此模型已能大幅提高準確度。
-            // 我們假設此期間收到的所有股利都歸因於這一批平倉交易。
             const dividendsReceivedTWD = dividendsForThisLot.reduce((sum, d) => sum + d._totalAmountTWD, 0);
 
             const realizedPL = proceedsFromThisSell - costBasisForThisSell + dividendsReceivedTWD;
@@ -121,7 +127,6 @@ function calculateFifoClosedPositions(symbol, transactions, dividends, market) {
             totalProceeds += proceedsFromThisSell;
             totalDividends += dividendsReceivedTWD;
 
-            // 從股利列表中移除已歸因的股利，避免重複計算
             dividendsForThisLot.forEach(d => {
                 const index = dividendsTwd.indexOf(d);
                 if (index > -1) dividendsTwd.splice(index, 1);
