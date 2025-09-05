@@ -1,11 +1,10 @@
 // =========================================================================================
-// == 主程式進入點 (main.js) v5.3.0 - Note Feature Removed
+// == 主程式進入點 (main.js) v5.4.0 - Robust Tab Data Loading
 // =========================================================================================
 
 import { getState, setState } from './state.js';
 import { apiRequest, applyGroupView } from './api.js';
 import { initializeAuth, handleRegister, handleLogin, handleLogout } from './auth.js';
-// 【核心修改】引入暫存區相關模組
 import { stagingService } from './staging.service.js';
 import { initializeStagingEventListeners } from './events/staging.events.js';
 
@@ -18,9 +17,7 @@ import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderSplitsTable } from './ui/components/splits.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
-// ========================= 【核心修改 - 結束】 =========================
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 import { switchTab } from './ui/tabs.js';
@@ -31,9 +28,7 @@ import { getDateRangeForPreset } from './ui/utils.js';
 import { initializeTransactionEventListeners } from './events/transaction.events.js';
 import { initializeSplitEventListeners } from './events/split.events.js';
 import { initializeDividendEventListeners } from './events/dividend.events.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { initializeClosedPositionEventListeners } from './events/closed_positions.events.js';
-// ========================= 【核心修改 - 結束】 =========================
 import { initializeGeneralEventListeners } from './events/general.events.js';
 import { initializeGroupEventListeners, loadGroups } from './events/group.events.js';
 
@@ -67,14 +62,11 @@ export function startLiveRefresh() {
     stopLiveRefresh(); 
 
     const poll = async () => {
-        // ========================= 【核心修改 - 開始】 =========================
-        // 1. 檢查暫存區是否有待辦事項
         const stagedActions = await stagingService.getStagedActions();
         if (stagedActions.length > 0) {
             console.log("Staging area is not empty, skipping live refresh.");
             return;
         }
-        // ========================= 【核心修改 - 結束】 =========================
         
         const { selectedGroupId } = getState();
         if (selectedGroupId !== 'all') {
@@ -127,14 +119,12 @@ export async function loadInitialDashboard() {
         const result = await apiRequest('get_dashboard_summary', {});
         if (!result.success) throw new Error(result.message);
 
-        // ========================= 【核心修改 - 開始】 =========================
         const { summary } = result.data;
         
         setState({
             holdings: {},
             summary: summary
         });
-        // ========================= 【核心修改 - 結束】 =========================
 
         updateDashboard({}, summary?.totalRealizedPL, summary?.overallReturnRate, summary?.xirr);
         renderHoldingsTable({});
@@ -244,14 +234,11 @@ async function loadSecondaryDataInBackground() {
     }
 }
 
-
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】讀取交易紀錄。移除內部快取檢查，確保總是請求最新數據。
+ */
 async function loadTransactionsData() {
-    const { transactions } = getState();
-    if (transactions && transactions.length > 0) {
-        renderTransactionsTable();
-        return;
-    }
-    
     document.getElementById('loading-overlay').style.display = 'flex';
     try {
         const result = await apiRequest('get_transactions_and_splits', {});
@@ -270,13 +257,10 @@ async function loadTransactionsData() {
     }
 }
 
+/**
+ * 【重構】讀取並顯示配息。移除內部快取檢查，確保總是請求最新數據。
+ */
 export async function loadAndShowDividends() {
-    const { pendingDividends, confirmedDividends } = getState();
-    if (pendingDividends && confirmedDividends) {
-         renderDividendsManagementTab(pendingDividends, confirmedDividends);
-         return;
-    }
-
     const overlay = document.getElementById('loading-overlay');
     overlay.style.display = 'flex';
     try {
@@ -296,8 +280,9 @@ export async function loadAndShowDividends() {
         overlay.style.display = 'none';
     }
 }
+// ========================= 【核心修改 - 結束】 =========================
 
-// ========================= 【核心修改 - 開始】 =========================
+
 /**
  * 【新增】載入並顯示平倉紀錄的函式
  */
@@ -307,15 +292,12 @@ async function loadAndShowClosedPositions() {
     overlay.style.display = 'flex';
 
     try {
-        // 向後端請求數據，同時傳遞當前選擇的 groupId
         const result = await apiRequest('get_closed_positions', { groupId: selectedGroupId });
         if (result.success) {
-            // 將獲取的數據存入 state
             setState({
                 closedPositions: result.data,
-                activeClosedPosition: null // 每次刷新都重置展開狀態
+                activeClosedPosition: null 
             });
-            // 呼叫 UI 模組進行渲染
             renderClosedPositionsTable();
         } else {
             throw new Error(result.message);
@@ -326,7 +308,6 @@ async function loadAndShowClosedPositions() {
         overlay.style.display = 'none';
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 function setupCommonEventListeners() {
@@ -347,6 +328,12 @@ function setupCommonEventListeners() {
 function setupMainAppEventListeners() {
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
 
+    // ========================= 【核心修改 - 開始】 =========================
+    /**
+     * 【重構】分頁點擊事件監聽器。
+     * 移除所有前端快取檢查邏輯，改為每次點擊都直接呼叫對應的資料載入函式。
+     * 這樣可以確保使用者總能看到最新的資料，從根源上解決「陳舊狀態」問題。
+     */
     document.getElementById('tabs').addEventListener('click', async (e) => {
         const tabItem = e.target.closest('.tab-item');
         if (tabItem) {
@@ -354,57 +341,33 @@ function setupMainAppEventListeners() {
             const tabName = tabItem.dataset.tab;
             switchTab(tabName);
             
-            const { transactions, pendingDividends, confirmedDividends, userSplits } = getState();
-
-            // ========================= 【核心修改 - 開始】 =========================
-            if (tabName === 'closed-positions') {
-                await loadAndShowClosedPositions();
-            } else if (tabName === 'dividends') {
-            // ========================= 【核心修改 - 結束】 =========================
-                if (pendingDividends && confirmedDividends) {
-                    renderDividendsManagementTab(pendingDividends, confirmedDividends);
-                } else {
-                    await loadAndShowDividends();
-                }
-            } else if (tabName === 'transactions') {
-                if (transactions.length > 0) {
-                    renderTransactionsTable();
-                } else {
+            switch (tabName) {
+                case 'transactions':
                     await loadTransactionsData();
-                }
-            } else if (tabName === 'groups') {
-                renderGroupsTab();
-            } else if (tabName === 'splits') {
-                if(userSplits) {
-                    renderSplitsTable();
-                }
+                    break;
+                case 'closed-positions':
+                    await loadAndShowClosedPositions();
+                    break;
+                case 'dividends':
+                    await loadAndShowDividends();
+                    break;
+                case 'splits':
+                    // 拆股事件不常變動，可依賴背景載入，此處僅需渲染
+                    await renderSplitsTable();
+                    break;
+                case 'groups':
+                    // 群組列表通常在 App 啟動時已載入，此處僅需渲染
+                    await renderGroupsTab();
+                    break;
             }
         }
     });
+    // ========================= 【核心修改 - 結束】 =========================
     
     document.getElementById('currency').addEventListener('change', async () => {
         const { toggleOptionalFields } = await import('./ui/modals.js');
         toggleOptionalFields();
     });
-
-    // ========================= 【核心修改 - 開始】 =========================
-    // 移除此處的 group-selector 事件監聽器，因为它已在 group.events.js 中被正確地、
-    // 且帶有暫存區檢查邏輯地實現了。保留此處會導致邏輯衝突和 Bug。
-    /*
-    const groupSelector = document.getElementById('group-selector');
-    groupSelector.addEventListener('change', (e) => {
-        const selectedGroupId = e.target.value;
-        setState({ selectedGroupId });
-        if (selectedGroupId === 'all') {
-            document.getElementById('loading-overlay').style.display = 'flex';
-            loadInitialDashboard(); 
-        } else {
-            applyGroupView(selectedGroupId);
-        }
-    });
-    */
-    // ========================= 【核心修改 - 結束】 =========================
-
 }
 
 export function initializeAppUI() {
@@ -413,7 +376,6 @@ export function initializeAppUI() {
     }
     console.log("Initializing Main App UI...");
     
-    // 【核心修改】初始化暫存區服務
     stagingService.init();
 
     initializeAssetChart();
@@ -426,12 +388,9 @@ export function initializeAppUI() {
     initializeTransactionEventListeners();
     initializeSplitEventListeners();
     initializeDividendEventListeners();
-    // ========================= 【核心修改 - 開始】 =========================
     initializeClosedPositionEventListeners();
-    // ========================= 【核心修改 - 結束】 =========================
     initializeGeneralEventListeners();
     initializeGroupEventListeners();
-    // 【核心修改】初始化暫存區相關的事件監聽
     initializeStagingEventListeners();
     
     lucide.createIcons();
