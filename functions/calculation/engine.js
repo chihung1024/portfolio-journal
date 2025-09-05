@@ -1,18 +1,18 @@
 // =========================================================================================
-// == 檔案：functions/calculation/engine.js (v2.1 - Net Profit Unification)
-// == 職責：純粹的、可重用的投資組合計算引擎
+// == 檔案：functions/calculation/engine.js (v3.0 - Unified Profit Model)
+// == 職責：作為系統唯一的、權威的投資組合計算引擎，確保所有損益指標同源且一致。
 // =========================================================================================
 
-const { toDate, findNearest, findFxRate, isTwStock } = require('./helpers');
+const { toDate } = require('./helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./state.calculator');
 const metrics = require('./metrics.calculator');
 const dataProvider = require('./data.provider');
 
 /**
- * 核心計算函式
+ * 核心計算函式，採用「單一事實來源」架構
  * @param {Array} txs - 用於計算的交易紀錄
- * @param {Array} allUserSplits - 【修改】傳入使用者所有的拆股事件
- * @param {Array} allUserDividends - 【修改】傳入使用者所有的股利事件
+ * @param {Array} allUserSplits - 使用者所有的拆股事件
+ * @param {Array} allUserDividends - 使用者所有的股利事件
  * @param {string} benchmarkSymbol - 比較基準
  * @param {Object} [baseSnapshot=null] - (可選) 用於增量計算的基礎快照
  * @param {Object} [existingHistory=null] - (可選) 已有的歷史數據
@@ -31,17 +31,14 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     }
     
     const symbolsInScope = new Set(txs.map(t => t.symbol.toUpperCase()));
-
     const splitsInScope = allUserSplits.filter(s => symbolsInScope.has(s.symbol.toUpperCase()));
     const dividendsInScope = allUserDividends.filter(d => symbolsInScope.has(d.symbol.toUpperCase()));
 
-
-    // 確保計算所需的市場數據都存在
     await dataProvider.ensureAllSymbolsData(txs, benchmarkSymbol);
     const market = await dataProvider.getMarketDataFromDb(txs, benchmarkSymbol);
 
     const { evts, firstBuyDate } = prepareEvents(txs, splitsInScope, market, dividendsInScope);
-    if (!firstBuyDate) return {}; // 如果沒有任何買入事件，無法計算
+    if (!firstBuyDate) return {};
 
     let calculationStartDate = firstBuyDate;
     let oldHistory = {};
@@ -70,46 +67,53 @@ async function runCalculationEngine(txs, allUserSplits, allUserDividends, benchm
     const dailyCashflows = metrics.calculateDailyCashflows(evts, market);
     const { twrHistory, benchmarkHistory } = metrics.calculateTwrHistory(fullHistory, evts, market, benchmarkSymbol, firstBuyDate, dailyCashflows);
     
-    const portfolioResult = metrics.calculateCoreMetrics(evts, market);
-
     // ========================= 【核心修改 - 開始】 =========================
-    // 採用新的、基於每日損益累加的淨利歷史計算方法
+    // == 統一計算邏輯的核心實現
+    // =========================================================================================
+
+    // 步驟 1: 確立權威的「總利潤」歷史 (`netProfitHistory`)
     const netProfitHistory = {};
     let cumulativeNetProfit = 0;
-    // 確保從第一筆交易日開始計算
     const sortedDates = Object.keys(fullHistory).sort();
     
     if (sortedDates.length > 0) {
-        // 找到計算範圍內的第一個日期，並從前一天的淨利開始累加 (通常是0)
         const firstDateInScope = toDate(sortedDates[0]);
         const dayBeforeFirst = new Date(firstDateInScope);
         dayBeforeFirst.setDate(dayBeforeFirst.getDate() - 1);
         
-        // 嘗試從舊歷史中獲取基線淨利，若無則為 0
-        cumulativeNetProfit = existingHistory ? (existingHistory[dayBeforeFirst.toISOString().split('T')[0]] || 0) : 0;
+        // 如果是增量計算，嘗試從舊歷史中獲取基線淨利
+        const dayBeforeFirstStr = dayBeforeFirst.toISOString().split('T')[0];
+        cumulativeNetProfit = existingHistory ? (existingHistory[dayBeforeFirstStr] || 0) : 0;
     
         for (const dateStr of sortedDates) {
             const today = toDate(dateStr);
             const yesterday = new Date(today);
             yesterday.setDate(today.getDate() - 1);
 
-            // 調用新的 calculateDailyPL 函式
             const dailyPL = metrics.calculateDailyPL(today, yesterday, evts, market);
             cumulativeNetProfit += dailyPL;
             netProfitHistory[dateStr] = cumulativeNetProfit;
         }
     }
-    // ========================= 【核心修改 - 結束】 =========================
 
+    // 步驟 2: 計算準確的「未實現損益」和其他核心指標
+    const portfolioResult = metrics.calculateCoreMetrics(evts, market);
+    const { holdingsToUpdate, totalUnrealizedPL, totalBuyCostTWD, xirr } = portfolioResult;
 
-    const { holdingsToUpdate } = portfolioResult.holdings;
-    
+    // 步驟 3: 推導出唯一的「已實現損益」
+    const totalProfit = netProfitHistory[sortedDates[sortedDates.length - 1]] || 0;
+    const totalRealizedPL = totalProfit - totalUnrealizedPL;
+
+    // 步驟 4: 組合最終的 summaryData
+    const overallReturnRate = totalBuyCostTWD > 0 ? (totalProfit / totalBuyCostTWD) * 100 : 0;
+
     const summaryData = {
-        totalRealizedPL: portfolioResult.totalRealizedPL,
-        xirr: portfolioResult.xirr,
-        overallReturnRate: portfolioResult.overallReturnRate,
+        totalRealizedPL: totalRealizedPL, // 使用推導出的值
+        xirr: xirr,
+        overallReturnRate: overallReturnRate, // 使用基於權威總利潤計算的值
         benchmarkSymbol: benchmarkSymbol
     };
+    // ========================= 【核心修改 - 結束】 =========================
 
     return {
         summaryData,
