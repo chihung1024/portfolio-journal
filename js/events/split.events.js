@@ -1,100 +1,119 @@
-// js/events/split.events.js
+// =========================================================================================
+// == 拆股事件處理模組 (split.events.js) v3.1 - Robust Delete Logic
+// =========================================================================================
 
-import { addSplit, updateSplit, deleteSplit, getSplits } from '../api.js';
-import { renderSplitsTable } from '../ui/components/splits.ui.js';
-import { showModal, hideModal } from '../ui/modals.js';
-import state from '../state.js';
+import { stagingService } from '../staging.service.js'; // 【核心修改】
 import { showNotification } from '../ui/notifications.js';
+import { renderSplitsTable } from '../ui/components/splits.ui.js'; // 【核心修改】
+import { getState } from '../state.js';
 
-export function setupSplitEventListeners() {
-    const addSplitBtn = document.getElementById('add-split-btn');
-    const splitModal = document.getElementById('split-modal');
-    const splitForm = document.getElementById('split-form');
-    const cancelSplitBtn = document.getElementById('cancel-split-btn');
-    const splitsTable = document.getElementById('splits-table');
+// --- Private Functions ---
 
-    if (addSplitBtn) {
-        addSplitBtn.addEventListener('click', () => {
-            splitForm.reset();
-            document.getElementById('split-id').value = '';
-            document.getElementById('split-modal-title').textContent = '新增股票分割';
-            
-            const symbolSelect = document.getElementById('split-symbol');
-            const symbols = [...new Set(state.transactions.map(t => t.symbol))];
-            symbolSelect.innerHTML = symbols.map(s => `<option value="${s}">${s}</option>`).join('');
-            showModal('split-modal');
-        });
+/**
+ * 【新增】操作成功存入暫存區後，更新 UI
+ */
+function handleStagingSuccess() {
+    showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
+    // 立即重新渲染列表以顯示暫存狀態
+    renderSplitsTable();
+}
+
+async function handleDeleteSplit(button) {
+    const splitId = button.dataset.id;
+    const { showConfirm } = await import('../ui/modals.js');
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 統一邏輯：即使拆股事件沒有更新(UPDATE)操作，依然採用標準模式來獲取要刪除的物件，
+    // 以確保程式碼風格一致，並為未來可能的擴展做準備。
+    const { userSplits } = getState();
+    const stagedActions = await stagingService.getStagedActions();
+    const splitActions = stagedActions
+        .filter(a => a.entity === 'split' && a.type !== 'DELETE')
+        .map(a => a.payload);
+
+    let combined = [...userSplits];
+    splitActions.forEach(stagedSplit => {
+        const index = combined.findIndex(s => s.id === stagedSplit.id);
+        if (index > -1) {
+            combined[index] = { ...combined[index], ...stagedSplit };
+        } else {
+            combined.push(stagedSplit);
+        }
+    });
+    
+    const splitToDelete = combined.find(s => s.id === splitId);
+    // ========================= 【核心修改 - 結束】 =========================
+
+    if (!splitToDelete) {
+        showNotification('error', '找不到要刪除的拆股事件。');
+        return;
     }
 
-    if (splitForm) {
-        splitForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const formData = new FormData(splitForm);
-            const splitData = {
-                symbol: formData.get('symbol'),
-                date: formData.get('date'),
-                from_factor: parseInt(formData.get('from_factor'), 10),
-                to_factor: parseInt(formData.get('to_factor'), 10),
-            };
-            const splitId = formData.get('id');
+    showConfirm('確定要刪除這個拆股事件嗎？此操作將被加入暫存區。', async () => {
+        try {
+            await stagingService.addAction('DELETE', 'split', splitToDelete);
+            handleStagingSuccess();
+        } catch (error) {
+            showNotification('error', `暫存刪除操作失敗: ${error.message}`);
+        }
+    });
+}
 
-            try {
-                if (splitId) {
-                    await updateSplit(splitId, splitData);
-                    showNotification('股票分割更新成功', 'success');
-                } else {
-                    await addSplit(splitData);
-                    showNotification('股票分割新增成功', 'success');
-                }
-                hideModal('split-modal');
-                await getSplits();
-                renderSplitsTable();
-            } catch (error) {
-                showNotification(`操作失敗: ${error.message}`, 'error');
+async function handleSplitFormSubmit(e) {
+    e.preventDefault();
+    const splitData = {
+        id: `temp_split_${Date.now()}`, // 【核心修改】給予一個臨時ID
+        date: document.getElementById('split-date').value,
+        symbol: document.getElementById('split-symbol').value.toUpperCase().trim(),
+        ratio: parseFloat(document.getElementById('split-ratio').value)
+    };
+
+    if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
+        showNotification('error', '請填寫所有欄位並確保比例大於0。');
+        return;
+    }
+    
+    const { closeModal } = await import('../ui/modals.js');
+    closeModal('split-modal');
+    
+    // 【核心修改】將操作寫入暫存區
+    try {
+        await stagingService.addAction('CREATE', 'split', splitData);
+        handleStagingSuccess();
+    } catch (error) {
+        showNotification('error', `暫存新增操作失敗: ${error.message}`);
+    }
+}
+
+// --- Public Function ---
+
+export function initializeSplitEventListeners() {
+    const splitsTab = document.getElementById('splits-tab');
+    if (splitsTab) {
+        splitsTab.addEventListener('click', async (e) => { 
+            const addBtn = e.target.closest('#add-split-btn');
+            if (addBtn) {
+                const { openModal } = await import('../ui/modals.js');
+                openModal('split-modal');
+                return;
+            }
+            const deleteBtn = e.target.closest('.delete-split-btn');
+            if(deleteBtn) {
+                handleDeleteSplit(deleteBtn);
             }
         });
     }
+    
+    document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
+    document.getElementById('cancel-split-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('split-modal');
+    });
 
-    if (cancelSplitBtn) {
-        cancelSplitBtn.addEventListener('click', () => {
-            hideModal('split-modal');
-        });
-    }
-
-    if (splitsTable) {
-        splitsTable.addEventListener('click', async (event) => {
-            const target = event.target;
-            const splitId = target.closest('tr')?.dataset.id;
-
-            if (!splitId) return;
-
-            if (target.matches('.edit-split-btn, .edit-split-btn *')) {
-                const split = state.splits.find(s => s.id === splitId);
-                if (split) {
-                    document.getElementById('split-id').value = split.id;
-                    document.getElementById('split-modal-title').textContent = '編輯股票分割';
-                    const symbolSelect = document.getElementById('split-symbol');
-                    symbolSelect.innerHTML = `<option value="${split.symbol}">${split.symbol}</option>`;
-                    symbolSelect.value = split.symbol;
-                    document.getElementById('split-date').value = split.date;
-                    document.getElementById('from_factor').value = split.from_factor;
-                    document.getElementById('to_factor').value = split.to_factor;
-                    showModal('split-modal');
-                }
-            }
-
-            if (target.matches('.delete-split-btn, .delete-split-btn *')) {
-                if (confirm('確定要刪除這筆股票分割紀錄嗎？')) {
-                    try {
-                        await deleteSplit(splitId);
-                        showNotification('股票分割刪除成功', 'success');
-                        await getSplits();
-                        renderSplitsTable();
-                    } catch (error) {
-                        showNotification(`刪除失敗: ${error.message}`, 'error');
-                    }
-                }
-            }
-        });
-    }
+    document.getElementById('split-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('save-split-btn').click();
+        }
+    });
 }
