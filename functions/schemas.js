@@ -25,6 +25,9 @@ const userDividendSchema = z.object({
     quantity_at_ex_date: z.number(),
     amount_per_share: z.number(),
     total_amount: z.number(),
+    // ========================= 【核心修改 - 開始】 =========================
+    total_amount_twd: z.number().positive().optional().nullable(), // 新增：可選的實收台幣總額
+    // ========================= 【核心修改 - 結束】 =========================
     tax_rate: z.number().min(0).max(100),
     currency: z.string(),
     notes: z.string().optional().nullable(),
