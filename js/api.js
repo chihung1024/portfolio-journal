@@ -1,5 +1,5 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.5 (Async UI Update)
+// == API 通訊模組 (api.js) v5.6 (Dividend State Sync)
 // =========================================================================================
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
@@ -14,10 +14,12 @@ import { updateTwrChart } from './ui/charts/twrChart.js';
 import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
 import { renderHoldingsTable } from './ui/components/holdings.ui.js';
 import { renderTransactionsTable } from './ui/components/transactions.ui.js';
-// ========================= 【核心修改 - 開始】 =========================
 import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
-// ========================= 【核心修改 - 結束】 =========================
 import { renderSplitsTable } from './ui/components/splits.ui.js';
+// ========================= 【核心修改 - 開始】 =========================
+// 引入配息 UI 模組，以便在數據更新後觸發渲染
+import { renderDividendsManagementTab } from './ui/components/dividends.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
 import { updateDashboard } from './ui/dashboard.js';
 import { showNotification } from './ui/notifications.js';
 
@@ -117,7 +119,6 @@ export async function executeApiAction(action, payload, { loadingText = '正在�
 }
 
 
-// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
  */
@@ -135,11 +136,16 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
     if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
     if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
-    // 為平倉紀錄新增處理邏輯
     if (portfolioData.closedPositions) {
         newState.closedPositions = portfolioData.closedPositions;
         newState.activeClosedPosition = null;
     }
+    
+    // ========================= 【核心修改 - 開始】 =========================
+    // 新增對配息數據的處理，確保前端狀態被完整更新
+    if (portfolioData.pendingDividends) newState.pendingDividends = portfolioData.pendingDividends;
+    if (portfolioData.confirmedDividends) newState.confirmedDividends = portfolioData.confirmedDividends;
+    // ========================= 【核心修改 - 結束】 =========================
     
     if (portfolioData.history) {
         newState.assetDateRange = { type: 'all', start: null, end: null };
@@ -159,8 +165,15 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
     if (portfolioData.transactions) await renderTransactionsTable();
     if (portfolioData.splits) await renderSplitsTable();
     if (portfolioData.groups) await loadGroups();
-    // 如果數據包裡有平倉紀錄，也一併渲染
     if (portfolioData.closedPositions) renderClosedPositionsTable();
+
+    // ========================= 【核心修改 - 開始】 =========================
+    // 檢查當前是否在配息分頁，如果是，則使用更新後的 state 重新渲染
+    const activeTab = document.querySelector('.tab-content:not(.hidden)');
+    if (activeTab && activeTab.id === 'dividends-tab' && portfolioData.pendingDividends && portfolioData.confirmedDividends) {
+        await renderDividendsManagementTab(portfolioData.pendingDividends, portfolioData.confirmedDividends);
+    }
+    // ========================= 【核心修改 - 結束】 =========================
     
     updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
     
@@ -195,7 +208,6 @@ export async function updateAppWithData(portfolioData, tempIdMap = {}) {
         document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
     }
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 
 /**
