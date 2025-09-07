@@ -39,6 +39,7 @@ const calculateAndCachePendingDividends = async (userId, d1) => {
     const { symbol, ex_date: exDateStr, dividend: dividend_amount } = dividend;
     const userTransactionsForSymbol = transactionsBySymbol[symbol];
 
+    // **最終拼寫修正**：將 'userTransactionsForforSymbol' 改為 'userTransactionsForSymbol'
     if (!userTransactionsForSymbol || userTransactionsForSymbol.length === 0) {
       continue;
     }
@@ -61,8 +62,6 @@ const calculateAndCachePendingDividends = async (userId, d1) => {
     }
   }
 
-  // **核心邏輯**：先清除所有舊的待確認配息，再插入新計算出的結果。
-  // 這確保了數據的絕對一致性（例如，賣出持股後，舊的待確認配息會被正確移除）。
   await d1.clearPendingDividends(userId);
 
   if (pendingDividendsToInsert.length > 0) {
@@ -120,8 +119,6 @@ const performRecalculation = async (userId, d1, isIncremental = false) => {
     await d1.insertClosedPositions(userId, closedPositions);
   }
 
-  // **最終修正**：無論是何種路徑，都在所有其他計算完成後，最後執行配息計算。
-  // 這次呼叫是安全的，因為 d1.client.js 中已存在 clearPendingDividends 方法。
   await calculateAndCachePendingDividends(userId, d1);
 
   console.log(`Recalculation finished successfully for user ${userId}.`);
