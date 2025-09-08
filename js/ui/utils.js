@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：js/ui/utils.js (v_arch_cleanup_1)
-// == 職責：提供 UI 渲染所需的通用輔助函式，並建立標準化的格式化工具
+// == 檔案：js/ui/utils.js (v_chart_refactor_1)
+// == 職責：提供 UI 渲染所需的通用輔助函式，並為圖表模組提供標準化的日期過濾工具
 // =========================================================================================
 
 import { getHoldings, getTransactions } from '../state.js';
@@ -9,8 +9,6 @@ let notificationTimeout;
 
 /**
  * 顯示一個短暫的通知訊息
- * @param {string} message - 要顯示的訊息
- * @param {string} type - 'success', 'error', 'info'
  */
 function showNotification(message, type = 'info') {
     const container = document.getElementById('notification-container');
@@ -44,8 +42,6 @@ function showNotification(message, type = 'info') {
 
 /**
  * 格式化日期為 YYYY-MM-DD
- * @param {string | Date} date - 日期字串或 Date 物件
- * @returns {string} - 格式化後的日期
  */
 function formatDate(date) {
     if (!date) return 'N/A';
@@ -63,9 +59,6 @@ function formatDate(date) {
 
 /**
  * 格式化貨幣
- * @param {number} value - 數值
- * @param {string} currency - 貨幣代碼 (TWD, USD)
- * @returns {string} - 格式化後的貨幣字串
  */
 function formatCurrency(value, currency = 'TWD') {
     if (typeof value !== 'number' || !isFinite(value)) {
@@ -83,12 +76,9 @@ function formatCurrency(value, currency = 'TWD') {
     }
 }
 
+
 /**
- * 【新增】: 格式化通用數值
- * 此函式用於處理非貨幣類型的數字，如股數、百分比等，提供統一的格式化標準。
- * @param {number} value - 數值
- * @param {object} options - Intl.NumberFormat 的選項
- * @returns {string} - 格式化後的數字字串
+ * 格式化通用數值
  */
 function formatNumber(value, options = {}) {
     if (typeof value !== 'number' || !isFinite(value)) {
@@ -102,11 +92,54 @@ function formatNumber(value, options = {}) {
     return new Intl.NumberFormat('en-US', defaults).format(value);
 }
 
+// ========================= 【圖表模組修正 - 開始】 =========================
+/**
+ * 根據指定的日期範圍過濾歷史數據
+ * @param {object} history - { 'YYYY-MM-DD': value, ... } 格式的歷史數據
+ * @param {string} range - '1M', '6M', 'YTD', '1Y', 'ALL'
+ * @returns {object} - 過濾後的歷史數據
+ */
+function filterHistoryByDateRange(history, range) {
+    if (!history || Object.keys(history).length === 0 || range === 'ALL') {
+        return history || {};
+    }
+
+    const endDate = new Date();
+    const startDate = new Date();
+    
+    switch (range) {
+        case '1M':
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '6M':
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case 'YTD':
+            startDate.setMonth(0, 1); // 今年的 1 月 1 日
+            startDate.setHours(0, 0, 0, 0);
+            break;
+        case '1Y':
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        default:
+            return history;
+    }
+
+    const filteredHistory = {};
+    const startTimestamp = startDate.getTime();
+
+    for (const dateStr in history) {
+        const entryDate = new Date(dateStr);
+        if (entryDate.getTime() >= startTimestamp) {
+            filteredHistory[dateStr] = history[dateStr];
+        }
+    }
+    return filteredHistory;
+}
+// ========================= 【圖表模組修正 - 結束】 =========================
 
 /**
  * 根據股票代碼獲取其對應的貨幣
- * @param {string} symbol - 股票代碼
- * @returns {string} - 貨幣代碼
  */
 function getSymbolCurrency(symbol) {
     const holdings = getHoldings();
@@ -140,7 +173,8 @@ export {
     showNotification,
     formatDate,
     formatCurrency,
-    formatNumber, // 【新增】: 導出新的格式化函式
+    formatNumber,
+    filterHistoryByDateRange, // <-- 導出新函式
     renderUI,
     getSymbolCurrency,
 };
