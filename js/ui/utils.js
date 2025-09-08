@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：js/ui/utils.js (v_arch_fix)
-// == 職責：提供 UI 渲染所需的通用輔助函式，並遵循正確的狀態管理規範
+// == 檔案：js/ui/utils.js (v_arch_cleanup_1)
+// == 職責：提供 UI 渲染所需的通用輔助函式，並建立標準化的格式化工具
 // =========================================================================================
 
 import { getHoldings, getTransactions } from '../state.js';
@@ -28,17 +28,14 @@ function showNotification(message, type = 'info') {
 
     container.appendChild(notification);
 
-    // Animate in
     setTimeout(() => {
         notification.classList.remove('translate-x-full');
     }, 10);
 
-    // Clear previous timeout if it exists
     if (notificationTimeout) {
         clearTimeout(notificationTimeout);
     }
 
-    // Animate out and remove after 3 seconds
     notificationTimeout = setTimeout(() => {
         notification.classList.add('translate-x-full');
         notification.addEventListener('transitionend', () => notification.remove());
@@ -54,7 +51,6 @@ function formatDate(date) {
     if (!date) return 'N/A';
     try {
         const d = new Date(date);
-        // 確保我們處理的是 UTC 日期，避免時區問題
         const year = d.getUTCFullYear();
         const month = String(d.getUTCMonth() + 1).padStart(2, '0');
         const day = String(d.getUTCDate()).padStart(2, '0');
@@ -83,10 +79,29 @@ function formatCurrency(value, currency = 'TWD') {
             maximumFractionDigits: 2
         }).format(value);
     } catch (e) {
-        // Fallback for invalid currency codes
         return `${currency} ${value.toFixed(2)}`;
     }
 }
+
+/**
+ * 【新增】: 格式化通用數值
+ * 此函式用於處理非貨幣類型的數字，如股數、百分比等，提供統一的格式化標準。
+ * @param {number} value - 數值
+ * @param {object} options - Intl.NumberFormat 的選項
+ * @returns {string} - 格式化後的數字字串
+ */
+function formatNumber(value, options = {}) {
+    if (typeof value !== 'number' || !isFinite(value)) {
+        return 'N/A';
+    }
+    const defaults = {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+        ...options
+    };
+    return new Intl.NumberFormat('en-US', defaults).format(value);
+}
+
 
 /**
  * 根據股票代碼獲取其對應的貨幣
@@ -94,19 +109,15 @@ function formatCurrency(value, currency = 'TWD') {
  * @returns {string} - 貨幣代碼
  */
 function getSymbolCurrency(symbol) {
-    // 【核心修正】: 不再使用已移除的 getState，改為直接導入並使用具體的 getter 函式
     const holdings = getHoldings();
     const transactions = getTransactions();
-
     const upperSymbol = symbol.toUpperCase();
     
-    // 優先從當前持股中尋找
     const holding = holdings.find(h => h.symbol.toUpperCase() === upperSymbol);
     if (holding && holding.currency) {
         return holding.currency;
     }
 
-    // 若持股中沒有，則從交易紀錄中尋找最近的一筆
     const lastTransaction = transactions
         .filter(t => t.symbol.toUpperCase() === upperSymbol)
         .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
@@ -114,7 +125,6 @@ function getSymbolCurrency(symbol) {
         return lastTransaction.currency;
     }
     
-    // 如果都沒有，根據代碼格式進行猜測作為備用方案
     return /\.\w{2}$/.test(upperSymbol) ? 'TWD' : 'USD';
 }
 
@@ -123,7 +133,6 @@ function getSymbolCurrency(symbol) {
  * 觸發一次完整的 UI 重新渲染
  */
 function renderUI() {
-    // 這是一個便捷的方法，用於觸發全局狀態更新事件
     document.dispatchEvent(new CustomEvent('state-updated'));
 }
 
@@ -131,6 +140,8 @@ export {
     showNotification,
     formatDate,
     formatCurrency,
+    formatNumber, // 【新增】: 導出新的格式化函式
     renderUI,
     getSymbolCurrency,
 };
+
