@@ -1,5 +1,6 @@
 // =========================================================================================
-// == 檔案：functions/performRecalculation.js (v_final_robust - 最終 Bug 修正)
+// == 檔案：functions/performRecalculation.js (v_ga_performance_optimized)
+// == 版本：GA - 採納 Code Review 意見，以線性時間複雜度重構
 // == 職責：協調計算引擎，並將結果持久化儲存至資料庫
 // =========================================================================================
 
@@ -8,9 +9,7 @@ const dataProvider = require('./calculation/data.provider');
 const { toDate, isTwStock } = require('./calculation/helpers');
 const { prepareEvents, getPortfolioStateOnDate, dailyValue } = require('./calculation/state.calculator');
 const metrics = require('./calculation/metrics.calculator');
-// 【修改】導入新的計算引擎
 const { runCalculationEngine } = require('./calculation/engine');
-
 
 const sanitizeNumber = (value) => {
     const num = Number(value);
@@ -18,6 +17,7 @@ const sanitizeNumber = (value) => {
 };
 
 async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapshot = false, groupId = 'all') {
+    // ... [此函式未變更，保持原樣] ...
     const logPrefix = `[${uid}|G:${groupId}]`;
     console.log(`${logPrefix} 開始維護快照... 強制建立最新快照: ${createSnapshot}`);
     if (!market || Object.keys(newFullHistory).length === 0) {
@@ -60,71 +60,98 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 }
 
-// ========================= 【根本原因修正 - 開始】 =========================
+
+// ========================= 【高效能重構方案 - 開始】 =========================
 /**
- * 重新設計的待確認配息計算函式
- * 此版本採用更穩健的演算法，為每一筆市場配息事件獨立計算其當時的持股狀態，
- * 徹底解決了因共享迭代器 (txIndex) 導致的狀態計算錯誤問題。
+ * @notice 計算並快取待確認股息 (效能優化版)
+ * @dev 此函式採用事件驅動時間軸方法，將時間複雜度降至 O(N log N)，其中 N 是交易和相關配息事件的總數。
+ * 它能高效、準確地處理大規模數據，並內建多項優化與邊界條件處理。
+ * @param {string} uid 使用者 ID
+ * @param {Array<Object>} txs 使用者的所有交易紀錄
+ * @param {Array<Object>} userDividends 使用者已手動確認的股息紀錄
  */
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
-    console.log(`[${uid}] 開始計算並快取待確認股息 (v2 - 演算法修正)...`);
+    const logPrefix = `[${uid}]`;
+    console.log(`${logPrefix} 開始計算待確認股息 (v3 - 高效能時間軸演算法)...`);
+
+    // 步驟 0: 初始清理與前置檢查
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
     if (!txs || txs.length === 0) {
-        console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
+        console.log(`${logPrefix} 使用者無交易紀錄，跳過股息計算。`);
         return;
     }
-    const allMarketDividends = await d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC');
-    if (!allMarketDividends || allMarketDividends.length === 0) {
-        console.log(`[${uid}] 無市場股息資料，無需快取。`);
+
+    // 步驟 1: 資料庫查詢優化
+    // 從交易紀錄中提取所有相關的股票代碼，以最小化市場配息的查詢範圍。
+    const userSymbols = [...new Set(txs.map(tx => tx.symbol.toUpperCase()))];
+    const placeholders = userSymbols.map(() => '?').join(',');
+    const marketDividends = await d1Client.query(`SELECT * FROM dividend_history WHERE symbol IN (${placeholders}) ORDER BY date ASC`, userSymbols);
+
+    if (!marketDividends || marketDividends.length === 0) {
+        console.log(`${logPrefix} 根據使用者持倉，未找到相關的市場股息資料。`);
         return;
     }
-    
+
     // 建立已確認配息的快速查找集合，鍵值為 'SYMBOL_YYYY-MM-DD'
     const confirmedKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
+
+    // 步驟 2: 建立統一事件時間軸
+    // 將交易和市場配息兩種事件合併，並按時間精確排序。
+    const transactionEvents = txs.map(tx => ({
+        type: 'transaction',
+        // 確保 Date 物件轉換的一致性
+        date: new Date(tx.date), 
+        data: tx
+    }));
+
+    const dividendEvents = marketDividends.map(div => {
+        const exDate = new Date(div.date);
+        // **關鍵**：將除息事件的時間設為除息日前一天的結束，確保它在排序後
+        // 能正確反映除息日前一天的持股狀態。
+        const exDateMinusOneEOD = new Date(exDate.getTime() - 1);
+        return {
+            type: 'dividend_ex_date',
+            date: exDateMinusOneEOD,
+            data: div
+        };
+    });
     
+    // 合併並排序所有事件，建立一個統一的時間軸
+    const timeline = [...transactionEvents, ...dividendEvents].sort((a, b) => a.date - b.date);
+
+    // 步驟 3: 遍歷時間軸並計算狀態
+    const portfolioState = {}; // { 'AAPL': 100, 'GOOG': 50 }
+    const lastCurrency = {};   // { 'AAPL': 'USD' }，用於健壯的貨幣判斷
     const pendingDividends = [];
-    
-    // 1. 建立一個交易紀錄的副本，避免影響原始傳入的陣列
-    const sortedTxs = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-    // 2. 遍歷市場上的每一筆配息紀錄
-    for (const histDiv of allMarketDividends) {
-        const divSymbol = histDiv.symbol.toUpperCase();
-        const exDateStr = histDiv.date.split('T')[0];
-        
-        // 3. 如果此配息已被使用者手動確認，則跳過
-        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) {
-            continue;
-        }
+    for (const event of timeline) {
+        const symbol = event.data.symbol.toUpperCase();
 
-        const exDateMinusOne = new Date(exDateStr);
-        exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-
-        // 4. 【核心修正】為每一次計算都獨立計算持股狀態，不再共享 txIndex
-        let quantity = 0;
-        for (const tx of sortedTxs) {
-            if (new Date(tx.date) > exDateMinusOne) {
-                // 交易發生在除息日前一天之後，停止計算
-                break;
+        if (event.type === 'transaction') {
+            const tx = event.data;
+            portfolioState[symbol] = (portfolioState[symbol] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
+            // 持續更新每支股票的最後交易貨幣
+            lastCurrency[symbol] = tx.currency;
+        } else if (event.type === 'dividend_ex_date') {
+            const div = event.data;
+            const exDateStr = div.date.split('T')[0];
+            const quantity = portfolioState[symbol] || 0;
+            
+            // 檢查是否符合待確認條件：持股 > 0 且尚未被使用者確認
+            if (quantity > 1e-9 && !confirmedKeys.has(`${symbol}_${exDateStr}`)) {
+                pendingDividends.push({
+                    symbol: symbol,
+                    ex_dividend_date: exDateStr,
+                    amount_per_share: div.dividend,
+                    quantity_at_ex_date: quantity,
+                    // 使用最後已知的貨幣，比 txs.find() 更健壯
+                    currency: lastCurrency[symbol] || (isTwStock(symbol) ? 'TWD' : 'USD')
+                });
             }
-            if (tx.symbol.toUpperCase() === divSymbol) {
-                quantity += (tx.type === 'buy' ? tx.quantity : -tx.quantity);
-            }
-        }
-
-        // 5. 如果在除息日前一天持有正股數，則產生一筆待確認紀錄
-        if (quantity > 1e-9) { // 使用一個極小值以避免浮點數精度問題
-            const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
-            pendingDividends.push({
-                symbol: divSymbol,
-                ex_dividend_date: exDateStr,
-                amount_per_share: histDiv.dividend,
-                quantity_at_ex_date: quantity,
-                currency: currency
-            });
         }
     }
-    
+
+    // 步驟 4: 結果持久化
     if (pendingDividends.length > 0) {
         const dbOps = pendingDividends.map(p => ({
             sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -132,13 +159,12 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
         }));
         await d1Client.batch(dbOps);
     }
-    console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
+    console.log(`${logPrefix} 成功快取 ${pendingDividends.length} 筆待確認股息。`);
 }
-// ========================= 【根本原因修正 - 結束】 =========================
-
+// ========================= 【高效能重構方案 - 結束】 =========================
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
-    console.log(`--- [${uid}] 儲存式重算程序開始 (v_snapshot_integrated) ---`);
+    console.log(`--- [${uid}] 儲存式重算程序開始 (v_perf_optimized) ---`);
     try {
         const ALL_GROUP_ID = 'all';
 
@@ -154,10 +180,12 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol']),
             d1Client.query('SELECT history FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
         ]);
-
+        
+        // 呼叫全新優化後的函式
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
 
         if (txs.length === 0) {
+            // ... [此邏輯未變更，保持原樣] ...
             await d1Client.batch([
                 { sql: 'DELETE FROM holdings WHERE uid = ?', params: [uid] },
                 { sql: 'DELETE FROM portfolio_summary WHERE uid = ?', params: [uid] },
@@ -173,6 +201,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         let baseSnapshot = null;
         
         if (createSnapshot === false) {
+             // ... [此邏輯未變更，保持原樣] ...
             const LATEST_SNAPSHOT_SQL = modifiedTxDate
                 ? `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1`
                 : `SELECT * FROM portfolio_snapshots WHERE uid = ? AND group_id = ? ORDER BY snapshot_date DESC LIMIT 1`;
@@ -182,6 +211,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         }
 
         if (baseSnapshot) {
+            // ... [此邏輯未變更，保持原樣] ...
             console.log(`[${uid}] 找到基準快照: ${baseSnapshot.snapshot_date}，將執行增量計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ? AND snapshot_date > ?', [uid, ALL_GROUP_ID, baseSnapshot.snapshot_date]);
             if (summaryResult[0] && summaryResult[0].history) {
@@ -189,6 +219,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
                 Object.keys(oldHistory).forEach(date => { if (toDate(date) > baseSnapshot.snapshot_date) delete oldHistory[date]; });
             }
         } else {
+             // ... [此邏輯未變更，保持原樣] ...
             console.log(`[${uid}] 找不到有效快照或被強制重算，將執行完整計算。`);
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
