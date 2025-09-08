@@ -1,116 +1,151 @@
 // =========================================================================================
-// == 檔案：functions/api_handlers/portfolio.handler.js (v_benchmark_fix)
-// == 職責：處理所有與投資組合數據相關的 API 請求，並回傳完整的數據酬載
+// == 檔案：functions/api_handlers/portfolio.handler.js (v_refactored_syntax_fix)
 // =========================================================================================
 
 const { d1Client } = require('../d1.client');
-const { z } = require('zod');
+const { performRecalculation } = require('../performRecalculation');
 
-// 【新增】: 用於驗證更新比較基準請求的結構
-const benchmarkSchema = z.object({
-  symbol: z.string().min(1, '比較基準代碼為必填項'),
-});
+const ALL_GROUP_ID = 'all';
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
- * 獲取使用者完整的投資組合數據
- * @param {object} c - Hono context object
- * @returns {Response} - 包含所有投資組合數據的 JSON 回應
+ * 【新增】更新 Benchmark 的核心邏輯函式
+ * @param {string} uid - 使用者 ID
+ * @param {string} benchmarkSymbol - 新的 Benchmark 股票代碼
  */
-async function getData(c) {
-    const uid = c.get('uid');
-    const { groupId = 'all' } = c.req.query();
-    const logPrefix = `[API|Portfolio|${uid}|G:${groupId}]`;
-
-    try {
-        console.log(`${logPrefix} 開始獲取投資組合數據...`);
-
-        const [
-            holdingsResult, 
-            summaryResult, 
-            transactionsResult, 
-            splitsResult, 
-            dividendsResult, 
-            groupsResult, 
-            closedPositionsResult,
-            pendingDividendsResult
-        ] = await Promise.all([
-            d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, groupId]),
-            d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, groupId]),
-            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-            d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY ex_date DESC', [uid]),
-            d1Client.query('SELECT * FROM user_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid]),
-            d1Client.query('SELECT * FROM `groups` WHERE uid = ?', [uid]),
-            d1Client.query('SELECT * FROM closed_positions WHERE uid = ? ORDER BY symbol ASC', [uid]),
-            d1Client.query('SELECT * FROM user_pending_dividends WHERE uid = ? ORDER BY ex_dividend_date DESC', [uid])
-        ]);
-
-        let finalSummary = {};
-        if (summaryResult && summaryResult[0]) {
-            const summary = summaryResult[0];
-            finalSummary = {
-                ...JSON.parse(summary.summary_data || '{}'),
-                history: JSON.parse(summary.history || '{}'),
-                twrHistory: JSON.parse(summary.twrHistory || '{}'),
-                benchmarkHistory: JSON.parse(summary.benchmarkHistory || '{}'),
-                netProfitHistory: JSON.parse(summary.netProfitHistory || '{}'),
-                lastUpdated: summary.lastUpdated,
-            };
-        }
-        
-        console.log(`${logPrefix} 成功獲取所有數據，準備回傳。`);
-
-        return c.json({
-            holdings: holdingsResult || [],
-            summary: finalSummary,
-            transactions: transactionsResult || [],
-            splits: splitsResult || [],
-            dividends: dividendsResult || [],
-            groups: groupsResult || [],
-            closedPositions: closedPositionsResult || [],
-            pendingDividends: pendingDividendsResult || []
-        });
-
-    } catch (e) {
-        console.error(`${logPrefix} 獲取投資組合數據時發生錯誤:`, e);
-        return c.json({ error: 'Failed to retrieve portfolio data' }, 500);
-    }
+async function updateBenchmarkCore(uid, benchmarkSymbol) {
+    await d1Client.query(
+        'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
+        [uid, 'benchmarkSymbol', benchmarkSymbol.toUpperCase()]
+    );
+    // 更新 Benchmark 會觸發對 'all' 群組的重算
+    await performRecalculation(uid, null, false);
 }
 
+// 將核心邏輯導出
+exports.updateBenchmarkCore = updateBenchmarkCore;
+// ========================= 【核心修改 - 結束】 =========================
+
+
 /**
- * 【新增】: 更新使用者的比較基準代碼
- * @param {object} c - Hono context object
- * @returns {Response} - 操作成功或失敗的 JSON 回應
+ * 【舊 API - 保留】獲取使用者所有核心資料 (預設為 'all' 群組)
  */
-async function updateBenchmark(c) {
-    const uid = c.get('uid');
-    const logPrefix = `[API|Benchmark|${uid}]`;
-    try {
-        const body = await c.req.json();
-        const validation = benchmarkSchema.safeParse(body);
-        if (!validation.success) {
-            return c.json({ error: validation.error.flatten() }, 400);
+exports.getData = async (uid, res) => {
+    const [txs, splits, holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+    ]);
+
+    const summaryRow = summaryResult[0] || {};
+    const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
+    const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            summary: summaryData,
+            holdings,
+            transactions: txs,
+            splits,
+            history,
+            twrHistory,
+            benchmarkHistory,
+            netProfitHistory,
         }
-        const { symbol } = validation.data;
-        console.log(`${logPrefix} 正在更新比較基準代碼為 ${symbol}...`);
-
-        await d1Client.query(
-            'INSERT OR REPLACE INTO controls (uid, key, value) VALUES (?, ?, ?)',
-            [uid, 'benchmarkSymbol', symbol.toUpperCase()]
-        );
-        
-        console.log(`${logPrefix} 比較基準代碼更新成功。`);
-        // 注意：依循系統設計，重算應由客戶端在收到此成功回應後觸發
-        return c.json({ success: true, message: '比較基準更新成功。' });
-    } catch (e) {
-        console.error(`${logPrefix} 更新比較基準時發生錯誤:`, e);
-        return c.json({ error: '更新比較基準失敗' }, 500);
-    }
-}
-
-
-module.exports = {
-    getPortfolio: getData,
-    // 【新增】: 將新的處理函式匯出，供路由器使用
-    updateBenchmark: updateBenchmark,
+    });
 };
 
+/**
+ * 【新增】超輕量級 API：只獲取儀表板摘要數據
+ */
+exports.getDashboardSummary = async (uid, res) => {
+    const [summaryResult] = await Promise.all([
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+    ]);
+
+    const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            summary: summaryData,
+        }
+    });
+};
+
+/**
+ * 【新增】API：只獲取持股列表 (Holdings)
+ */
+exports.getHoldings = async (uid, res) => {
+    const holdings = await d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+    return res.status(200).send({ success: true, data: { holdings } });
+};
+
+
+/**
+ * 【舊版 API - 修改】輕量級 API：只獲取儀表板和持股數據
+ */
+exports.getDashboardAndHoldings = async (uid, res) => {
+    const [holdings, summaryResult] = await Promise.all([
+        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+        d1Client.query('SELECT summary_data FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]),
+    ]);
+
+    const summaryData = summaryResult[0] && summaryResult[0].summary_data ? JSON.parse(summaryResult[0].summary_data) : {};
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            summary: summaryData,
+            holdings,
+        }
+    });
+};
+
+/**
+ * 【新增】API：只獲取交易和拆股紀錄
+ */
+exports.getTransactionsAndSplits = async (uid, res) => {
+    const [transactions, splits] = await Promise.all([
+        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
+        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid])
+    ]);
+    return res.status(200).send({ success: true, data: { transactions, splits } });
+};
+
+/**
+ * 【新增】API：只獲取所有圖表的歷史數據
+ */
+exports.getChartData = async (uid, res) => {
+    const summaryResult = await d1Client.query('SELECT history, twrHistory, benchmarkHistory, netProfitHistory FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
+    
+    const summaryRow = summaryResult[0] || {};
+    const history = summaryRow.history ? JSON.parse(summaryRow.history) : {};
+    const twrHistory = summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {};
+    const benchmarkHistory = summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {};
+    const netProfitHistory = summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {};
+
+    return res.status(200).send({
+        success: true,
+        data: {
+            portfolioHistory: history,
+            twrHistory,
+            benchmarkHistory,
+            netProfitHistory
+        }
+    });
+};
+
+
+/**
+ * 【API 端點】更新比較基準 (Benchmark)
+ */
+exports.updateBenchmark = async (uid, data, res) => {
+    await updateBenchmarkCore(uid, data.benchmarkSymbol);
+    return res.status(200).send({ success: true, message: '基準已更新。' });
+};

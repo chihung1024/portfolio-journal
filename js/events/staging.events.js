@@ -1,134 +1,202 @@
 // =========================================================================================
-// == 檔案：js/events/staging.events.js (v_arch_contract_fix_2_final)
-// == 職責：處理「暫存區」的 UI 事件，並遵循正確的服務與 API 模組契約
+// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
 // =========================================================================================
 
-import { showNotification } from '../ui/utils.js';
-// 【核心修正】: 導入由服務提供者履約的 parseStagingData 函式
-import { parseStagingData } from '../staging.service.js';
-// 【核心修正】: 導入職責明確的 API 函式
-import { processStagedTransactions } from '../api.js';
-
-let parsedData = [];
-
-/**
- * 初始化暫存區相關的事件監聽器
- */
-function initializeStagingEventListeners() {
-    const stagingTextarea = document.getElementById('staging-textarea');
-    const processStagingBtn = document.getElementById('process-staging-btn');
-    const stagingPreview = document.getElementById('staging-preview');
-
-    if (!stagingTextarea || !processStagingBtn || !stagingPreview) return;
-
-    // 監聽貼上事件，自動解析
-    stagingTextarea.addEventListener('paste', (event) => {
-        setTimeout(() => {
-            handleParseStagingData();
-        }, 0);
-    });
-    
-    // 監聽手動輸入
-    stagingTextarea.addEventListener('input', handleParseStagingData);
-
-    // 監聽 "處理" 按鈕點擊
-    processStagingBtn.addEventListener('click', async () => {
-        if (parsedData.length > 0) {
-            await handleProcessStaging();
-        } else {
-            showNotification('沒有可處理的數據', 'error');
-        }
-    });
-}
+import { stagingService } from '../staging.service.js';
+// 【核心修改】引入 submitBatch 和 updateAppWithData
+import { submitBatch, updateAppWithData } from '../api.js';
+import { showNotification } from '../ui/notifications.js';
+import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
+import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
+import { renderSplitsTable } from '../ui/components/splits.ui.js';
+import { renderGroupsTab } from '../ui/components/groups.ui.js';
+import { getState } from '../state.js';
 
 /**
- * 處理從 textarea 解析數據的邏輯
+ * 輔助函式，用於刷新當前可見的分頁視圖
  */
-function handleParseStagingData() {
-    const stagingTextarea = document.getElementById('staging-textarea');
-    const stagingPreview = document.getElementById('staging-preview');
-    const processStagingBtn = document.getElementById('process-staging-btn');
-    const rawData = stagingTextarea.value;
+async function refreshCurrentView() {
+    const activeTab = document.querySelector('.tab-content:not(.hidden)');
+    if (!activeTab) return;
 
-    try {
-        // 【核心修正】: 呼叫由 staging.service.js 提供的權威函式
-        parsedData = parseStagingData(rawData);
-        renderStagingPreview(parsedData, stagingPreview);
-        processStagingBtn.disabled = parsedData.length === 0;
-    } catch (error) {
-        console.error("解析暫存區數據失敗:", error);
-        stagingPreview.innerHTML = `<p class="text-red-500">${error.message}</p>`;
-        parsedData = [];
-        processStagingBtn.disabled = true;
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    switch (activeTab.id) {
+        case 'transactions-tab':
+            await renderTransactionsTable();
+            break;
+        case 'dividends-tab':
+            const { pendingDividends, confirmedDividends } = getState();
+            await renderDividendsManagementTab(pendingDividends, confirmedDividends);
+            break;
+        case 'splits-tab':
+            await renderSplitsTable();
+            break;
+        case 'groups-tab':
+            await renderGroupsTab();
+            break;
     }
 }
 
-/**
- * 處理將解析後的數據提交至後端的邏輯
- */
-async function handleProcessStaging() {
-    const processStagingBtn = document.getElementById('process-staging-btn');
-    processStagingBtn.disabled = true;
-    processStagingBtn.textContent = '處理中...';
-
-    try {
-        // 【核心修正】: 呼叫由 api.js 提供的權威函式
-        await processStagedTransactions(parsedData);
-        showNotification(`成功匯入 ${parsedData.length} 筆交易`, 'success');
-        
-        // 成功後清空暫存區
-        document.getElementById('staging-textarea').value = '';
-        parsedData = [];
-        renderStagingPreview([], document.getElementById('staging-preview'));
-
-    } catch (error) {
-        console.error('處理暫存區數據失敗:', error);
-        showNotification('處理失敗，請檢查數據格式或稍後再試', 'error');
-    } finally {
-        processStagingBtn.disabled = false;
-        processStagingBtn.textContent = '處理';
-    }
-}
 
 /**
- * 渲染暫存區數據的預覽
- * @param {Array<object>} data - 解析後的數據
- * @param {HTMLElement} container - 預覽容器
+ * 格式化單個暫存操作，以便在 UI 中顯示
  */
-function renderStagingPreview(data, container) {
-    if (data.length === 0) {
-        container.innerHTML = '<p class="text-gray-500">此處將顯示解析後的數據預覽...</p>';
-        return;
-    }
-    
-    const rows = data.map(item => `
-        <tr>
-            <td class="border px-2 py-1">${item.date}</td>
-            <td class="border px-2 py-1">${item.symbol}</td>
-            <td class="border px-2 py-1">${item.type}</td>
-            <td class="border px-2 py-1">${item.quantity}</td>
-            <td class="border px-2 py-1">${item.price_per_share}</td>
-            <td class="border px-2 py-1">${item.currency}</td>
-        </tr>
-    `).join('');
+function formatActionForDisplay(action) {
+    const { type, entity, payload } = action;
+    let title = '未知操作';
+    let details = '';
 
-    container.innerHTML = `
-        <p class="mb-2">成功解析 ${data.length} 筆交易:</p>
-        <table class="w-full text-xs text-left">
-            <thead>
-                <tr>
-                    <th class="border px-2 py-1">日期</th>
-                    <th class="border px-2 py-1">代碼</th>
-                    <th class="border px-2 py-1">類型</th>
-                    <th class="border px-2 py-1">股數</th>
-                    <th class="border px-2 py-1">價格</th>
-                    <th class="border px-2 py-1">貨幣</th>
-                </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-        </table>
+    const typeMap = {
+        'CREATE': { text: '新增', color: 'green', icon: 'plus-circle' },
+        'UPDATE': { text: '更新', color: 'yellow', icon: 'edit-3' },
+        'DELETE': { text: '刪除', color: 'red', icon: 'trash-2' }
+    };
+    const { text, color, icon } = typeMap[type] || { text: '未知', color: 'gray', icon: 'help-circle' };
+
+    switch (entity) {
+        case 'transaction':
+            title = `${text}交易紀錄`;
+            details = `[${payload.symbol}] ${payload.type === 'buy' ? '買入' : '賣出'} ${payload.quantity} 股 @ ${payload.price}`;
+            break;
+        case 'split':
+            title = `${text}拆股事件`;
+            details = `[${payload.symbol}] 比例: 1 變 ${payload.ratio}`;
+            break;
+        case 'dividend':
+            title = `${text}配息紀錄`;
+            details = `[${payload.symbol}] 發放日: ${payload.pay_date}, 實收: ${payload.total_amount}`;
+            break;
+        case 'group':
+            title = `${text}群組`;
+            details = `名稱: ${payload.name}`;
+            break;
+    }
+
+    return `
+        <div class="p-3 rounded-md border border-gray-200 flex items-center justify-between bg-${color}-50">
+            <div class="flex items-center space-x-3">
+                <i data-lucide="${icon}" class="w-5 h-5 text-${color}-600"></i>
+                <div>
+                    <p class="font-semibold text-sm text-gray-800">${title}</p>
+                    <p class="text-xs text-gray-600">${details}</p>
+                </div>
+            </div>
+            <button data-action-id="${action.id}" class="remove-staged-action-btn btn p-2 text-gray-400 hover:text-red-600">
+                <i data-lucide="x-circle" class="w-5 h-5"></i>
+            </button>
+        </div>
     `;
 }
 
-export { initializeStagingEventListeners };
+/**
+ * 渲染暫存區彈出視窗的內容
+ */
+async function renderStagingModal() {
+    const container = document.getElementById('staging-list-container');
+    const actions = await stagingService.getStagedActions();
 
+    if (actions.length === 0) {
+        container.innerHTML = `<p class="text-center py-10 text-gray-500">暫存區是空的。</p>`;
+    } else {
+        container.innerHTML = actions.map(formatActionForDisplay).join('');
+    }
+    lucide.createIcons();
+}
+
+/**
+ * 處理提交所有暫存操作的完整流程
+ */
+async function submitAllActions() {
+    const { closeModal } = await import('../ui/modals.js');
+    closeModal('staging-modal');
+
+    try {
+        const netActions = await stagingService.getNetActions();
+        if (netActions.length === 0) {
+            showNotification('info', '沒有需要提交的操作。');
+            return;
+        }
+        
+        const result = await submitBatch(netActions);
+        
+        if (result.success) {
+            await stagingService.clearActions();
+            
+            // ========================= 【核心修改 - 開始】 =========================
+            // 嚴格等待 UI 更新完成後，才結束整個函式
+            await updateAppWithData(result.data, result.data.tempIdMap);
+            // ========================= 【核心修改 - 結束】 =========================
+        }
+
+    } catch (error) {
+        console.error("提交暫存區時發生最終錯誤:", error);
+    }
+}
+
+
+/**
+ * 初始化所有與暫存區相關的事件監聽器
+ */
+export function initializeStagingEventListeners() {
+    const editBtn = document.getElementById('edit-staging-btn');
+    const submitAllBtn = document.getElementById('submit-all-btn');
+    const stagingModal = document.getElementById('staging-modal');
+
+    document.addEventListener('staging-area-updated', (e) => {
+        const count = e.detail.count;
+        const badge = document.getElementById('staging-count-badge');
+        const controls = document.getElementById('staging-controls');
+        
+        badge.textContent = count;
+        if (count > 0) {
+            controls.classList.remove('hidden');
+            controls.classList.add('flex');
+        } else {
+            controls.classList.add('hidden');
+            controls.classList.remove('flex');
+        }
+    });
+
+    editBtn.addEventListener('click', async () => {
+        const { openModal } = await import('../ui/modals.js');
+        await renderStagingModal();
+        openModal('staging-modal');
+    });
+
+    submitAllBtn.addEventListener('click', submitAllActions);
+
+    if (stagingModal) {
+        stagingModal.addEventListener('click', async (e) => {
+            const { closeModal, showConfirm } = await import('../ui/modals.js');
+            if (e.target.closest('#close-staging-modal-btn')) {
+                closeModal('staging-modal');
+                return;
+            }
+
+            const removeBtn = e.target.closest('.remove-staged-action-btn');
+            if (removeBtn) {
+                const actionId = parseInt(removeBtn.dataset.actionId, 10);
+                await stagingService.removeAction(actionId);
+                await renderStagingModal();
+                await refreshCurrentView();
+                return;
+            }
+
+            if (e.target.closest('#submit-from-staging-btn')) {
+                submitAllActions();
+                return;
+            }
+
+            if (e.target.closest('#clear-staging-btn')) {
+                showConfirm('您確定要清空所有暫存的操作嗎？此操作無法復原。', async () => {
+                    await stagingService.clearActions();
+                    await renderStagingModal();
+                    await refreshCurrentView(); 
+                    showNotification('info', '暫存區已清空。');
+                });
+                return;
+            }
+        });
+    }
+}

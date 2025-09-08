@@ -1,87 +1,97 @@
 // =========================================================================================
-// == 檔案：js/ui/dashboard.js (v_arch_cleanup_5_final)
-// == 職責：渲染儀表板的核心摘要卡片，並遵循正確的狀態管理與格式化規範
+// == 儀表板 UI 模組 (dashboard.js) v2.0 - UI & Responsiveness Refined
+// == 職責：處理頂部儀表板數據卡片的更新。
 // =========================================================================================
 
-import { getSummary } from '../state.js';
-// 【核心修正】: 導入標準化的格式化工具
-import { formatCurrency, formatNumber } from './utils.js';
+import { formatNumber } from "./utils.js";
 
 /**
- * 渲染儀表板的摘要卡片
+ * [新增] 輔助函式，用於更新單一數據卡片的內容與樣式
+ * @param {string} mainElementId - 主要數值元素的 ID
+ * @param {number|string} value - 要顯示的主要數值
+ * @param {object} options - 其他選項
+ * @param {string|null} secondaryElementId - (可選) 次要數值元素 (如百分比) 的 ID
+ * @param {number|string|null} secondaryValue - (可選) 要顯示的次要數值
+ * @param {string} formatType - 'number', 'percent', 'percent_xirr'
+ * @param {boolean|null} hasColor - 數值是否需要根據正負顯示不同顏色
  */
-function renderDashboard() {
-    const summary = getSummary();
-    const container = document.getElementById('dashboard-summary');
-    if (!container) return;
+function updateCard(mainElementId, value, options = {}) {
+    const { secondaryElementId = null, secondaryValue = null, formatType = 'number', hasColor = false } = options;
 
-    // 處理 summary 為空或不存在的情況
-    if (!summary || Object.keys(summary).length === 0) {
-        container.innerHTML = '<p class="text-center text-gray-500 col-span-full">摘要數據正在載入中...</p>';
-        return;
+    const mainEl = document.getElementById(mainElementId);
+    if (!mainEl) return;
+
+    // 格式化主要數值
+    switch (formatType) {
+        case 'number':
+            mainEl.textContent = formatNumber(value, 0);
+            break;
+        case 'percent':
+            mainEl.textContent = `${(value || 0).toFixed(2)}%`;
+            break;
+        case 'percent_xirr':
+            mainEl.textContent = `${((value || 0) * 100).toFixed(2)}%`;
+            break;
+        default:
+            mainEl.textContent = value;
     }
 
-    const {
-        marketValueTWD = 0,
-        unrealizedPLTWD = 0,
-        unrealizedPLPercent = 0,
-        realizedPLTWD = 0,
-        dailyPLTWD = 0,
-        dailyPLPercent = 0,
-        twr = 0,
-        benchmarkTwr = 0
-    } = summary;
+    // 更新次要數值 (如果有的話)
+    if (secondaryElementId && secondaryValue !== null) {
+        const secondaryEl = document.getElementById(secondaryElementId);
+        if (secondaryEl) {
+            secondaryEl.textContent = `${(secondaryValue || 0).toFixed(2)}%`;
+        }
+    }
+    
+    // 根據正負更新顏色
+    if (hasColor) {
+        const isPositive = (value || 0) >= 0;
+        const colorClass = isPositive ? 'text-red-600' : 'text-green-600';
+        const defaultColorClass = 'text-gray-800';
 
-    const unrealizedPlClass = unrealizedPLTWD >= 0 ? 'text-green-500' : 'text-red-500';
-    const dailyPlClass = dailyPLTWD >= 0 ? 'text-green-500' : 'text-red-500';
-    const twrClass = twr >= 0 ? 'text-green-500' : 'text-red-500';
-    const dailyChangeSign = dailyPLTWD >= 0 ? '+' : '';
-
-    container.innerHTML = `
-        <!-- 當前市值 -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">當前市值 (TWD)</h3>
-            <p class="mt-1 text-2xl font-semibold">${formatCurrency(marketValueTWD, 'TWD')}</p>
-        </div>
-
-        <!-- 未實現損益 -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">未實現損益 (TWD)</h3>
-            <p class="mt-1 text-2xl font-semibold ${unrealizedPlClass}">
-                ${formatCurrency(unrealizedPLTWD, 'TWD')}
-                <span class="text-base ml-2">(${formatNumber(unrealizedPLPercent * 100)}%)</span>
-            </p>
-        </div>
-
-        <!-- 已實現損益 -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">已實現損益 (TWD)</h3>
-            <p class="mt-1 text-2xl font-semibold">${formatCurrency(realizedPLTWD, 'TWD')}</p>
-        </div>
+        const elementsToColor = [mainEl];
+        if (secondaryElementId) elementsToColor.push(document.getElementById(secondaryElementId));
         
-        <!-- 當日損益 -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">當日損益 (TWD)</h3>
-            <p class="mt-1 text-2xl font-semibold ${dailyPlClass}">
-                ${dailyChangeSign}${formatCurrency(dailyPLTWD, 'TWD')}
-                <span class="text-base ml-2">(${dailyChangeSign}${formatNumber(dailyPLPercent * 100)}%)</span>
-            </p>
-        </div>
-
-        <!-- 時間加權報酬率 (TWR) -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">時間加權報酬率 (TWR)</h3>
-            <p class="mt-1 text-2xl font-semibold ${twrClass}">${formatNumber(twr * 100)}%</p>
-        </div>
-        
-        <!-- 比較基準 (Benchmark) -->
-        <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400">比較基準 TWR</h3>
-            <p class="mt-1 text-2xl font-semibold">${formatNumber(benchmarkTwr * 100)}%</p>
-        </div>
-    `;
+        elementsToColor.forEach(el => {
+            if (el) {
+                el.classList.remove('text-red-600', 'text-green-600', 'text-gray-800');
+                el.classList.add(value !== 0 ? colorClass : defaultColorClass);
+            }
+        });
+    }
 }
 
-export {
-    renderDashboard
-};
+
+export function updateDashboard(currentHoldings, realizedPL, overallReturn, xirr) {
+    const holdingsArray = Object.values(currentHoldings);
+    const totalMarketValue = holdingsArray.reduce((sum, h) => sum + (h.marketValueTWD || 0), 0);
+    const totalUnrealizedPL = holdingsArray.reduce((sum, h) => sum + (h.unrealizedPLTWD || 0), 0);
+    const totalDailyPL = holdingsArray.reduce((sum, h) => sum + (h.daily_pl_twd || 0), 0);
+    
+    // ================== 【計算邏輯不變】 ==================
+    const yesterdayTotalMarketValue = totalMarketValue - totalDailyPL;
+    const totalDailyReturnPercent = yesterdayTotalMarketValue !== 0 ? (totalDailyPL / yesterdayTotalMarketValue) * 100 : 0;
+    
+    // ================== 【修改的程式碼開始】 ==================
+    
+    // 使用新的輔助函式更新所有卡片
+    updateCard('total-assets', totalMarketValue, { formatType: 'number' });
+    
+    updateCard('daily-pl', totalDailyPL, { 
+        secondaryElementId: 'daily-pl-percent', 
+        secondaryValue: totalDailyReturnPercent,
+        formatType: 'number', 
+        hasColor: true 
+    });
+
+    updateCard('unrealized-pl', totalUnrealizedPL, { formatType: 'number', hasColor: true });
+    
+    updateCard('realized-pl', realizedPL, { formatType: 'number', hasColor: true });
+    
+    updateCard('total-return', overallReturn, { formatType: 'percent', hasColor: true });
+    
+    updateCard('xirr-value', xirr, { formatType: 'percent_xirr', hasColor: true });
+    
+    // ================== 【修改的程式碼結束】 ==================
+}

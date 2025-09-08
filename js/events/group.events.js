@@ -1,119 +1,267 @@
 // =========================================================================================
-// == 檔案：js/events/group.events.js (v_api_cleanup_final)
-// == 職責：處理所有與「群組」相關的 UI 事件，並遵循正確的 API 客戶端架構
+// == 檔案：js/events/group.events.js (v4.0 - Combined API Call)
 // =========================================================================================
 
-import { getGroups } from '../state.js';
-// 【核心修正】: 移除對不存在的 apiRequest 的依賴，改為導入職責明確的 API 函式
-import { addGroup, updateGroup, deleteGroup } from '../api.js';
-import { openModal } from '../ui/modals.js';
-import { showNotification } from '../ui/utils.js';
+import { getState, setState } from '../state.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { apiRequest, applyGroupView, updateAppWithData } from '../api.js';
+import { stagingService } from '../staging.service.js';
+import { showNotification } from '../ui/notifications.js';
+import { renderGroupsTab, renderGroupModal } from '../ui/components/groups.ui.js';
+// 引入平倉紀錄的渲染函式，以便在群組切換後可以刷新
+import { renderClosedPositionsTable } from '../ui/components/closedPositions.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
+
 
 /**
- * 初始化群組管理相關的事件監聽器
+ * 操作成功存入暫存區後，更新 UI
  */
-function initializeGroupEventListeners() {
-    const groupContent = document.getElementById('groups-content');
-    const groupForm = document.getElementById('group-form');
-
-    if (!groupContent || !groupForm) return;
-
-    // 事件委派：處理編輯和刪除按鈕的點擊
-    groupContent.addEventListener('click', (event) => {
-        const editButton = event.target.closest('.edit-group-btn');
-        const deleteButton = event.target.closest('.delete-group-btn');
-
-        if (editButton) {
-            handleEditGroup(editButton.dataset.id);
-        } else if (deleteButton) {
-            handleDeleteGroup(deleteButton.dataset.id);
-        }
-    });
-    
-    // 處理新增群組按鈕
-    document.getElementById('add-group-btn')?.addEventListener('click', () => {
-        groupForm.reset();
-        document.getElementById('group-id').value = '';
-        document.getElementById('group-form-title').textContent = '新增群組';
-        openModal('group-modal');
-    });
-
-    // 處理表單提交（新增或更新）
-    groupForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        await handleSaveGroup();
-    });
+async function handleStagingSuccess() {
+    showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
+    await loadGroups();
 }
 
 /**
- * 處理編輯群組的邏輯
- * @param {string} groupId - 要編輯的群組 ID
+ * 載入所有群組並更新 UI
  */
-function handleEditGroup(groupId) {
-    const groups = getGroups();
-    const group = groups.find(g => g.id.toString() === groupId);
-    if (!group) {
-        showNotification('找不到該群組', 'error');
+async function loadGroups() {
+    try {
+        const result = await apiRequest('get_groups', {});
+        if (result.success) {
+            setState({ groups: result.data });
+            await renderGroupsTab();
+            updateGroupSelector();
+        }
+    } catch (error) {
+        showNotification('error', `讀取群組失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 更新頂部的全局群組篩選器下拉選單
+ */
+function updateGroupSelector() {
+    const { groups, selectedGroupId } = getState();
+    const selector = document.getElementById('group-selector');
+    if (!selector) return;
+
+    selector.innerHTML = '<option value="all">全部股票</option>';
+    groups.forEach(group => {
+        const option = document.createElement('option');
+        option.value = group.id;
+        option.textContent = group.name;
+        selector.appendChild(option);
+    });
+    
+    selector.value = groups.some(g => g.id === selectedGroupId) ? selectedGroupId : 'all';
+}
+
+/**
+ * 處理群組表單提交（新增或編輯）
+ */
+async function handleGroupFormSubmit(e) {
+    e.preventDefault();
+    const { closeModal } = await import('../ui/modals.js');
+
+    const groupData = {
+        id: document.getElementById('group-id').value || null,
+        name: document.getElementById('group-name').value.trim(),
+        description: document.getElementById('group-description').value.trim(),
+    };
+
+    if (!groupData.name) {
+        showNotification('error', '群組名稱為必填項。');
         return;
     }
 
-    document.getElementById('group-id').value = group.id;
-    document.getElementById('group-name').value = group.name;
-    // 注意：`symbols` 欄位在 UI 中可能需要更複雜的處理 (如標籤輸入)，此處為簡化實現
-    document.getElementById('group-symbols').value = JSON.parse(group.symbols || '[]').join(', ');
-    document.getElementById('group-form-title').textContent = '編輯群組';
-    openModal('group-modal');
-}
-
-/**
- * 處理儲存群組（新增或更新）的邏輯
- */
-async function handleSaveGroup() {
-    const form = document.getElementById('group-form');
-    const groupId = document.getElementById('group-id').value;
-    const name = document.getElementById('group-name').value;
-    const symbolsStr = document.getElementById('group-symbols').value;
-
-    const symbols = symbolsStr.split(',')
-        .map(s => s.trim().toUpperCase())
-        .filter(s => s);
-
-    const groupData = { name, symbols };
-
     try {
-        if (groupId) {
-            // 更新現有群組
-            await updateGroup(groupId, groupData);
-            showNotification('群組更新成功', 'success');
+        if (groupData.id) {
+            await stagingService.addAction('UPDATE', 'group', groupData);
         } else {
-            // 新增群組
-            await addGroup(groupData);
-            showNotification('群組新增成功', 'success');
+            groupData.id = `temp_group_${Date.now()}`;
+            await stagingService.addAction('CREATE', 'group', groupData);
         }
-        document.querySelector('#group-modal [data-dismiss]').click(); // 關閉 modal
-        form.reset();
+        closeModal('group-modal');
+        await handleStagingSuccess();
     } catch (error) {
-        console.error('儲存群組失敗:', error);
-        showNotification('儲存群組失敗，請稍後再試', 'error');
+        showNotification('error', `暫存群組操作失敗: ${error.message}`);
     }
 }
-
 
 /**
- * 處理刪除群組的邏輯
- * @param {string} groupId - 要刪除的群組 ID
+ * 處理刪除群組按鈕點擊
  */
-async function handleDeleteGroup(groupId) {
-    // 實際應用中，此處應有確認對話框
-    if (confirm('您確定要刪除這個群組嗎？')) {
+async function handleDeleteGroup(button) {
+    const groupId = button.dataset.groupId;
+    const { showConfirm } = await import('../ui/modals.js');
+    showConfirm(`您確定要刪除此群組嗎？此操作將被加入暫存區。`, async () => {
         try {
-            await deleteGroup(groupId);
-            showNotification('群組刪除成功', 'success');
+            await stagingService.addAction('DELETE', 'group', { id: groupId });
+            await handleStagingSuccess();
         } catch (error) {
-            console.error('刪除群組失敗:', error);
-            showNotification('刪除群組失敗，請稍後再試', 'error');
+            showNotification('error', `暫存刪除操作失敗: ${error.message}`);
         }
-    }
+    });
 }
 
-export { initializeGroupEventListeners };
+/**
+ * 初始化所有與群組相關的事件監聽器
+ */
+export function initializeGroupEventListeners() {
+    const groupSelector = document.getElementById('group-selector');
+
+    groupSelector.addEventListener('change', async (e) => {
+        const selectedGroupId = e.target.value;
+        const previousGroupId = getState().selectedGroupId;
+        const stagedActions = await stagingService.getStagedActions();
+        
+        // ========================= 【核心修改 - 開始】 =========================
+        // 將重新載入平倉紀錄的邏輯封裝成一個可重用的函式
+        const reloadClosedPositionsIfNeeded = async () => {
+            const activeTab = document.querySelector('.tab-content:not(.hidden)');
+            if (activeTab && activeTab.id === 'closed-positions-tab') {
+                console.log(`偵測到群組變更，且當前在平倉紀錄頁，正在為群組 ${selectedGroupId} 重新載入數據...`);
+                // 這裡直接複製 main.js 中的載入邏輯
+                const overlay = document.getElementById('loading-overlay');
+                overlay.style.display = 'flex';
+                try {
+                    const result = await apiRequest('get_closed_positions', { groupId: selectedGroupId });
+                    if (result.success) {
+                        setState({
+                            closedPositions: result.data,
+                            activeClosedPosition: null
+                        });
+                        renderClosedPositionsTable();
+                    } else {
+                        throw new Error(result.message);
+                    }
+                } catch (error) {
+                    showNotification('error', `讀取平倉紀錄失敗: ${error.message}`);
+                } finally {
+                    overlay.style.display = 'none';
+                }
+            }
+        };
+        // ========================= 【核心修改 - 結束】 =========================
+
+        if (stagedActions.length > 0 && selectedGroupId !== previousGroupId) {
+            const { showConfirm, hideConfirm } = await import('../ui/modals.js');
+            showConfirm(
+                '您有未提交的變更。切換群組檢視前，必須先提交所有暫存的變更。要繼續嗎？',
+                async () => { // 確認回呼
+                    hideConfirm();
+                    const loadingOverlay = document.getElementById('loading-overlay');
+                    const loadingText = document.getElementById('loading-text');
+                    loadingText.textContent = '正在提交變更並計算群組績效...';
+                    loadingOverlay.style.display = 'flex';
+                    
+                    try {
+                        const netActions = await stagingService.getNetActions();
+                        
+                        // 定義提交後的下一個動作
+                        const nextAction = {
+                            type: 'CALCULATE_GROUP',
+                            payload: { groupId: selectedGroupId }
+                        };
+                        
+                        // 呼叫新的合併 API
+                        const result = await apiRequest('submit_batch_and_execute', {
+                            actions: netActions,
+                            nextAction: nextAction
+                        });
+
+                        if (result.success) {
+                            await stagingService.clearActions();
+                            // 使用後端回傳的最終計算結果更新 UI
+                            updateAppWithData(result.data, result.data.tempIdMap);
+                            // 更新當前選定的 group ID
+                            setState({ selectedGroupId });
+                            showNotification('success', '群組績效計算完成！');
+                            // ========================= 【核心修改】 =========================
+                            await reloadClosedPositionsIfNeeded(); // 刷新平倉紀錄
+                            // ==========================================================
+                        }
+                    } catch (error) {
+                        console.error("提交並切換檢視時發生錯誤:", error);
+                        e.target.value = previousGroupId;
+                        setState({ selectedGroupId: previousGroupId });
+                    } finally {
+                        loadingOverlay.style.display = 'none';
+                    }
+                },
+                '提交並切換檢視？',
+                () => { // 取消回呼
+                    hideConfirm();
+                    e.target.value = previousGroupId;
+                }
+            );
+        } else {
+            setState({ selectedGroupId });
+            await applyGroupView(selectedGroupId);
+            // ========================= 【核心修改】 =========================
+            await reloadClosedPositionsIfNeeded(); // 刷新平倉紀錄
+            // ==========================================================
+        }
+    });
+
+
+    document.getElementById('groups-tab').addEventListener('click', async (e) => {
+        const addBtn = e.target.closest('#add-group-btn');
+        if (addBtn) {
+            const { openModal } = await import('../ui/modals.js');
+            await renderGroupModal(null);
+            openModal('group-modal');
+            return;
+        }
+
+        const editBtn = e.target.closest('.edit-group-btn');
+        if (editBtn) {
+            const groupId = editBtn.dataset.groupId;
+            const { groups } = getState();
+            const stagedActions = await stagingService.getStagedActions();
+            const stagedGroups = stagedActions.filter(a => a.entity === 'group').map(a => a.payload);
+            
+            let combined = [...groups];
+            stagedGroups.forEach(stagedGroup => {
+                const index = combined.findIndex(g => g.id === stagedGroup.id);
+                if(index > -1) {
+                    combined[index] = {...combined[index], ...stagedGroup};
+                } else {
+                    combined.push(stagedGroup);
+                }
+            });
+
+            const groupToEdit = combined.find(g => g.id === groupId);
+
+            if (groupToEdit) {
+                 const { openModal } = await import('../ui/modals.js');
+                 await renderGroupModal(groupToEdit);
+                 openModal('group-modal');
+            }
+            return;
+        }
+
+        const deleteBtn = e.target.closest('.delete-group-btn');
+        if (deleteBtn) {
+            handleDeleteGroup(deleteBtn);
+            return;
+        }
+    });
+
+    document.getElementById('group-form').addEventListener('submit', handleGroupFormSubmit);
+    document.getElementById('cancel-group-btn').addEventListener('click', async () => {
+        const { closeModal } = await import('../ui/modals.js');
+        closeModal('group-modal');
+    });
+    
+    document.getElementById('group-form').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.target.matches('textarea')) {
+            e.preventDefault();
+            if (document.activeElement === document.getElementById('group-name')) {
+                document.getElementById('save-group-btn').click();
+            }
+        }
+    });
+}
+
+export { loadGroups, updateGroupSelector };

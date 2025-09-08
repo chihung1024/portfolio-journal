@@ -1,181 +1,164 @@
 // =========================================================================================
-// == 檔案：js/ui/utils.js (v_chart_refactor_1)
-// == 職責：提供 UI 渲染所需的通用輔助函式，並為圖表模組提供標準化的日期過濾工具
+// == 前端 UI 工具函式模組 (utils.js)
+// == 職責：提供整個 UI 層可重用的、與 DOM 渲染無直接關係的輔助函式。
 // =========================================================================================
 
-import { getHoldings, getTransactions } from '../state.js';
-
-let notificationTimeout;
+import { getState } from '../state.js';
 
 /**
- * 顯示一個短暫的通知訊息
+ * 判斷一個股票代碼是否為台股 (.TW or .TWO)
  */
-function showNotification(message, type = 'info') {
-    const container = document.getElementById('notification-container');
-    if (!container) return;
-
-    const typeClasses = {
-        success: 'bg-green-500',
-        error: 'bg-red-500',
-        info: 'bg-blue-500',
-    };
-
-    const notification = document.createElement('div');
-    notification.className = `fixed top-5 right-5 text-white p-4 rounded-lg shadow-lg z-50 transform transition-transform duration-300 translate-x-full ${typeClasses[type]}`;
-    notification.textContent = message;
-
-    container.appendChild(notification);
-
-    setTimeout(() => {
-        notification.classList.remove('translate-x-full');
-    }, 10);
-
-    if (notificationTimeout) {
-        clearTimeout(notificationTimeout);
-    }
-
-    notificationTimeout = setTimeout(() => {
-        notification.classList.add('translate-x-full');
-        notification.addEventListener('transitionend', () => notification.remove());
-    }, 3000);
+export function isTwStock(symbol) {
+    return symbol ? symbol.toUpperCase().endsWith('.TW') || symbol.toUpperCase().endsWith('.TWO') : false;
 }
 
 /**
- * 格式化日期為 YYYY-MM-DD
+ * 將數字格式化為帶有千分位和指定小數位數的字串
  */
-function formatDate(date) {
-    if (!date) return 'N/A';
-    try {
-        const d = new Date(date);
-        const year = d.getUTCFullYear();
-        const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const day = String(d.getUTCDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-    } catch (e) {
-        console.error("日期格式化失敗:", date, e);
-        return 'Invalid Date';
-    }
+export function formatNumber(value, decimals = 2) {
+    const num = Number(value);
+    if (isNaN(num)) return decimals === 0 ? '0' : '0.00';
+    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 /**
- * 格式化貨幣
+ * [前端專用] 根據日期字串尋找對應的匯率
  */
-function formatCurrency(value, currency = 'TWD') {
-    if (typeof value !== 'number' || !isFinite(value)) {
-        return 'N/A';
+export function findFxRateForFrontend(currency, dateStr) {
+    const { marketDataForFrontend } = getState();
+    if (currency === 'TWD') return 1;
+
+    const currencyToFx_FE = { USD: "TWD=X", HKD: "HKDTWD=X", JPY: "JPYTWD=X" };
+    const fxSym = currencyToFx_FE[currency];
+    if (!fxSym || !marketDataForFrontend[fxSym]) return 1;
+
+    const rates = marketDataForFrontend[fxSym].rates || {};
+    if (rates[dateStr]) return rates[dateStr];
+
+    let nearestDate = null;
+    for (const rateDate in rates) {
+        if (rateDate <= dateStr && (!nearestDate || rateDate > nearestDate)) {
+            nearestDate = rateDate;
+        }
     }
-    try {
-        return new Intl.NumberFormat('en-US', {
-            style: 'currency',
-            currency: currency,
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        }).format(value);
-    } catch (e) {
-        return `${currency} ${value.toFixed(2)}`;
-    }
+    return nearestDate ? rates[nearestDate] : 1;
 }
 
-
 /**
- * 格式化通用數值
+ * 根據預設或自訂的日期範圍，過濾歷史數據
  */
-function formatNumber(value, options = {}) {
-    if (typeof value !== 'number' || !isFinite(value)) {
-        return 'N/A';
-    }
-    const defaults = {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-        ...options
-    };
-    return new Intl.NumberFormat('en-US', defaults).format(value);
-}
-
-// ========================= 【圖表模組修正 - 開始】 =========================
-/**
- * 根據指定的日期範圍過濾歷史數據
- * @param {object} history - { 'YYYY-MM-DD': value, ... } 格式的歷史數據
- * @param {string} range - '1M', '6M', 'YTD', '1Y', 'ALL'
- * @returns {object} - 過濾後的歷史數據
- */
-function filterHistoryByDateRange(history, range) {
-    if (!history || Object.keys(history).length === 0 || range === 'ALL') {
-        return history || {};
+export function filterHistoryByDateRange(history, dateRange) {
+    if (!history || Object.keys(history).length === 0) {
+        return {};
     }
 
-    const endDate = new Date();
-    const startDate = new Date();
-    
-    switch (range) {
-        case '1M':
+    const sortedDates = Object.keys(history).sort();
+    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(sortedDates[sortedDates.length - 1]);
+    let startDate;
+
+    switch (dateRange.type) {
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
             startDate.setMonth(endDate.getMonth() - 1);
             break;
-        case '6M':
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
             startDate.setMonth(endDate.getMonth() - 6);
             break;
-        case 'YTD':
-            startDate.setMonth(0, 1); // 今年的 1 月 1 日
-            startDate.setHours(0, 0, 0, 0);
-            break;
-        case '1Y':
+        case '1y':
+            startDate = new Date(endDate);
             startDate.setFullYear(endDate.getFullYear() - 1);
             break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'custom':
+            startDate = dateRange.start ? new Date(dateRange.start) : new Date(sortedDates[0]);
+            break;
+        case 'all':
         default:
-            return history;
+            startDate = new Date(sortedDates[0]);
+            break;
     }
 
     const filteredHistory = {};
-    const startTimestamp = startDate.getTime();
-
-    for (const dateStr in history) {
-        const entryDate = new Date(dateStr);
-        if (entryDate.getTime() >= startTimestamp) {
+    for (const dateStr of sortedDates) {
+        const currentDate = new Date(dateStr);
+        if (currentDate >= startDate && currentDate <= endDate) {
             filteredHistory[dateStr] = history[dateStr];
         }
     }
     return filteredHistory;
 }
-// ========================= 【圖表模組修正 - 結束】 =========================
 
 /**
- * 根據股票代碼獲取其對應的貨幣
+ * 根據預設的日期範圍，計算出實際的開始與結束日期字串 (YYYY-MM-DD)
  */
-function getSymbolCurrency(symbol) {
-    const holdings = getHoldings();
-    const transactions = getTransactions();
-    const upperSymbol = symbol.toUpperCase();
-    
-    const holding = holdings.find(h => h.symbol.toUpperCase() === upperSymbol);
-    if (holding && holding.currency) {
-        return holding.currency;
+export function getDateRangeForPreset(history, dateRange) {
+    if (!history || Object.keys(history).length === 0) {
+        return { startDate: '', endDate: '' };
+    }
+    const toYYYYMMDD = (date) => date.toISOString().split('T')[0];
+
+    const sortedDates = Object.keys(history).sort();
+    const firstDate = sortedDates[0];
+    const lastDate = sortedDates[sortedDates.length - 1];
+
+    const endDate = dateRange.type === 'custom' && dateRange.end ? new Date(dateRange.end) : new Date(lastDate);
+    let startDate;
+
+    switch (dateRange.type) {
+        case 'ytd':
+            startDate = new Date(endDate.getFullYear(), 0, 1);
+            break;
+        case '1m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 1);
+            break;
+        case '3m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 3);
+            break;
+        case '6m':
+            startDate = new Date(endDate);
+            startDate.setMonth(endDate.getMonth() - 6);
+            break;
+        case '1y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 1);
+            break;
+        case '3y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 3);
+            break;
+        case '5y':
+            startDate = new Date(endDate);
+            startDate.setFullYear(endDate.getFullYear() - 5);
+            break;
+        case 'all':
+        default:
+            startDate = new Date(firstDate);
+            break;
     }
 
-    const lastTransaction = transactions
-        .filter(t => t.symbol.toUpperCase() === upperSymbol)
-        .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-    if (lastTransaction && lastTransaction.currency) {
-        return lastTransaction.currency;
+    if (startDate < new Date(firstDate)) {
+        startDate = new Date(firstDate);
     }
-    
-    return /\.\w{2}$/.test(upperSymbol) ? 'TWD' : 'USD';
+
+    return {
+        startDate: toYYYYMMDD(startDate),
+        endDate: toYYYYMMDD(endDate)
+    };
 }
-
-
-/**
- * 觸發一次完整的 UI 重新渲染
- */
-function renderUI() {
-    document.dispatchEvent(new CustomEvent('state-updated'));
-}
-
-export {
-    showNotification,
-    formatDate,
-    formatCurrency,
-    formatNumber,
-    filterHistoryByDateRange, // <-- 導出新函式
-    renderUI,
-    getSymbolCurrency,
-};
-

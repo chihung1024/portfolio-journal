@@ -1,172 +1,251 @@
 // =========================================================================================
-// == 檔案：js/api.js (v_arch_final_stage_1)
-// == 職責：封裝所有與後端 API 的通訊，並為「暫存區」批次處理提供標準化介面
+// == API 通訊模組 (api.js) v5.5 (Async UI Update)
 // =========================================================================================
 
-import { setPortfolio, setIsLoading, setIsRecalculating } from './state.js';
-import { renderUI, showNotification } from './ui/utils.js';
-import { getToken } from './auth.js';
+import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
+import { API } from './config.js';
+import { getState, setState } from './state.js';
+import { loadGroups } from './events/group.events.js'; 
 
-const API_BASE_URL = '/api';
-
-/**
- * 執行 API 請求的通用函式
- */
-async function fetchAPI(endpoint, options = {}) {
-    const token = await getToken();
-    const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        ...options.headers,
-    };
-
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
-
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: 'API request failed with no error body' }));
-        console.error(`API Error: ${response.status} ${response.statusText}`, errorData);
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-    }
-    if (response.status === 204) {
-        return {};
-    }
-    return response.json();
-}
+// --- UI Module Imports ---
+import { getDateRangeForPreset } from './ui/utils.js';
+import { updateAssetChart } from './ui/charts/assetChart.js';
+import { updateTwrChart } from './ui/charts/twrChart.js';
+import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
+import { renderHoldingsTable } from './ui/components/holdings.ui.js';
+import { renderTransactionsTable } from './ui/components/transactions.ui.js';
+// ========================= 【核心修改 - 開始】 =========================
+import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
+// ========================= 【核心修改 - 結束】 =========================
+import { renderSplitsTable } from './ui/components/splits.ui.js';
+import { updateDashboard } from './ui/dashboard.js';
+import { showNotification } from './ui/notifications.js';
 
 /**
- * 獲取並更新整個投資組合的數據
+ * 統一的後端 API 請求函式
  */
-async function getPortfolio() {
+export async function apiRequest(action, data) {
+    const auth = getAuth();
+    const user = auth.currentUser;
+
+    if (!user) {
+        showNotification('error', '請先登入再執行操作。');
+        throw new Error('User not logged in');
+    }
+
     try {
-        setIsLoading(true);
-        const data = await fetchAPI('/portfolio');
-        setPortfolio(data);
+        const token = await user.getIdToken();
+        const payload = { action, data };
+
+        const response = await fetch(API.URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.message || '伺服器發生錯誤');
+        }
+        return result;
+
     } catch (error) {
-        console.error('Failed to get portfolio:', error);
-        showNotification('無法載入投資組合數據，請稍後再試。', 'error');
-    } finally {
-        setIsLoading(false);
-        renderUI();
+        console.error('API 請求失敗:', error);
+        throw error;
     }
 }
 
 /**
- * 觸發後端執行一次完整的重算
+ * 提交暫存區的批次操作 - 只負責發送請求並回傳結果
  */
-async function recalculatePortfolio() {
+export async function submitBatch(actions) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTextElement = document.getElementById('loading-text');
+    loadingTextElement.textContent = '正在提交所有變更並同步數據...';
+    loadingOverlay.style.display = 'flex';
+
     try {
-        setIsRecalculating(true);
-        showNotification('正在同步您的最新交易...', 'info');
-        await new Promise(resolve => setTimeout(resolve, 500)); 
-        await fetchAPI('/portfolio/recalculate', { method: 'POST' });
-        await getPortfolio();
-        showNotification('數據同步完成！', 'success');
+        const result = await apiRequest('submit_batch', { actions });
+        if (result.success) {
+            showNotification('success', '所有變更已成功提交並同步！');
+            return result;
+        } else {
+            throw new Error(result.message || '批次提交時發生未知錯誤');
+        }
     } catch (error) {
-        console.error('Failed to recalculate portfolio:', error);
-        showNotification('數據同步失敗，請稍後再試。', 'error');
+        showNotification('error', `提交失敗: ${error.message}`);
+        throw error;
     } finally {
-        setIsRecalculating(false);
+        loadingOverlay.style.display = 'none';
+        loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
 
-// ... [交易, 分割, 股息, 群組的 API 函式保持不變] ...
 
-async function addTransaction(transactionData) {
-    await fetchAPI('/transactions', { method: 'POST', body: JSON.stringify(transactionData) });
-    await recalculatePortfolio(); 
-}
-async function updateTransaction(id, transactionData) {
-    await fetchAPI(`/transactions/${id}`, { method: 'PUT', body: JSON.stringify(transactionData) });
-    await recalculatePortfolio();
-}
-async function deleteTransaction(id) {
-    await fetchAPI(`/transactions/${id}`, { method: 'DELETE' });
-    await recalculatePortfolio();
-}
-async function addSplit(splitData) {
-    await fetchAPI('/splits', { method: 'POST', body: JSON.stringify(splitData) });
-    await recalculatePortfolio();
-}
-async function updateSplit(id, splitData) {
-    await fetchAPI(`/splits/${id}`, { method: 'PUT', body: JSON.stringify(splitData) });
-    await recalculatePortfolio();
-}
-async function deleteSplit(id) {
-    await fetchAPI(`/splits/${id}`, { method: 'DELETE' });
-    await recalculatePortfolio();
-}
-async function addDividend(dividendData) {
-    await fetchAPI('/dividends', { method: 'POST', body: JSON.stringify(dividendData) });
-    await recalculatePortfolio();
-}
-async function updateDividend(id, dividendData) {
-    await fetchAPI(`/dividends/${id}`, { method: 'PUT', body: JSON.stringify(dividendData) });
-    await recalculatePortfolio();
-}
-async function deleteDividend(id) {
-    await fetchAPI(`/dividends/${id}`, { method: 'DELETE' });
-    await recalculatePortfolio();
-}
-async function addGroup(groupData) {
-    await fetchAPI('/groups', { method: 'POST', body: JSON.stringify(groupData) });
-    await getPortfolio();
-}
-async function updateGroup(id, groupData) {
-    await fetchAPI(`/groups/${id}`, { method: 'PUT', body: JSON.stringify(groupData) });
-    await getPortfolio();
-}
-async function deleteGroup(id) {
-    await fetchAPI(`/groups/${id}`, { method: 'DELETE' });
-    await getPortfolio();
-}
-
-// ========================= 【最終架構修正 - 開始】 =========================
 /**
- * 處理並提交暫存區的交易數據
- * @param {Array<object>} stagedData - 從暫存區解析出的交易數據陣列
+ * 高階 API 執行器 (主要用於非暫存區的單一操作)
  */
-async function processStagedTransactions(stagedData) {
-    // 批次新增交易是一項重大操作，完成後必須觸發一次完整的重算。
-    await fetchAPI('/batch/transactions', {
-        method: 'POST',
-        body: JSON.stringify(stagedData),
-    });
-    await recalculatePortfolio();
-}
-// ========================= 【最終架構修正 - 結束】 =========================
-
-async function forceRecalculate() {
+export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingTextElement = document.getElementById('loading-text');
+    loadingTextElement.textContent = loadingText;
+    loadingOverlay.style.display = 'flex';
+    
     try {
-        setIsRecalculating(true);
-        showNotification('正在執行強制完整重算...', 'info');
-        await fetchAPI('/portfolio/recalculate?force=true', { method: 'POST' });
-        await getPortfolio();
-        showNotification('強制重算完成！', 'success');
+        const result = await apiRequest(action, payload);
+        
+        if (shouldRefreshData) {
+            const fullData = await apiRequest('get_data', {});
+            await updateAppWithData(fullData.data);
+        }
+        
+        if (successMessage) {
+            showNotification('success', successMessage);
+        }
+        
+        return result; 
     } catch (error) {
-        console.error('Failed to force recalculate portfolio:', error);
-        showNotification('強制重算失敗，請檢查後端日誌。', 'error');
+        showNotification('error', `操作失敗: ${error.message}`);
+        throw error; 
     } finally {
-        setIsRecalculating(false);
+        loadingOverlay.style.display = 'none';
+        loadingTextElement.textContent = '正在從雲端同步資料...';
     }
 }
 
-// 導出模組
-export {
-    getPortfolio,
-    recalculatePortfolio,
-    addTransaction,
-    updateTransaction,
-    deleteTransaction,
-    addSplit,
-    updateSplit,
-    deleteSplit,
-    addDividend,
-    updateDividend,
-    deleteDividend,
-    addGroup,
-    updateGroup,
-    deleteGroup,
-    processStagedTransactions, // <-- 導出新函式
-    forceRecalculate,
-};
 
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
+ */
+export async function updateAppWithData(portfolioData, tempIdMap = {}) {
+    if (!portfolioData) {
+        console.error("updateAppWithData 收到無效數據，已跳過更新。");
+        return;
+    }
+    
+    const newState = {};
+    if (portfolioData.transactions) newState.transactions = portfolioData.transactions;
+    if (portfolioData.splits) newState.userSplits = portfolioData.splits;
+    if (portfolioData.groups) newState.groups = portfolioData.groups;
+    if (portfolioData.history) newState.portfolioHistory = portfolioData.history;
+    if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
+    if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
+    if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
+    // 為平倉紀錄新增處理邏輯
+    if (portfolioData.closedPositions) {
+        newState.closedPositions = portfolioData.closedPositions;
+        newState.activeClosedPosition = null;
+    }
+    
+    if (portfolioData.history) {
+        newState.assetDateRange = { type: 'all', start: null, end: null };
+        newState.twrDateRange = { type: 'all', start: null, end: null };
+        newState.netProfitDateRange = { type: 'all', start: null, end: null };
+    }
+    
+    const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
+        obj[item.symbol] = item; return obj;
+    }, {});
+    newState.holdings = holdingsObject;
+    
+    setState(newState);
+
+    // 等待所有異步的 UI 渲染完成
+    renderHoldingsTable(holdingsObject);
+    if (portfolioData.transactions) await renderTransactionsTable();
+    if (portfolioData.splits) await renderSplitsTable();
+    if (portfolioData.groups) await loadGroups();
+    // 如果數據包裡有平倉紀錄，也一併渲染
+    if (portfolioData.closedPositions) renderClosedPositionsTable();
+    
+    updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
+    
+    const { selectedGroupId, groups } = getState();
+    let seriesName = '投資組合'; 
+    if (selectedGroupId && selectedGroupId !== 'all') {
+        const selectedGroup = groups.find(g => g.id === selectedGroupId);
+        if (selectedGroup) seriesName = selectedGroup.name; 
+    }
+    
+    updateAssetChart(seriesName); 
+    updateNetProfitChart(seriesName);
+    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || getState().summary?.benchmarkSymbol || 'SPY';
+    updateTwrChart(benchmarkSymbol, seriesName);
+
+    document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
+
+    const { portfolioHistory, twrHistory, netProfitHistory } = getState();
+    if(portfolioHistory && Object.keys(portfolioHistory).length > 0) {
+        const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
+        document.getElementById('asset-start-date').value = assetDates.startDate;
+        document.getElementById('asset-end-date').value = assetDates.endDate;
+    }
+    if(twrHistory && Object.keys(twrHistory).length > 0) {
+        const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
+        document.getElementById('twr-start-date').value = twrDates.startDate;
+        document.getElementById('twr-end-date').value = twrDates.endDate;
+    }
+    if(netProfitHistory && Object.keys(netProfitHistory).length > 0) {
+        const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
+        document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
+        document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
+    }
+}
+// ========================= 【核心修改 - 結束】 =========================
+
+
+/**
+ * 從後端載入所有「全部股票」的投資組合資料並更新畫面
+ */
+export async function loadPortfolioData() {
+    const { currentUserId } = getState();
+    if (!currentUserId) {
+        console.log("未登入，無法載入資料。");
+        return;
+    }
+    document.getElementById('loading-overlay').style.display = 'flex';
+    try {
+        const result = await apiRequest('get_data', {});
+        await updateAppWithData(result.data);
+
+    } catch (error) {
+        console.error('Failed to load portfolio data:', error);
+        showNotification('error', `讀取資料失敗: ${error.message}`);
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
+}
+
+/**
+ * 請求後端按需計算特定群組的數據，並更新畫面
+ */
+export async function applyGroupView(groupId) {
+    if (!groupId || groupId === 'all') {
+        await loadPortfolioData();
+        return;
+    }
+
+    const loadingText = document.getElementById('loading-text');
+    document.getElementById('loading-overlay').style.display = 'flex';
+    loadingText.textContent = '正在為您即時計算群組績效...';
+
+    try {
+        const result = await apiRequest('calculate_group_on_demand', { groupId });
+        if (result.success) {
+            await updateAppWithData(result.data);
+            showNotification('success', '群組績效計算完成！');
+        }
+    } catch (error) {
+        showNotification('error', `計算群組績效失敗: ${error.message}`);
+        document.getElementById('group-selector').value = 'all';
+        setState({ selectedGroupId: 'all' });
+        await loadPortfolioData();
+    } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+        loadingText.textContent = '正在從雲端同步資料...';
+    }
+}

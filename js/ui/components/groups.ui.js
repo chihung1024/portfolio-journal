@@ -1,73 +1,114 @@
 // =========================================================================================
-// == 檔案：js/ui/components/groups.ui.js (v_arch_cleanup_final)
-// == 職責：渲染「群組」頁籤的 UI 介面，並遵循正確的狀態管理規範
+// == 檔案：js/ui/components/groups.ui.js (v3.0 - 整合暫存區狀態)
+// == 職責：處理群組管理分頁和彈出視窗的 UI 渲染
 // =========================================================================================
 
-// 【核心修正】: 移除對不存在的 getState 的導入
-import { getGroups, getHoldings } from '../../state.js';
-import { formatCurrency, formatNumber } from '../utils.js';
+import { getState } from '../../state.js';
+import { stagingService } from '../../staging.service.js'; // 【核心修改】
 
 /**
- * 渲染群組列表及其相關數據
+ * 渲染群組管理分頁的內容
  */
-function renderGroups() {
-    // 【核心修正】: 直接導入並使用具體的 getter 函式
-    const groups = getGroups();
-    const allHoldings = getHoldings();
+export async function renderGroupsTab() {
+    const { groups } = getState();
     const container = document.getElementById('groups-content');
-
     if (!container) return;
 
-    if (!groups || groups.length === 0) {
-        container.innerHTML = `<p class="text-center text-gray-500 py-4">您尚未建立任何群組。</p>`;
+    // 【核心修改】從暫存區獲取群組相關的操作
+    const stagedActions = await stagingService.getStagedActions();
+    const groupActions = stagedActions.filter(a => a.entity === 'group');
+    const stagedActionMap = new Map();
+    groupActions.forEach(action => {
+        stagedActionMap.set(action.payload.id, action);
+    });
+
+    // 結合 state 中的數據和暫存區的數據
+    let combinedGroups = [...groups];
+
+    stagedActionMap.forEach((action, groupId) => {
+        const existingIndex = combinedGroups.findIndex(g => g.id === groupId);
+        
+        if (action.type === 'CREATE') {
+            if (existingIndex === -1) {
+                combinedGroups.push({ ...action.payload, _staging_status: 'CREATE' });
+            }
+        } else if (action.type === 'UPDATE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex] = { ...combinedGroups[existingIndex], ...action.payload, _staging_status: 'UPDATE' };
+            }
+        } else if (action.type === 'DELETE') {
+            if (existingIndex > -1) {
+                combinedGroups[existingIndex]._staging_status = 'DELETE';
+            }
+        }
+    });
+    
+    // 按創建時間排序 (假設 state 中有 created_at)
+    combinedGroups.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+
+    if (combinedGroups.length === 0) {
+        container.innerHTML = `<p class="text-center py-10 text-gray-500">尚未建立任何群組。</p>`;
         return;
     }
 
-    const groupCards = groups.map(group => {
-        const groupHoldings = allHoldings.filter(h => group.symbols.includes(h.symbol));
-        
-        const marketValueTWD = groupHoldings.reduce((sum, h) => sum + h.marketValueTWD, 0);
-        const totalCostTWD = groupHoldings.reduce((sum, h) => sum + h.totalCostTWD, 0);
-        const unrealizedPLTWD = marketValueTWD - totalCostTWD;
-        const returnRate = totalCostTWD === 0 ? 0 : (unrealizedPLTWD / totalCostTWD);
-        const dailyPLTWD = groupHoldings.reduce((sum, h) => sum + h.daily_pl_twd, 0);
-
-        const plClass = unrealizedPLTWD >= 0 ? 'text-green-500' : 'text-red-500';
-        const dailyPlClass = dailyPLTWD >= 0 ? 'text-green-500' : 'text-red-500';
+    container.innerHTML = combinedGroups.map(group => {
+        // 【核心修改】根據暫存狀態決定背景色
+        let stagingClass = 'bg-gray-50'; // 預設
+        if (group._staging_status === 'CREATE') stagingClass = 'bg-staging-create';
+        else if (group._staging_status === 'UPDATE') stagingClass = 'bg-staging-update';
+        else if (group._staging_status === 'DELETE') stagingClass = 'bg-staging-delete opacity-70';
 
         return `
-            <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <h3 class="font-semibold text-lg mb-2">${group.name}</h3>
-                <div class="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                        <p class="text-gray-500 dark:text-gray-400">市值 (TWD)</p>
-                        <p class="font-semibold">${formatCurrency(marketValueTWD, 'TWD')}</p>
-                    </div>
-                    <div>
-                        <p class="text-gray-500 dark:text-gray-400">未實現損益</p>
-                        <p class="font-semibold ${plClass}">${formatCurrency(unrealizedPLTWD, 'TWD')}</p>
-                    </div>
-                    <div>
-                        <p class="text-gray-500 dark:text-gray-400">當日損益</p>
-                        <p class="font-semibold ${dailyPlClass}">${formatCurrency(dailyPLTWD, 'TWD')}</p>
-                    </div>
-                    <div>
-                        <p class="text-gray-500 dark:text-gray-400">報酬率</p>
-                        <p class="font-semibold ${plClass}">${formatNumber(returnRate * 100)}%</p>
-                    </div>
-                </div>
-                <div class="mt-3">
-                    <p class="text-xs text-gray-400">包含: ${group.symbols.join(', ')}</p>
+        <div class="${stagingClass} border border-gray-200 rounded-lg p-4 flex justify-between items-center">
+            <div>
+                <h4 class="font-bold text-lg text-gray-800">${group.name}</h4>
+                <p class="text-sm text-gray-600 mt-1">${group.description || '沒有描述'}</p>
+                <div class="mt-2 text-xs text-gray-500">
+                    <span>包含 <strong>${(group.symbols || []).length}</strong> 檔股票</span>
+                    <span class="mx-2">|</span>
+                    <span>共 <strong>${group.transaction_count || 0}</strong> 筆交易</span>
                 </div>
             </div>
-        `;
-    }).join('');
-
-    container.innerHTML = `
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            ${groupCards}
+            <div class="flex-shrink-0 flex items-center space-x-2 ml-4">
+                <button data-group-id="${group.id}" class="edit-group-btn btn p-2 text-gray-500 hover:text-indigo-600">
+                    <i data-lucide="edit" class="w-5 h-5"></i>
+                </button>
+                <button data-group-id="${group.id}" class="delete-group-btn btn p-2 text-gray-500 hover:text-red-600">
+                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                </button>
+            </div>
         </div>
-    `;
+    `}).join('');
+
+    lucide.createIcons();
 }
 
-export { renderGroups };
+/**
+ * 【核心修改】渲染群組編輯/新增彈出視窗的內容 (現在為 async)
+ * @param {Object|null} groupToEdit - (可選) 要編輯的群組物件
+ */
+export async function renderGroupModal(groupToEdit = null) {
+    const { transactions } = getState();
+    const form = document.getElementById('group-form');
+    form.reset();
+
+    let finalGroupData = groupToEdit ? { ...groupToEdit } : null;
+
+    // 如果是編輯模式，檢查暫存區是否有更新的版本
+    if (groupToEdit) {
+        const stagedActions = await stagingService.getStagedActions();
+        const stagedUpdate = stagedActions.find(a => a.entity === 'group' && a.type === 'UPDATE' && a.payload.id === groupToEdit.id);
+        if (stagedUpdate) {
+            finalGroupData = { ...finalGroupData, ...stagedUpdate.payload };
+        }
+    }
+
+    document.getElementById('group-id').value = finalGroupData ? finalGroupData.id : '';
+    document.getElementById('group-modal-title').textContent = finalGroupData ? `編輯群組：${finalGroupData.name}` : '新增群組';
+    document.getElementById('group-name').value = finalGroupData ? finalGroupData.name : '';
+    document.getElementById('group-description').value = finalGroupData ? finalGroupData.description || '' : '';
+
+    const symbolsContainer = document.getElementById('group-symbols-container');
+    symbolsContainer.innerHTML = `<p class="text-center text-sm text-gray-500 py-4">群組內的交易紀錄管理將在提交後處理。</p>`;
+}
