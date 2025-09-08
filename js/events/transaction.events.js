@@ -1,194 +1,124 @@
 // =========================================================================================
-// == 交易事件處理模組 (transaction.events.js) v3.4 (Refactored)
+// == 檔案：js/events/transaction.events.js (v_arch_final_cleanup)
+// == 職責：處理所有與「交易」相關的 UI 事件，並遵循正確的狀態管理與 API 架構
 // =========================================================================================
 
-import { getState, setState } from '../state.js';
-import { stagingService } from '../staging.service.js';
-import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-import { showNotification } from '../ui/notifications.js';
-import { renderHoldingsTable } from '../ui/components/holdings.ui.js';
+import { addTransaction, updateTransaction, deleteTransaction } from '../api.js';
+// 【核心修正】: 移除对 getState 的依赖，改為導入職責明確的 getTransactions 函式
+import { getTransactions } from '../state.js';
+import { openModal } from '../ui/modals.js';
+import { showNotification, getSymbolCurrency } from '../ui/utils.js';
 
-// --- Private Functions (內部函式) ---
-
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【新增輔助函式】從 state 和暫存區中獲取合併後的單一交易紀錄
- * @param {string} txId - 要尋找的交易 ID
- * @returns {Promise<object|null>} 返回找到的交易物件，或 null
+ * 初始化交易相關的事件監聽器
  */
-async function getCombinedTransaction(txId) {
-    const { transactions } = getState();
-    const stagedActions = await stagingService.getStagedActions();
-    const stagedTransactions = stagedActions
-        .filter(a => a.entity === 'transaction' && a.type !== 'DELETE')
-        .map(a => a.payload);
+function initializeTransactionEventListeners() {
+    const transactionForm = document.getElementById('transaction-form');
+    if (!transactionForm) return;
 
-    let combined = [...transactions];
-    stagedTransactions.forEach(stagedTx => {
-        const index = combined.findIndex(t => t.id === stagedTx.id);
-        if (index > -1) {
-            combined[index] = { ...combined[index], ...stagedTx };
-        } else {
-            combined.push(stagedTx);
+    // 監聽表單提交（新增或更新）
+    transactionForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await handleSaveTransaction();
+    });
+
+    // 透過事件委派處理編輯和刪除按鈕
+    document.getElementById('transactions-content')?.addEventListener('click', (event) => {
+        const editButton = event.target.closest('.edit-transaction-btn');
+        if (editButton) {
+            handleEditTransaction(editButton.dataset.id);
+            return;
+        }
+
+        const deleteButton = event.target.closest('.delete-transaction-btn');
+        if (deleteButton) {
+            handleDeleteTransaction(deleteButton.dataset.id);
+            return;
         }
     });
     
-    return combined.find(t => t.id === txId) || null;
-}
-// ========================= 【核心修改 - 結束】 =========================
-
-
-async function handleEdit(button) {
-    const txId = button.dataset.id;
-    const transaction = await getCombinedTransaction(txId);
-
-    if (!transaction) {
-        showNotification('error', '找不到要編輯的交易紀錄。');
-        return;
-    }
-    
-    const { openModal } = await import('../ui/modals.js');
-    openModal('transaction-modal', true, transaction);
-}
-
-async function handleStagingSuccess() {
-    showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
-    await renderTransactionsTable();
-    const { holdings } = getState();
-    await renderHoldingsTable(holdings); 
-}
-
-
-async function handleDelete(button) {
-    const txId = button.dataset.id;
-    const { showConfirm } = await import('../ui/modals.js');
-
-    const txToDelete = await getCombinedTransaction(txId);
-
-    if (!txToDelete) {
-        showNotification('error', '找不到要刪除的交易紀錄。');
-        return;
-    }
-
-    showConfirm('您確定要刪除這筆交易紀錄嗎？此操作將被加入暫存區。', async () => {
-        try {
-            await stagingService.addAction('DELETE', 'transaction', txToDelete);
-            await handleStagingSuccess();
-        } catch (error) {
-            showNotification('error', `暫存刪除操作失敗: ${error.message}`);
-        }
-    });
-}
-
-async function handleNextStep() {
-    const txId = document.getElementById('transaction-id').value;
-    const isEditing = !!txId;
-    const transactionData = {
-        date: document.getElementById('transaction-date').value,
-        symbol: document.getElementById('stock-symbol').value.toUpperCase().trim(),
-        type: document.querySelector('input[name="transaction-type"]:checked').value,
-        quantity: parseFloat(document.getElementById('quantity').value),
-        price: parseFloat(document.getElementById('price').value),
-        currency: document.getElementById('currency').value,
-        totalCost: parseFloat(document.getElementById('total-cost').value) || null,
-        exchangeRate: parseFloat(document.getElementById('exchange-rate').value) || null
-    };
-
-    if (!transactionData.symbol || isNaN(transactionData.quantity) || isNaN(transactionData.price)) {
-        showNotification('error', '請填寫所有必填欄位。');
-        return;
-    }
-    
-    const { closeModal, openGroupAttributionModal } = await import('../ui/modals.js');
-    closeModal('transaction-modal');
-
-    if (isEditing) {
-        try {
-            await stagingService.addAction('UPDATE', 'transaction', { id: txId, ...transactionData });
-            await handleStagingSuccess();
-        } catch (error) {
-             showNotification('error', `暫存更新操作失敗: ${error.message}`);
-        }
-    } else {
-        const tempId = `temp_${Date.now()}`;
-        setState({ tempTransactionData: {
-            isEditing: false,
-            txId: tempId,
-            data: { id: tempId, ...transactionData }
-        }});
-
-        setTimeout(() => {
-            openGroupAttributionModal();
-        }, 150);
-    }
-}
-
-// --- Public Function ---
-
-export function initializeTransactionEventListeners() {
-    document.getElementById('add-transaction-btn').addEventListener('click', async () => {
-        setState({ tempTransactionData: null });
-        const { openModal } = await import('../ui/modals.js');
+    // 處理 "新增交易" 按鈕
+    document.getElementById('add-transaction-btn')?.addEventListener('click', () => {
+        transactionForm.reset();
+        document.getElementById('transaction-id').value = '';
+        document.getElementById('transaction-form-title').textContent = '新增交易';
         openModal('transaction-modal');
     });
-
-    document.getElementById('confirm-transaction-btn').addEventListener('click', handleNextStep);
-    
-    document.getElementById('cancel-transaction-btn').addEventListener('click', async () => {
-        const { closeModal } = await import('../ui/modals.js');
-        closeModal('transaction-modal');
-    });
-    
-    document.getElementById('transaction-form').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('confirm-transaction-btn').click();
-        }
-    });
-
-    document.getElementById('transactions-tab').addEventListener('click', async (e) => {
-        const editButton = e.target.closest('.edit-btn');
-        if (editButton) {
-            e.preventDefault();
-            handleEdit(editButton);
-            return;
-        }
-
-        const deleteButton = e.target.closest('.delete-btn');
-        if (deleteButton) {
-            e.preventDefault();
-            handleDelete(deleteButton);
-            return;
-        }
-        
-        const membershipButton = e.target.closest('.edit-membership-btn');
-        if (membershipButton) {
-            e.preventDefault();
-            const txId = membershipButton.dataset.id;
-            const { openModal } = await import('../ui/modals.js');
-            await openModal('membership-editor-modal', false, { txId });
-            return;
-        }
-
-        const pageButton = e.target.closest('.page-btn');
-        if (pageButton) {
-            e.preventDefault();
-            const newPage = parseInt(pageButton.dataset.page, 10);
-            if (!isNaN(newPage) && newPage > 0) {
-                setState({ transactionsCurrentPage: newPage });
-                renderTransactionsTable(); 
-            }
-            return;
-        }
-    });
-
-    document.getElementById('transactions-tab').addEventListener('change', (e) => {
-        if (e.target.id === 'transaction-symbol-filter') {
-            setState({ 
-                transactionFilter: e.target.value,
-                transactionsCurrentPage: 1 
-            });
-            renderTransactionsTable();
-        }
-    });
 }
+
+/**
+ * 處理編輯交易的邏輯
+ * @param {string} transactionId - 要編輯的交易 ID
+ */
+function handleEditTransaction(transactionId) {
+    // 【核心修正】: 直接呼叫 getTransactions()，不再使用已廢棄的 getState
+    const transactions = getTransactions();
+    const transaction = transactions.find(t => t.id.toString() === transactionId);
+    
+    if (!transaction) {
+        showNotification('找不到該筆交易', 'error');
+        return;
+    }
+
+    document.getElementById('transaction-id').value = transaction.id;
+    document.getElementById('transaction-form-title').textContent = '編輯交易';
+    document.getElementById('transaction-symbol').value = transaction.symbol;
+    document.getElementById('transaction-date').value = new Date(transaction.date).toISOString().split('T')[0];
+    document.getElementById('transaction-type').value = transaction.type;
+    document.getElementById('transaction-quantity').value = transaction.quantity;
+    document.getElementById('transaction-price').value = transaction.price_per_share;
+    document.getElementById('transaction-currency').value = transaction.currency;
+
+    openModal('transaction-modal');
+}
+
+/**
+ * 處理儲存交易（新增或更新）的邏輯
+ */
+async function handleSaveTransaction() {
+    const form = document.getElementById('transaction-form');
+    const transactionId = document.getElementById('transaction-id').value;
+    const symbol = document.getElementById('transaction-symbol').value.toUpperCase();
+    
+    const transactionData = {
+        symbol: symbol,
+        date: document.getElementById('transaction-date').value,
+        type: document.getElementById('transaction-type').value,
+        quantity: parseFloat(document.getElementById('transaction-quantity').value),
+        price_per_share: parseFloat(document.getElementById('transaction-price').value),
+        currency: document.getElementById('transaction-currency').value.toUpperCase() || getSymbolCurrency(symbol),
+    };
+
+    try {
+        if (transactionId) {
+            await updateTransaction(transactionId, transactionData);
+            showNotification('交易更新成功', 'success');
+        } else {
+            await addTransaction(transactionData);
+            showNotification('交易新增成功', 'success');
+        }
+        document.querySelector('#transaction-modal [data-dismiss]').click(); // 關閉 modal
+        form.reset();
+    } catch (error) {
+        console.error('儲存交易失敗:', error);
+        showNotification('儲存交易失敗，請稍後再試', 'error');
+    }
+}
+
+/**
+ * 處理刪除交易的邏輯
+ * @param {string} transactionId - 要刪除的交易 ID
+ */
+async function handleDeleteTransaction(transactionId) {
+    if (confirm('您確定要刪除此筆交易嗎？這將會觸發一次重算。')) {
+        try {
+            await deleteTransaction(transactionId);
+            showNotification('交易刪除成功', 'success');
+        } catch (error) {
+            console.error('刪除交易失敗:', error);
+            showNotification('刪除交易失敗，請稍後再試', 'error');
+        }
+    }
+}
+
+export { initializeTransactionEventListeners };
