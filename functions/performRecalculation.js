@@ -60,8 +60,14 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 }
 
+// ========================= 【根本原因修正 - 開始】 =========================
+/**
+ * 重新設計的待確認配息計算函式
+ * 此版本採用更穩健的演算法，為每一筆市場配息事件獨立計算其當時的持股狀態，
+ * 徹底解決了因共享迭代器 (txIndex) 導致的狀態計算錯誤問題。
+ */
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
-    console.log(`[${uid}] 開始計算並快取待確認股息...`);
+    console.log(`[${uid}] 開始計算並快取待確認股息 (v2 - 演算法修正)...`);
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
     if (!txs || txs.length === 0) {
         console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
@@ -72,32 +78,53 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
         console.log(`[${uid}] 無市場股息資料，無需快取。`);
         return;
     }
+    
+    // 建立已確認配息的快速查找集合，鍵值為 'SYMBOL_YYYY-MM-DD'
     const confirmedKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-    const holdings = {};
-    let txIndex = 0;
+    
     const pendingDividends = [];
-    const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-    allMarketDividends.forEach(histDiv => {
+    
+    // 1. 建立一個交易紀錄的副本，避免影響原始傳入的陣列
+    const sortedTxs = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // 2. 遍歷市場上的每一筆配息紀錄
+    for (const histDiv of allMarketDividends) {
         const divSymbol = histDiv.symbol.toUpperCase();
-        if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
         const exDateStr = histDiv.date.split('T')[0];
-        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
+        
+        // 3. 如果此配息已被使用者手動確認，則跳過
+        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) {
+            continue;
+        }
+
         const exDateMinusOne = new Date(exDateStr);
         exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-        while (txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
-            const tx = txs[txIndex];
-            holdings[tx.symbol.toUpperCase()] = (holdings[tx.symbol.toUpperCase()] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
-            txIndex++;
+
+        // 4. 【核心修正】為每一次計算都獨立計算持股狀態，不再共享 txIndex
+        let quantity = 0;
+        for (const tx of sortedTxs) {
+            if (new Date(tx.date) > exDateMinusOne) {
+                // 交易發生在除息日前一天之後，停止計算
+                break;
+            }
+            if (tx.symbol.toUpperCase() === divSymbol) {
+                quantity += (tx.type === 'buy' ? tx.quantity : -tx.quantity);
+            }
         }
-        const quantity = holdings[divSymbol] || 0;
-        if (quantity > 0.00001) {
+
+        // 5. 如果在除息日前一天持有正股數，則產生一筆待確認紀錄
+        if (quantity > 1e-9) { // 使用一個極小值以避免浮點數精度問題
             const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
             pendingDividends.push({
-                symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend,
-                quantity_at_ex_date: quantity, currency: currency
+                symbol: divSymbol,
+                ex_dividend_date: exDateStr,
+                amount_per_share: histDiv.dividend,
+                quantity_at_ex_date: quantity,
+                currency: currency
             });
         }
-    });
+    }
+    
     if (pendingDividends.length > 0) {
         const dbOps = pendingDividends.map(p => ({
             sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -107,6 +134,8 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     }
     console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
 }
+// ========================= 【根本原因修正 - 結束】 =========================
+
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
     console.log(`--- [${uid}] 儲存式重算程序開始 (v_snapshot_integrated) ---`);
@@ -118,8 +147,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】一次性抓取所有需要的原始數據
         const [txs, allUserSplits, allUserDividends, controlsData, summaryResult] = await Promise.all([
             d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date ASC', [uid]),
             d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
@@ -129,7 +156,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
         ]);
 
         await calculateAndCachePendingDividends(uid, txs, allUserDividends);
-        // ========================= 【核心修正 - 結束】 =========================
 
         if (txs.length === 0) {
             await d1Client.batch([
@@ -143,10 +169,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
 
         const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
 
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】移除舊的手動數據準備步驟 (prepareEvents)
-        // ========================= 【核心修正 - 結束】 =========================
-        
         let oldHistory = {};
         let baseSnapshot = null;
         
@@ -171,8 +193,6 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             await d1Client.query('DELETE FROM portfolio_snapshots WHERE uid = ? AND group_id = ?', [uid, ALL_GROUP_ID]);
         }
         
-        // ========================= 【核心修正 - 開始】 =========================
-        // 【簡化】呼叫統一的計算引擎，傳入所有原始數據
         const result = await runCalculationEngine(
             txs,
             allUserSplits,
@@ -181,10 +201,7 @@ async function performRecalculation(uid, modifiedTxDate = null, createSnapshot =
             baseSnapshot,
             oldHistory
         );
-        // ========================= 【核心修正 - 結束】 =========================
 
-
-        // 【修改】從引擎的回傳結果中獲取計算好的數據
         const {
             summaryData,
             holdingsToUpdate,
