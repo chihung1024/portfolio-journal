@@ -1,119 +1,116 @@
 // =========================================================================================
-// == 拆股事件處理模組 (split.events.js) v3.1 - Robust Delete Logic
+// == 檔案：js/events/split.events.js (v_arch_cleanup_final_s2)
+// == 職責：處理所有與「股票分割」相關的 UI 事件，並遵循正確的 API 客戶端架構
 // =========================================================================================
 
-import { stagingService } from '../staging.service.js'; // 【核心修改】
-import { showNotification } from '../ui/notifications.js';
-import { renderSplitsTable } from '../ui/components/splits.ui.js'; // 【核心修改】
-import { getState } from '../state.js';
-
-// --- Private Functions ---
+import { getSplits } from '../state.js';
+// 【核心修正】: 移除對任何泛用 API 函式的依賴，改為導入職責明確的 API 函式
+import { addSplit, updateSplit, deleteSplit } from '../api.js';
+import { openModal } from '../ui/modals.js';
+import { showNotification } from '../ui/utils.js';
 
 /**
- * 【新增】操作成功存入暫存區後，更新 UI
+ * 初始化股票分割相關的事件監聽器
  */
-function handleStagingSuccess() {
-    showNotification('info', '操作已暫存。點擊「全部提交」以同步至雲端。');
-    // 立即重新渲染列表以顯示暫存狀態
-    renderSplitsTable();
-}
+function initializeSplitEventListeners() {
+    const splitForm = document.getElementById('split-form');
+    if (!splitForm) return;
 
-async function handleDeleteSplit(button) {
-    const splitId = button.dataset.id;
-    const { showConfirm } = await import('../ui/modals.js');
+    // 監聽表單提交（新增或更新）
+    splitForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await handleSaveSplit();
+    });
 
-    // ========================= 【核心修改 - 開始】 =========================
-    // 統一邏輯：即使拆股事件沒有更新(UPDATE)操作，依然採用標準模式來獲取要刪除的物件，
-    // 以確保程式碼風格一致，並為未來可能的擴展做準備。
-    const { userSplits } = getState();
-    const stagedActions = await stagingService.getStagedActions();
-    const splitActions = stagedActions
-        .filter(a => a.entity === 'split' && a.type !== 'DELETE')
-        .map(a => a.payload);
+    // 透過事件委派處理編輯和刪除按鈕
+    document.getElementById('splits-content')?.addEventListener('click', (event) => {
+        const editButton = event.target.closest('.edit-split-btn');
+        if (editButton) {
+            handleEditSplit(editButton.dataset.id);
+            return;
+        }
 
-    let combined = [...userSplits];
-    splitActions.forEach(stagedSplit => {
-        const index = combined.findIndex(s => s.id === stagedSplit.id);
-        if (index > -1) {
-            combined[index] = { ...combined[index], ...stagedSplit };
-        } else {
-            combined.push(stagedSplit);
+        const deleteButton = event.target.closest('.delete-split-btn');
+        if (deleteButton) {
+            handleDeleteSplit(deleteButton.dataset.id);
+            return;
         }
     });
-    
-    const splitToDelete = combined.find(s => s.id === splitId);
-    // ========================= 【核心修改 - 結束】 =========================
 
-    if (!splitToDelete) {
-        showNotification('error', '找不到要刪除的拆股事件。');
+    // 處理 "新增股票分割" 按鈕
+    document.getElementById('add-split-btn')?.addEventListener('click', () => {
+        splitForm.reset();
+        document.getElementById('split-id').value = '';
+        document.getElementById('split-form-title').textContent = '新增股票分割';
+        openModal('split-modal');
+    });
+}
+
+/**
+ * 處理編輯股票分割的邏輯
+ * @param {string} splitId - 要編輯的分割事件 ID
+ */
+function handleEditSplit(splitId) {
+    const splits = getSplits();
+    const split = splits.find(s => s.id.toString() === splitId);
+    if (!split) {
+        showNotification('找不到該筆分割紀錄', 'error');
         return;
     }
 
-    showConfirm('確定要刪除這個拆股事件嗎？此操作將被加入暫存區。', async () => {
-        try {
-            await stagingService.addAction('DELETE', 'split', splitToDelete);
-            handleStagingSuccess();
-        } catch (error) {
-            showNotification('error', `暫存刪除操作失敗: ${error.message}`);
-        }
-    });
+    document.getElementById('split-id').value = split.id;
+    document.getElementById('split-form-title').textContent = '編輯股票分割';
+    document.getElementById('split-symbol').value = split.symbol;
+    document.getElementById('split-ex-date').value = new Date(split.ex_date).toISOString().split('T')[0];
+    document.getElementById('split-from-factor').value = split.from_factor;
+    document.getElementById('split-to-factor').value = split.to_factor;
+    
+    openModal('split-modal');
 }
 
-async function handleSplitFormSubmit(e) {
-    e.preventDefault();
+/**
+ * 處理儲存股票分割（新增或更新）的邏輯
+ */
+async function handleSaveSplit() {
+    const form = document.getElementById('split-form');
+    const splitId = document.getElementById('split-id').value;
     const splitData = {
-        id: `temp_split_${Date.now()}`, // 【核心修改】給予一個臨時ID
-        date: document.getElementById('split-date').value,
-        symbol: document.getElementById('split-symbol').value.toUpperCase().trim(),
-        ratio: parseFloat(document.getElementById('split-ratio').value)
+        symbol: document.getElementById('split-symbol').value.toUpperCase(),
+        ex_date: document.getElementById('split-ex-date').value,
+        from_factor: parseFloat(document.getElementById('split-from-factor').value),
+        to_factor: parseFloat(document.getElementById('split-to-factor').value),
     };
 
-    if (!splitData.symbol || isNaN(splitData.ratio) || splitData.ratio <= 0) {
-        showNotification('error', '請填寫所有欄位並確保比例大於0。');
-        return;
-    }
-    
-    const { closeModal } = await import('../ui/modals.js');
-    closeModal('split-modal');
-    
-    // 【核心修改】將操作寫入暫存區
     try {
-        await stagingService.addAction('CREATE', 'split', splitData);
-        handleStagingSuccess();
-    } catch (error) {
-        showNotification('error', `暫存新增操作失敗: ${error.message}`);
-    }
-}
-
-// --- Public Function ---
-
-export function initializeSplitEventListeners() {
-    const splitsTab = document.getElementById('splits-tab');
-    if (splitsTab) {
-        splitsTab.addEventListener('click', async (e) => { 
-            const addBtn = e.target.closest('#add-split-btn');
-            if (addBtn) {
-                const { openModal } = await import('../ui/modals.js');
-                openModal('split-modal');
-                return;
-            }
-            const deleteBtn = e.target.closest('.delete-split-btn');
-            if(deleteBtn) {
-                handleDeleteSplit(deleteBtn);
-            }
-        });
-    }
-    
-    document.getElementById('split-form').addEventListener('submit', handleSplitFormSubmit);
-    document.getElementById('cancel-split-btn').addEventListener('click', async () => {
-        const { closeModal } = await import('../ui/modals.js');
-        closeModal('split-modal');
-    });
-
-    document.getElementById('split-form').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            document.getElementById('save-split-btn').click();
+        if (splitId) {
+            await updateSplit(splitId, splitData);
+            showNotification('股票分割更新成功', 'success');
+        } else {
+            await addSplit(splitData);
+            showNotification('股票分割新增成功', 'success');
         }
-    });
+        document.querySelector('#split-modal [data-dismiss]').click(); // 關閉 modal
+        form.reset();
+    } catch (error) {
+        console.error('儲存股票分割失敗:', error);
+        showNotification('儲存股票分割失敗，請稍後再試', 'error');
+    }
 }
+
+/**
+ * 處理刪除股票分割的邏輯
+ * @param {string} splitId - 要刪除的分割事件 ID
+ */
+async function handleDeleteSplit(splitId) {
+    if (confirm('您確定要刪除此筆股票分割紀錄嗎？')) {
+        try {
+            await deleteSplit(splitId);
+            showNotification('股票分割刪除成功', 'success');
+        } catch (error) {
+            console.error('刪除股票分割失敗:', error);
+            showNotification('刪除股票分割失敗，請稍後再試', 'error');
+        }
+    }
+}
+
+export { initializeSplitEventListeners };
