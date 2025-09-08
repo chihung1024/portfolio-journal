@@ -1,252 +1,184 @@
 // =========================================================================================
-// == 批次操作處理模組 (batch.handler.js) - v3.3 (Group View Sync)
+// == 批次操作 Action 處理模組 (batch.handler.js) v3.0 - 修改配息刪除邏輯
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
 const { d1Client } = require('../d1.client');
 const { performRecalculation } = require('../performRecalculation');
-const { populateSettlementFxRate } = require('../services/transaction.service');
-const { calculateGroupOnDemandCore } = require('./group.handler');
-const { updateBenchmarkCore } = require('./portfolio.handler');
-
+const { transactionSchema, splitSchema, userDividendSchema, groupSchema } = require('../schemas');
 
 /**
- * 處理標準的批次提交操作
- * @param {string} uid - 使用者 ID
- * @param {Array} actions - 前端傳來的操作陣列
- * @returns {Promise<object>} - 回傳包含 tempIdMap 和 statement 的物件
+ * 【輔助函式】根據股票代碼(們)，將所有包含這些股票的群組標記為 "dirty"。
  */
-async function processBatchActions(uid, actions) {
-    const tempIdMap = {};
-    const statements = [];
+async function markAssociatedGroupsAsDirtyBySymbol(uid, symbols, d1) {
+    const symbolList = Array.isArray(symbols) ? [...new Set(symbols)] : [symbols];
+    if (symbolList.length === 0) return;
 
-    for (const action of actions) {
-        if (action.entity === 'transaction' && action.payload._special_action === 'CREATE_TX_WITH_ATTRIBUTION') {
-            const { payload } = action;
-            const newTxId = uuidv4();
-            tempIdMap[payload.id] = newTxId;
+    const txPlaceholders = symbolList.map(() => '?').join(',');
+    const txIdsResult = await d1.query(
+        `SELECT id FROM transactions WHERE uid = ? AND symbol IN (${txPlaceholders})`,
+        [uid, ...symbolList]
+    );
+    const txIds = txIdsResult.map(r => r.id);
 
-            const newGroupIdMap = {};
-            if (payload.newGroups && payload.newGroups.length > 0) {
-                payload.newGroups.forEach(group => {
-                    const newGroupId = uuidv4();
-                    newGroupIdMap[group.tempId] = newGroupId;
-                    tempIdMap[group.tempId] = newGroupId;
-                    statements.push({
-                        sql: `INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)`,
-                        params: [newGroupId, uid, group.name, '']
-                    });
-                });
-            }
+    if (txIds.length > 0) {
+        const groupTxPlaceholders = txIds.map(() => '?').join(',');
+        const groupIdsResult = await d1.query(
+            `SELECT DISTINCT group_id FROM group_transaction_inclusions WHERE uid = ? AND transaction_id IN (${groupTxPlaceholders})`,
+            [uid, ...txIds]
+        );
+        const groupIds = groupIdsResult.map(r => r.group_id);
 
-            let txData = { ...payload };
-            delete txData.groupInclusions;
-            delete txData.newGroups;
-            delete txData._special_action;
-            delete txData.id;
-            txData = await populateSettlementFxRate(txData);
-            
-            statements.push({
-                sql: `INSERT INTO transactions (id, uid, date, symbol, type, quantity, price, currency, totalCost, exchangeRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                params: [newTxId, uid, txData.date, txData.symbol, txData.type, txData.quantity, txData.price, txData.currency, txData.totalCost, txData.exchangeRate]
-            });
-
-            if (payload.groupInclusions && payload.groupInclusions.length > 0) {
-                payload.groupInclusions.forEach(groupId => {
-                    const finalGroupId = newGroupIdMap[groupId] || groupId;
-                    statements.push({
-                        sql: `INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)`,
-                        params: [uid, finalGroupId, newTxId]
-                    });
-                });
-            }
-
-        } else {
-            const { type } = action;
-            let permanentId = null;
-
-            if (type === 'CREATE') {
-                permanentId = uuidv4();
-                const tempId = action.payload.id;
-                if (tempId && String(tempId).startsWith('temp_')) {
-                    tempIdMap[tempId] = permanentId;
-                }
-            }
-            
-            if (action.entity === 'transaction' && ['CREATE', 'UPDATE'].includes(type)) {
-                action.payload = await populateSettlementFxRate(action.payload);
-            }
-
-            const { entity, payload } = action;
-            const cleanPayload = { ...payload };
-            delete cleanPayload.groupInclusions;
-            delete cleanPayload.newGroups;
-            delete cleanPayload._special_action;
-            const tableMap = { 'transaction': 'transactions', 'split': 'splits', 'dividend': 'user_dividends', 'group': 'groups' };
-            const tableName = tableMap[entity];
-            if (!tableName) throw new Error(`Unsupported entity type: ${entity}`);
-
-            let sql, params;
-            switch (type) {
-                case 'DELETE':
-                    sql = `DELETE FROM ${tableName} WHERE id = ? AND uid = ?`;
-                    params = [cleanPayload.id, uid];
-                    break;
-                case 'UPDATE': {
-                    const updatePayload = { ...cleanPayload };
-                    delete updatePayload.id;
-                    const fields = Object.keys(updatePayload);
-                    const setClause = fields.map(f => `${f} = ?`).join(', ');
-                    sql = `UPDATE ${tableName} SET ${setClause} WHERE id = ? AND uid = ?`;
-                    params = [...fields.map(f => updatePayload[f]), payload.id, uid];
-                    break;
-                }
-                case 'CREATE': {
-                    const createPayload = { ...cleanPayload };
-                    delete createPayload.id; 
-                    const finalPayload = { id: permanentId, uid, ...createPayload };
-                    const createFields = Object.keys(finalPayload);
-                    const placeholders = createFields.map(() => '?').join(', ');
-                    sql = `INSERT INTO ${tableName} (${createFields.join(', ')}) VALUES (${placeholders})`;
-                    params = Object.values(finalPayload);
-                    break;
-                }
-                default:
-                    throw new Error(`Unsupported action type: ${type}`);
-            }
-            statements.push({ sql, params });
+        if (groupIds.length > 0) {
+            const groupPlaceholders = groupIds.map(() => '?').join(',');
+            await d1.query(
+                `UPDATE groups SET is_dirty = 1 WHERE uid = ? AND id IN (${groupPlaceholders})`,
+                [uid, ...groupIds]
+            );
+            console.log(`[Cache Invalidation] Marked groups as dirty due to batch change for symbols ${symbolList.join(', ')}: ${groupIds.join(', ')}`);
         }
     }
-    
-    if (statements.length > 0) {
-        await d1Client.batch(statements);
-    }
-
-    return { tempIdMap };
 }
 
-
 /**
- * 【舊 API 端點】只處理批次提交
+ * 處理前端提交的批次操作
  */
 exports.submitBatch = async (uid, data, res) => {
-    try {
-        const { tempIdMap } = await processBatchActions(uid, data.actions);
-        await performRecalculation(uid, null, false);
-        
-        const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
-            d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-            d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-            d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
-            d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
-            d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
-        ]);
-
-        const summaryRow = summaryResult[0] || {};
-        const summaryData = summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {};
-
-        return res.status(200).send({ 
-            success: true, 
-            message: '批次操作成功。',
-            data: {
-                summary: summaryData, holdings, transactions: txs, splits, groups,
-                tempIdMap: tempIdMap 
-            }
-        });
-    } catch (error) {
-        console.error(`[${uid}] 執行 submitBatch 時發生錯誤:`, error);
-        return res.status(500).send({ success: false, message: `批次提交失敗: ${error.message}` });
+    const { actions } = data;
+    if (!actions || !Array.isArray(actions) || actions.length === 0) {
+        return res.status(400).send({ success: false, message: '無效的操作請求。' });
     }
-};
 
+    const dbOps = [];
+    const symbolsToInvalidate = new Set();
+    const groupsToRecalculate = new Set();
 
-/**
- * 【新 API 端點】合併提交與後續計算
- */
-exports.submitBatchAndExecute = async (uid, data, res) => {
-    const { actions, nextAction } = data;
+    for (const action of actions) {
+        const { entity, type, payload } = action;
 
-    try {
-        const { tempIdMap } = await processBatchActions(uid, actions);
-        let resultData;
+        switch (entity) {
+            case 'transaction':
+                const txData = transactionSchema.parse(payload);
+                symbolsToInvalidate.add(txData.symbol);
+                if (type === 'CREATE') {
+                    dbOps.push({
+                        sql: 'INSERT INTO transactions (id, uid, symbol, transaction_type, quantity, price, transaction_date, currency, fee, tax, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        params: [txData.id, uid, txData.symbol, txData.transaction_type, txData.quantity, txData.price, txData.transaction_date, txData.currency, txData.fee, txData.tax, txData.notes]
+                    });
+                } else if (type === 'UPDATE') {
+                    dbOps.push({
+                        sql: 'UPDATE transactions SET symbol = ?, transaction_type = ?, quantity = ?, price = ?, transaction_date = ?, currency = ?, fee = ?, tax = ?, notes = ? WHERE id = ? AND uid = ?',
+                        params: [txData.symbol, txData.transaction_type, txData.quantity, txData.price, txData.transaction_date, txData.currency, txData.fee, txData.tax, txData.notes, txData.id, uid]
+                    });
+                } else if (type === 'DELETE') {
+                    dbOps.push({ sql: 'DELETE FROM transactions WHERE id = ? AND uid = ?', params: [txData.id, uid] });
+                    dbOps.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?', params: [txData.id, uid] });
+                }
+                break;
 
-        if (nextAction) {
-            switch (nextAction.type) {
+            case 'split':
+                const splitData = splitSchema.parse(payload);
+                symbolsToInvalidate.add(splitData.symbol);
+                if (type === 'CREATE') {
+                    dbOps.push({ sql: 'INSERT INTO user_splits (id, uid, symbol, split_date, from_factor, to_factor) VALUES (?, ?, ?, ?, ?, ?)', params: [splitData.id, uid, splitData.symbol, splitData.split_date, splitData.from_factor, splitData.to_factor] });
+                } else if (type === 'DELETE') {
+                    dbOps.push({ sql: 'DELETE FROM user_splits WHERE id = ? AND uid = ?', params: [splitData.id, uid] });
+                }
+                break;
+
+            case 'dividend':
+                const divData = userDividendSchema.parse(payload);
+                symbolsToInvalidate.add(divData.symbol);
+                if (type === 'CREATE') {
+                    dbOps.push({
+                        sql: `INSERT INTO user_dividends (id, uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, total_amount, tax_rate, currency, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')`,
+                        params: [divData.id, uid, divData.symbol, divData.ex_dividend_date, divData.pay_date, divData.amount_per_share, divData.quantity_at_ex_date, divData.total_amount, divData.tax_rate, divData.currency, divData.notes]
+                    });
+                    dbOps.push({ sql: 'DELETE FROM user_pending_dividends WHERE uid = ? AND symbol = ? AND ex_dividend_date = ?', params: [uid, divData.symbol, divData.ex_dividend_date] });
+                } else if (type === 'UPDATE') {
+                    dbOps.push({
+                        sql: 'UPDATE user_dividends SET pay_date = ?, total_amount = ?, tax_rate = ?, notes = ? WHERE id = ? AND uid = ?',
+                        params: [divData.pay_date, divData.total_amount, divData.tax_rate, divData.notes, divData.id, uid]
+                    });
+                }
                 // ========================= 【核心修改 - 開始】 =========================
-                case 'CALCULATE_GROUP': {
-                    console.log(`[Combined Action] 提交後，接續計算群組: ${nextAction.payload.groupId}`);
-                    resultData = await calculateGroupOnDemandCore(uid, nextAction.payload.groupId);
+                else if (type === 'DELETE') {
+                    // 原行為: 物理刪除
+                    // dbOps.push({ sql: 'DELETE FROM user_dividends WHERE id = ? AND uid = ?', params: [divData.id, uid] });
                     
-                    // Bug Fix: 確保即使群組計算完成後，也能取得最新的全局 splits 和 groups 列表
-                    // 這樣可以避免前端在更新時因缺少最新數據而出錯
-                    const [splits, groups] = await Promise.all([
-                        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
-                    ]);
-                    
-                    // transactions 已經由 calculateGroupOnDemandCore 正確回傳，這裡只需補充其他全局數據
-                    resultData.splits = splits;
-                    resultData.groups = groups;
-                    break;
+                    // 新行為: 刪除已確認的紀錄，並將其還原為一筆待確認紀錄
+                    dbOps.push({ 
+                        sql: 'DELETE FROM user_dividends WHERE id = ? AND uid = ?', 
+                        params: [divData.id, uid] 
+                    });
+                    dbOps.push({
+                        sql: 'INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        params: [
+                            uid,
+                            divData.symbol,
+                            divData.ex_dividend_date,
+                            divData.pay_date, // 保留原始的發放日
+                            divData.amount_per_share,
+                            divData.quantity_at_ex_date,
+                            divData.currency
+                        ]
+                    });
                 }
                 // ========================= 【核心修改 - 結束】 =========================
-                
-                case 'UPDATE_BENCHMARK': {
-                    console.log(`[Combined Action] 提交後，接續更新 Benchmark 為: ${nextAction.payload.benchmarkSymbol}`);
-                    await updateBenchmarkCore(uid, nextAction.payload.benchmarkSymbol);
-                    const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
-                        d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-                        d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
-                        d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
-                        d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
-                    ]);
-                    const summaryRow = summaryResult[0] || {};
-                    resultData = {
-                        summary: summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {},
-                        history: summaryRow.history ? JSON.parse(summaryRow.history) : {},
-                        twrHistory: summaryRow.twrHistory ? JSON.parse(summaryRow.twrHistory) : {},
-                        benchmarkHistory: summaryRow.benchmarkHistory ? JSON.parse(summaryRow.benchmarkHistory) : {},
-                        netProfitHistory: summaryRow.netProfitHistory ? JSON.parse(summaryRow.netProfitHistory) : {},
-                        holdings, transactions: txs, splits, groups,
-                    };
-                    break;
+                break;
+
+            case 'group':
+                const groupData = groupSchema.parse(payload);
+                if (type === 'CREATE') {
+                    dbOps.push({ sql: 'INSERT INTO groups (id, uid, name, description) VALUES (?, ?, ?, ?)', params: [groupData.id, uid, groupData.name, groupData.description] });
+                } else if (type === 'UPDATE') {
+                    dbOps.push({ sql: 'UPDATE groups SET name = ?, description = ? WHERE id = ? AND uid = ?', params: [groupData.name, groupData.description, groupData.id, uid] });
+                    groupsToRecalculate.add(groupData.id);
+                } else if (type === 'DELETE') {
+                    dbOps.push({ sql: 'DELETE FROM groups WHERE id = ? AND uid = ?', params: [groupData.id, uid] });
+                    dbOps.push({ sql: 'DELETE FROM group_transaction_inclusions WHERE group_id = ? AND uid = ?', params: [groupData.id, uid] });
+                    dbOps.push({ sql: 'DELETE FROM group_cache WHERE group_id = ? AND uid = ?', params: [groupData.id, uid] });
                 }
-                
-                default:
-                    await performRecalculation(uid, null, false);
-                    break;
-            }
-        } else {
-            await performRecalculation(uid, null, false);
+                break;
+            
+            case 'group_inclusion':
+                const { groupId, transactionIds, included } = payload;
+                if (included) {
+                    for (const txId of transactionIds) {
+                        dbOps.push({ sql: 'INSERT OR IGNORE INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)', params: [uid, groupId, txId] });
+                    }
+                } else {
+                    const placeholders = transactionIds.map(() => '?').join(',');
+                    dbOps.push({ sql: `DELETE FROM group_transaction_inclusions WHERE uid = ? AND group_id = ? AND transaction_id IN (${placeholders})`, params: [uid, groupId, ...transactionIds] });
+                }
+                groupsToRecalculate.add(groupId);
+                break;
+        }
+    }
+
+    try {
+        if (dbOps.length > 0) {
+            await d1Client.batch(dbOps);
         }
 
-        if (!resultData) {
-             const [txs, splits, holdings, summaryResult, groups] = await Promise.all([
-                d1Client.query('SELECT * FROM transactions WHERE uid = ? ORDER BY date DESC', [uid]),
-                d1Client.query('SELECT * FROM splits WHERE uid = ? ORDER BY date DESC', [uid]),
-                d1Client.query('SELECT * FROM holdings WHERE uid = ? AND group_id = ?', [uid, 'all']),
-                d1Client.query('SELECT * FROM portfolio_summary WHERE uid = ? AND group_id = ?', [uid, 'all']),
-                d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid])
-            ]);
-            const summaryRow = summaryResult[0] || {};
-            resultData = { 
-                summary: summaryRow.summary_data ? JSON.parse(summaryRow.summary_data) : {},
-                holdings, transactions: txs, splits, groups 
-            };
+        // 標記受影響的群組為 dirty
+        if (symbolsToInvalidate.size > 0) {
+            await markAssociatedGroupsAsDirtyBySymbol(uid, Array.from(symbolsToInvalidate), d1Client);
+        }
+        for (const groupId of groupsToRecalculate) {
+            await d1Client.query('UPDATE groups SET is_dirty = 1 WHERE id = ? AND uid = ?', [groupId, uid]);
         }
 
-        return res.status(200).send({
-            success: true,
-            message: '組合操作成功。',
-            data: {
-                ...resultData,
-                tempIdMap: tempIdMap
-            }
+        // 觸發背景重算 (非同步，不等待其完成)
+        performRecalculation(uid, null, false).catch(err => {
+            console.error(`[${uid}] UID 的背景批次重算失敗:`, err);
         });
 
+        // 立即回傳成功，讓前端感覺流暢
+        return res.status(200).send({ success: true, message: '操作已成功提交，後端將在背景更新數據。' });
+
     } catch (error) {
-        console.error(`[${uid}] 執行 submitBatchAndExecute 時發生錯誤:`, error);
-        return res.status(500).send({ success: false, message: `組合操作失敗: ${error.message}` });
+        console.error('批次處理時資料庫操作失敗:', error);
+        return res.status(500).send({ success: false, message: `資料庫操作失敗: ${error.message}` });
     }
 };
