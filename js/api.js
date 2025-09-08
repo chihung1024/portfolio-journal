@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：js/api.js (v_e2e_fix_3)
-// == 職責：封裝所有與後端 API 的通訊，並將回傳數據注入前端狀態管理中心
+// == 檔案：js/api.js (v_api_cleanup_2)
+// == 職責：封裝所有與後端 API 的通訊，並為「群組」管理提供標準化介面
 // =========================================================================================
 
 import { setPortfolio, setIsLoading, setIsRecalculating } from './state.js';
@@ -31,6 +31,10 @@ async function fetchAPI(endpoint, options = {}) {
         console.error(`API Error: ${response.status} ${response.statusText}`, errorData);
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
+    // 允許沒有回傳內容的 204 No Content 回應
+    if (response.status === 204) {
+        return {};
+    }
     return response.json();
 }
 
@@ -41,7 +45,6 @@ async function getPortfolio() {
     try {
         setIsLoading(true);
         const data = await fetchAPI('/portfolio');
-        // 【核心修正】: 將完整的後端回應 (包含 pendingDividends) 傳遞給 setPortfolio
         setPortfolio(data);
     } catch (error) {
         console.error('Failed to get portfolio:', error);
@@ -59,10 +62,9 @@ async function recalculatePortfolio() {
     try {
         setIsRecalculating(true);
         showNotification('正在同步您的最新交易...', 'info');
-        // 增加 timeout 以確保 UI 有時間顯示 "recalculating" 狀態
         await new Promise(resolve => setTimeout(resolve, 500)); 
         await fetchAPI('/portfolio/recalculate', { method: 'POST' });
-        await getPortfolio(); // 重算後重新獲取最新數據
+        await getPortfolio();
         showNotification('數據同步完成！', 'success');
     } catch (error) {
         console.error('Failed to recalculate portfolio:', error);
@@ -72,24 +74,16 @@ async function recalculatePortfolio() {
     }
 }
 
-/**
- * 新增一筆交易
- * @param {object} transactionData - 交易數據
- */
+// ... [交易, 分割, 股息的 API 函式保持不變] ...
+
 async function addTransaction(transactionData) {
     await fetchAPI('/transactions', {
         method: 'POST',
         body: JSON.stringify(transactionData),
     });
-    // 新增後不直接調用 getPortfolio，而是觸發重算
     await recalculatePortfolio(); 
 }
 
-/**
- * 更新一筆交易
- * @param {string} id - 交易 ID
- * @param {object} transactionData - 更新後的交易數據
- */
 async function updateTransaction(id, transactionData) {
     await fetchAPI(`/transactions/${id}`, {
         method: 'PUT',
@@ -98,16 +92,10 @@ async function updateTransaction(id, transactionData) {
     await recalculatePortfolio();
 }
 
-/**
- * 刪除一筆交易
- * @param {string} id - 交易 ID
- */
 async function deleteTransaction(id) {
     await fetchAPI(`/transactions/${id}`, { method: 'DELETE' });
     await recalculatePortfolio();
 }
-
-// ... [其他 API 函式 (addSplit, updateSplit, deleteSplit 等) 保持不變] ...
 
 async function addSplit(splitData) {
     await fetchAPI('/splits', {
@@ -151,6 +139,42 @@ async function deleteDividend(id) {
     await recalculatePortfolio();
 }
 
+// ========================= 【核心修正 - 開始】 =========================
+/**
+ * 新增一個群組
+ * @param {object} groupData - { name: string, symbols: string[] }
+ */
+async function addGroup(groupData) {
+    await fetchAPI('/groups', {
+        method: 'POST',
+        body: JSON.stringify(groupData),
+    });
+    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+}
+
+/**
+ * 更新一個現有的群組
+ * @param {string} id - 群組 ID
+ * @param {object} groupData - { name: string, symbols: string[] }
+ */
+async function updateGroup(id, groupData) {
+    await fetchAPI(`/groups/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(groupData),
+    });
+    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+}
+
+/**
+ * 刪除一個群組
+ * @param {string} id - 群組 ID
+ */
+async function deleteGroup(id) {
+    await fetchAPI(`/groups/${id}`, { method: 'DELETE' });
+    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+}
+// ========================= 【核心修正 - 結束】 =========================
+
 async function forceRecalculate() {
     try {
         setIsRecalculating(true);
@@ -179,5 +203,9 @@ export {
     addDividend,
     updateDividend,
     deleteDividend,
+    addGroup,      // <-- 導出新函式
+    updateGroup,   // <-- 導出新函式
+    deleteGroup,   // <-- 導出新函式
     forceRecalculate,
 };
+
