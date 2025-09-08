@@ -60,52 +60,98 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
     }
 }
 
-async function calculateAndCachePendingDividends(uid, txs, userDividends) {
-    console.log(`[${uid}] 開始計算並快取待確認股息...`);
-    await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
-    if (!txs || txs.length === 0) {
-        console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
-        return;
+async function calculateAndCachePendingDividends(uid, txs, userDividends) {async function calculateAndCachePendingDividends(uid, txs, userDividends) {
+  const log = (...args) => console.log(`[${uid}]`, ...args);
+  log('開始計算並快取待確認股息…');
+
+  /* 0. 先清空舊快取 */
+  await d1Client.batch([
+    { sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }
+  ]);
+
+  if (!txs || txs.length === 0) {
+    log('使用者無交易紀錄，無需快取股息。');
+    return;
+  }
+
+  /* 1. 讀取全部市場股息（已排序） */
+  const allMarketDividends = await d1Client.query(
+    'SELECT symbol, date, dividend FROM dividend_history ORDER BY date ASC'
+  );
+  if (!allMarketDividends || allMarketDividends.length === 0) {
+    log('無市場股息資料，無需快取。');
+    return;
+  }
+
+  /* 2. 建立已確認股息索引，避免重複 */
+  const confirmedKeys = new Set(
+    userDividends.map(
+      d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`
+    )
+  );
+
+  /* 3. 依交易時間先後掃描持股數量變化 */
+  const holdings = {};      // {SYM: 累計持股}
+  let txIndex = 0;          // 指向 txs 中下一筆待處理交易
+  const pendingDividends = [];
+  const symbolsInTx = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
+
+  for (const histDiv of allMarketDividends) {
+    const divSymbol = histDiv.symbol.toUpperCase();
+    if (!symbolsInTx.includes(divSymbol)) continue;               // 該用戶沒買過此股
+    const exDateStr = histDiv.date.split('T')[0];
+    if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) continue; // 已領取
+
+    /* 3-1. 把所有交易時間 ≤ (除息日前一日) 的交易納入持股計算（FIFO 扫描一次即可） */
+    const exDateMinus1 = new Date(exDateStr);
+    exDateMinus1.setDate(exDateMinus1.getDate() - 1);
+    while (
+      txIndex < txs.length &&
+      new Date(txs[txIndex].date) <= exDateMinus1
+    ) {
+      const tx = txs[txIndex];
+      const sym = tx.symbol.toUpperCase();
+      holdings[sym] = (holdings[sym] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
+      txIndex += 1;
     }
-    const allMarketDividends = await d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC');
-    if (!allMarketDividends || allMarketDividends.length === 0) {
-        console.log(`[${uid}] 無市場股息資料，無需快取。`);
-        return;
+
+    const quantityAtExDate = holdings[divSymbol] || 0;
+    if (quantityAtExDate > 0.00001) {
+      /* 4. 判定幣別 (台股預設 TWD，其餘預設 USD) */
+      const currency =
+        txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency ||
+        (isTwStock(divSymbol) ? 'TWD' : 'USD');
+
+      pendingDividends.push({
+        symbol: divSymbol,
+        ex_dividend_date: exDateStr,
+        amount_per_share: histDiv.dividend,
+        quantity_at_ex_date: quantityAtExDate,
+        currency
+      });
     }
-    const confirmedKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-    const holdings = {};
-    let txIndex = 0;
-    const pendingDividends = [];
-    const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-    allMarketDividends.forEach(histDiv => {
-        const divSymbol = histDiv.symbol.toUpperCase();
-        if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
-        const exDateStr = histDiv.date.split('T')[0];
-        if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
-        const exDateMinusOne = new Date(exDateStr);
-        exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-        while (txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
-            const tx = txs[txIndex];
-            holdings[tx.symbol.toUpperCase()] = (holdings[tx.symbol.toUpperCase()] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
-            txIndex++;
-        }
-        const quantity = holdings[divSymbol] || 0;
-        if (quantity > 0.00001) {
-            const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
-            pendingDividends.push({
-                symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend,
-                quantity_at_ex_date: quantity, currency: currency
-            });
-        }
-    });
-    if (pendingDividends.length > 0) {
-        const dbOps = pendingDividends.map(p => ({
-            sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
-            params: [uid, p.symbol, p.ex_dividend_date, p.amount_per_share, p.quantity_at_ex_date, p.currency]
-        }));
-        await d1Client.batch(dbOps);
-    }
-    console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
+  }
+
+  /* 5. 寫入資料庫 */
+  if (pendingDividends.length > 0) {
+    const dbOps = pendingDividends.map(p => ({
+      sql: `INSERT INTO user_pending_dividends
+              (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency)
+            VALUES (?,?,?,?,?,?)`,
+      params: [
+        uid,
+        p.symbol,
+        p.ex_dividend_date,
+        p.amount_per_share,
+        p.quantity_at_ex_date,
+        p.currency
+      ]
+    }));
+    await d1Client.batch(dbOps);
+    log(`成功快取 ${pendingDividends.length} 筆待確認股息。`);
+  } else {
+    log('沒有新的待確認股息需要快取。');
+  }
 }
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
