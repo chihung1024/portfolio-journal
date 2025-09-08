@@ -1,346 +1,84 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v4.3 - Staging-Aware Group Selection
+// == 檔案：js/ui/modals.js (v_arch_final_cleanup)
+// == 職責：提供並管理所有模態框（彈出視窗）的通用行為，如開啟與關閉。
+// == 架構定案：此模組不再處理任何與特定表單提交或 API 請求相關的業務邏輯。
 // =========================================================================================
 
-import { getState, setState } from '../state.js';
-import { stagingService } from '../staging.service.js';
-import { isTwStock, formatNumber } from './utils.js';
-import { renderDetailsModal } from './components/detailsModal.ui.js';
-import { apiRequest, executeApiAction } from '../api.js';
-import { loadGroups } from '../events/group.events.js';
-import { showNotification } from './notifications.js';
-import { renderTransactionsTable } from './components/transactions.ui.js';
-
-// --- Helper Functions ---
-
-// ========================= 【核心修改 - 開始】 =========================
 /**
- * 【重構】渲染群組歸因視窗的內容 (改為 async)
- * @param {Set<string>} includedGroupIds - 已包含的群組 ID 集合
+ * 開啟一個指定的模態框
+ * @param {string} modalId - 要開啟的模態框的 HTML ID
  */
-async function renderGroupAttributionContent(includedGroupIds = new Set()) {
-    const { tempTransactionData, groups } = getState();
-    if (!tempTransactionData) return;
-
-    // 1. 從暫存區找出所有待刪除的群組 ID
-    const stagedActions = await stagingService.getStagedActions();
-    const deletedGroupIds = new Set(
-        stagedActions
-            .filter(a => a.entity === 'group' && a.type === 'DELETE')
-            .map(a => a.payload.id)
-    );
-    
-    // 2. 從 state 的群組列表中，過濾掉待刪除的群組
-    const availableGroups = groups.filter(g => !deletedGroupIds.has(g.id));
-
-    const symbol = tempTransactionData.data.symbol;
-    document.getElementById('attribution-symbol-placeholder').textContent = symbol;
-
-    const container = document.getElementById('attribution-groups-container');
-    // 3. 使用過濾後的 `availableGroups` 來渲染選項
-    container.innerHTML = availableGroups.length > 0
-        ? availableGroups.map(g => `
-            <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
-                <input type="checkbox" name="attribution_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
-                <span class="font-medium text-gray-700">${g.name}</span>
-            </label>
-        `).join('')
-        : '<p class="text-center text-sm text-gray-500 py-4">沒有可用的群組。</p>';
-
-    const newGroupContainer = document.getElementById('attribution-new-group-container');
-    newGroupContainer.innerHTML = `
-        <div class="relative">
-            <input type="text" id="new-group-name-input" placeholder="+ 建立新群組並加入" class="w-full pl-3 pr-10 py-2 text-sm border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-            <button type="button" id="add-new-group-btn" class="absolute inset-y-0 right-0 px-3 flex items-center text-indigo-600 hover:text-indigo-800">建立</button>
-        </div>
-    `;
-
-    document.getElementById('add-new-group-btn').addEventListener('click', () => {
-        const input = document.getElementById('new-group-name-input');
-        const newGroupName = input.value.trim();
-        if (newGroupName && !groups.some(g => g.name === newGroupName)) {
-            const tempId = `temp_group_${Date.now()}`;
-            const newGroupCheckbox = `
-                <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer bg-indigo-50">
-                    <input type="checkbox" name="attribution_group" value="${tempId}" data-new-name="${newGroupName}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" checked>
-                    <span class="font-medium text-indigo-700">${newGroupName} (新)</span>
-                </label>
-            `;
-            container.insertAdjacentHTML('beforeend', newGroupCheckbox);
-            input.value = '';
-        }
-    });
+function openModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) {
+        console.error(`模態框未找到: ${modalId}`);
+        return;
+    }
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    document.body.classList.add('overflow-hidden'); // 防止背景滾動
 }
-// ========================= 【核心修改 - 結束】 =========================
 
 /**
- * 收集群組歸因資訊，並將交易連同歸因資訊一併存入暫存區
+ * 關閉一個指定的模態框
+ * @param {string} modalId - 要關閉的模態框的 HTML ID
  */
-async function submitAttributionAndSaveTransaction() {
-    const { tempTransactionData } = getState();
-    if (!tempTransactionData) return;
-    
-    closeModal('group-attribution-modal');
-
-    const groupInclusions = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked')).map(cb => cb.value);
-    
-    const newGroups = Array.from(document.querySelectorAll('input[name="attribution_group"]:checked'))
-        .filter(cb => cb.dataset.newName)
-        .map(cb => ({
-            tempId: cb.value,
-            name: cb.dataset.newName
-        }));
-        
-    const finalPayload = {
-        ...tempTransactionData.data,
-        groupInclusions: groupInclusions,
-        newGroups: newGroups,
-        _special_action: 'CREATE_TX_WITH_ATTRIBUTION'
-    };
-
-    try {
-        await stagingService.addAction('CREATE', 'transaction', finalPayload);
-        
-        showNotification('info', '交易與群組歸因已暫存。');
-        await renderTransactionsTable();
-
-    } catch (error) {
-        showNotification('error', `暫存交易失敗: ${error.message}`);
-    } finally {
-        setState({ tempTransactionData: null });
+function closeModal(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) {
+        console.error(`模態框未找到: ${modalId}`);
+        return;
+    }
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    // 檢查是否還有其他開啟的模態框，如果沒有，才恢復背景滾動
+    const anyModalOpen = document.querySelector('.modal:not(.hidden)');
+    if (!anyModalOpen) {
+        document.body.classList.remove('overflow-hidden');
     }
 }
 
-
-async function handleMembershipSave() {
-    const { tempMembershipEdit } = getState();
-    if (!tempMembershipEdit) return;
-
-    const selectedGroupIds = Array.from(document.querySelectorAll('input[name="membership_group"]:checked')).map(cb => cb.value);
-
-    closeModal('membership-editor-modal');
-    
-    executeApiAction('update_transaction_group_membership', {
-        transactionId: tempMembershipEdit.txId,
-        groupIds: selectedGroupIds
-    }, {
-        loadingText: '正在更新群組歸屬...',
-        successMessage: '群組歸屬已更新！',
-        shouldRefreshData: false
-    }).then(() => {
-        loadGroups();
-    }).catch(err => console.error("更新群組歸屬失敗:", err));
-}
-
-// --- Exported Functions ---
-
-export async function openModal(modalId, isEdit = false, data = null) {
-    const { stockNotes, pendingDividends, confirmedDividends, transactions, groups } = getState();
-    const formId = modalId.replace('-modal', '-form');
-    const form = document.getElementById(formId);
-    if (form) form.reset();
-
-    if (modalId === 'transaction-modal') {
-        document.getElementById('transaction-id').value = '';
-        const confirmBtn = document.getElementById('confirm-transaction-btn');
-        
-        if (isEdit && data) {
-            document.getElementById('modal-title').textContent = '編輯交易紀錄';
-            if(confirmBtn) confirmBtn.textContent = '儲存變更';
-            
-            document.getElementById('transaction-id').value = data.id;
-            document.getElementById('transaction-date').value = data.date.split('T')[0];
-            document.getElementById('stock-symbol').value = data.symbol;
-            document.querySelector(`input[name="transaction-type"][value="${data.type}"]`).checked = true;
-            document.getElementById('quantity').value = data.quantity;
-            document.getElementById('price').value = data.price;
-            document.getElementById('currency').value = data.currency;
-            document.getElementById('exchange-rate').value = data.exchangeRate || '';
-            document.getElementById('total-cost').value = data.totalCost || '';
-        } else {
-            document.getElementById('modal-title').textContent = '新增交易紀錄 (步驟 1/2)';
-            if(confirmBtn) confirmBtn.textContent = '下一步';
-            document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
-        }
-        toggleOptionalFields();
-    } else if (modalId === 'split-modal') {
-        document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
-    } 
-    else if (modalId === 'dividend-modal') {
-        const record = isEdit
-            ? confirmedDividends.find(d => d.id === data.id)
-            : pendingDividends[data.index];
-        if (!record) return;
-
-        document.getElementById('dividend-modal-title').textContent = isEdit ? `編輯 ${record.symbol} 的配息` : `確認 ${record.symbol} 的配息`;
-        document.getElementById('dividend-id').value = record.id || '';
-        document.getElementById('dividend-symbol').value = record.symbol;
-        document.getElementById('dividend-ex-date').value = record.ex_dividend_date.split('T')[0];
-        document.getElementById('dividend-currency').value = record.currency;
-        document.getElementById('dividend-quantity').value = record.quantity_at_ex_date;
-        document.getElementById('dividend-original-amount-ps').value = record.amount_per_share;
-
-        if (isEdit) {
-            document.getElementById('dividend-pay-date').value = record.pay_date.split('T')[0];
-            document.getElementById('dividend-total-amount').value = record.total_amount;
-            document.getElementById('dividend-tax-rate').value = record.tax_rate;
-            document.getElementById('dividend-notes').value = record.notes || '';
-        } else {
-            const payDate = new Date(record.ex_dividend_date);
-            payDate.setMonth(payDate.getMonth() + 1);
-            document.getElementById('dividend-pay-date').value = payDate.toISOString().split('T')[0];
-            const taxRate = isTwStock(record.symbol) ? 0 : 30;
-            document.getElementById('dividend-tax-rate').value = taxRate;
-            document.getElementById('dividend-total-amount').value = (record.quantity_at_ex_date * record.amount_per_share * (1 - taxRate / 100)).toFixed(4);
-        }
-
-    } else if (modalId === 'details-modal') {
-        const { symbol } = data;
-        if (symbol) {
-           await renderDetailsModal(symbol);
-        }
-    } else if (modalId === 'membership-editor-modal') {
-        const { txId } = data;
-        
-        const stagedActions = await stagingService.getStagedActions();
-        const stagedTransactions = stagedActions.filter(a => a.entity === 'transaction' && a.type !== 'DELETE').map(a => a.payload);
-        
-        let combined = [...transactions];
-        stagedTransactions.forEach(stagedTx => {
-            const index = combined.findIndex(t => t.id === stagedTx.id);
-            if (index > -1) {
-                combined[index] = { ...combined[index], ...stagedTx };
-            } else {
-                combined.push(stagedTx);
+/**
+ * 初始化所有模態框的通用事件監聽器
+ * 這段程式碼負責處理所有模態框的關閉行為，例如點擊關閉按鈕、背景遮罩或按下 Esc 鍵。
+ */
+function initializeModalEventListeners() {
+    document.body.addEventListener('click', (event) => {
+        // 處理點擊帶有 `data-dismiss="modal"` 屬性的元素
+        const dismissButton = event.target.closest('[data-dismiss="modal"]');
+        if (dismissButton) {
+            const modal = dismissButton.closest('.modal');
+            if (modal) {
+                closeModal(modal.id);
             }
-        });
-        const tx = combined.find(t => t.id === txId);
-        
-        if (!tx) {
-            showNotification('error', '找不到指定的交易紀錄來編輯群組。');
             return;
         }
-        
-        setState({ tempMembershipEdit: { txId } });
 
-        document.getElementById('membership-symbol-placeholder').textContent = tx.symbol;
-        document.getElementById('membership-date-placeholder').textContent = tx.date.split('T')[0];
-        
-        const container = document.getElementById('membership-groups-container');
-        container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取歸屬狀態...</p>';
-        
-        try {
-            const result = await apiRequest('get_transaction_memberships', { transactionId: txId });
-            const includedGroupIds = new Set(result.data.groupIds);
-
-            container.innerHTML = groups.length > 0
-                ? groups.map(g => `
-                    <label class="flex items-center space-x-3 p-2 rounded-md hover:bg-gray-100 cursor-pointer">
-                        <input type="checkbox" name="membership_group" value="${g.id}" class="h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500" ${includedGroupIds.has(g.id) ? 'checked' : ''}>
-                        <span class="font-medium text-gray-700">${g.name}</span>
-                    </label>
-                `).join('')
-                : '<p class="text-center text-sm text-gray-500 py-4">尚未建立任何群組。</p>';
-
-        } catch (error) {
-            container.innerHTML = '<p class="text-center text-sm text-red-500 py-4">讀取歸屬狀態失敗。</p>';
-            console.error("讀取交易歸屬失敗:", error);
+        // 處理點擊模態框的背景遮罩
+        if (event.target.matches('.modal')) {
+            closeModal(event.target.id);
         }
-    }
+    });
 
-    document.getElementById(modalId).classList.remove('hidden');
-    if (modalId === 'membership-editor-modal') {
-        document.getElementById('save-membership-btn').onclick = handleMembershipSave;
-        document.getElementById('cancel-membership-btn').onclick = () => closeModal('membership-editor-modal');
-    }
-}
-
-// ========================= 【核心修改 - 開始】 =========================
-/**
- * 【重構】開啟群組歸因視窗 (改為 async)
- */
-export async function openGroupAttributionModal() {
-    const { tempTransactionData } = getState();
-    if (!tempTransactionData) return;
-
-    const modalTitle = document.getElementById('attribution-modal-title');
-    modalTitle.textContent = tempTransactionData.isEditing 
-        ? '編輯交易紀錄 (步驟 2/2)' 
-        : '新增交易紀錄 (步驟 2/2)';
-
-    let includedGroupIds = new Set();
-    const container = document.getElementById('attribution-groups-container');
-    container.innerHTML = '<p class="text-center text-sm text-gray-500 py-4">正在讀取群組狀態...</p>';
-
-    if (tempTransactionData.isEditing && tempTransactionData.txId) {
-        try {
-            const result = await apiRequest('get_transaction_memberships', { transactionId: tempTransactionData.txId });
-            if (result.success) {
-                includedGroupIds = new Set(result.data.groupIds);
+    // 處理按下 'Escape' 鍵
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            const openModalElement = document.querySelector('.modal:not(.hidden)');
+            if (openModalElement) {
+                closeModal(openModalElement.id);
             }
-        } catch (error) {
-            console.error("讀取交易歸屬失敗:", error);
-            showNotification('error', '讀取現有群組歸屬失敗。');
         }
-    }
+    });
 
-    // 等待異步的渲染函式完成
-    await renderGroupAttributionContent(includedGroupIds);
-    
-    const modalElement = document.getElementById('group-attribution-modal');
-    modalElement.classList.remove('hidden');
-    document.getElementById('confirm-attribution-btn').onclick = submitAttributionAndSaveTransaction;
-    document.getElementById('cancel-attribution-btn').onclick = () => closeModal('group-attribution-modal');
-}
-// ========================= 【核心修改 - 結束】 =========================
-
-
-export function closeModal(modalId) {
-    document.getElementById(modalId).classList.add('hidden');
+    // 【架構性修正】
+    // 先前版本中所有與特定表單（如交易、群組、股息）提交相關的事件監聽器
+    // (`transaction-form.addEventListener`, etc.) 都已被移除。
+    // 這些業務邏輯的職責現已完全轉移至各自的 `js/events/*.events.js` 模組中，
+    // 確保了此模組的單一職責與整個前端架構的一致性。
 }
 
-export function showConfirm(message, callback, title = '確認操作', cancelCallback = null) {
-    document.getElementById('confirm-title').textContent = title;
-    document.getElementById('confirm-message').textContent = message;
-    setState({ confirmCallback: callback });
-    document.getElementById('confirm-cancel-btn').onclick = cancelCallback || (() => hideConfirm());
-    document.getElementById('confirm-modal').classList.remove('hidden');
-}
-
-export function hideConfirm() {
-    setState({ confirmCallback: null });
-    document.getElementById('confirm-cancel-btn').onclick = () => hideConfirm();
-    document.getElementById('confirm-modal').classList.add('hidden');
-}
-
-export function toggleOptionalFields() {
-    const currency = document.getElementById('currency').value;
-    const exchangeRateField = document.getElementById('exchange-rate-field');
-    if (currency === 'TWD') {
-        exchangeRateField.style.display = 'none';
-    } else {
-        exchangeRateField.style.display = 'block';
-    }
-}
-
-document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-
-    const attributionModal = document.getElementById('group-attribution-modal');
-    if (!attributionModal.classList.contains('hidden')) {
-        e.preventDefault();
-        if (document.activeElement === document.getElementById('new-group-name-input')) {
-            document.getElementById('add-new-group-btn').click();
-        } else {
-            document.getElementById('confirm-attribution-btn').click();
-        }
-        return;
-    }
-
-    const membershipModal = document.getElementById('membership-editor-modal');
-    if (!membershipModal.classList.contains('hidden')) {
-        e.preventDefault();
-        document.getElementById('save-membership-btn').click();
-        return;
-    }
-});
+export {
+    openModal,
+    closeModal,
+    initializeModalEventListeners,
+};
