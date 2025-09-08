@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 批次操作 Action 處理模組 (batch.handler.js) v3.0 - 修改配息刪除邏輯
+// == 批次操作 Action 處理模組 (batch.handler.js) v3.1 - 修正配息刪除邏輯的唯一性衝突
 // =========================================================================================
 
 const { v4: uuidv4 } = require('uuid');
@@ -103,16 +103,13 @@ exports.submitBatch = async (uid, data, res) => {
                 }
                 // ========================= 【核心修改 - 開始】 =========================
                 else if (type === 'DELETE') {
-                    // 原行為: 物理刪除
-                    // dbOps.push({ sql: 'DELETE FROM user_dividends WHERE id = ? AND uid = ?', params: [divData.id, uid] });
-                    
-                    // 新行為: 刪除已確認的紀錄，並將其還原為一筆待確認紀錄
+                    // 新行為: 刪除已確認的紀錄，並嘗試將其還原為一筆待確認紀錄，如果已存在則忽略
                     dbOps.push({ 
                         sql: 'DELETE FROM user_dividends WHERE id = ? AND uid = ?', 
                         params: [divData.id, uid] 
                     });
                     dbOps.push({
-                        sql: 'INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        sql: 'INSERT OR IGNORE INTO user_pending_dividends (uid, symbol, ex_dividend_date, pay_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?, ?)',
                         params: [
                             uid,
                             divData.symbol,
