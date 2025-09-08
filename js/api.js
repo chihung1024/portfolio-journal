@@ -1,6 +1,6 @@
 // =========================================================================================
-// == 檔案：js/api.js (v_api_cleanup_2)
-// == 職責：封裝所有與後端 API 的通訊，並為「群組」管理提供標準化介面
+// == 檔案：js/api.js (v_arch_final_stage_1)
+// == 職責：封裝所有與後端 API 的通訊，並為「暫存區」批次處理提供標準化介面
 // =========================================================================================
 
 import { setPortfolio, setIsLoading, setIsRecalculating } from './state.js';
@@ -11,10 +11,6 @@ const API_BASE_URL = '/api';
 
 /**
  * 執行 API 請求的通用函式
- * @param {string} endpoint - API 端點路徑
- * @param {object} options - fetch 函式的選項
- * @returns {Promise<object>} - 解析後的 JSON 回應
- * @throws {Error} - 當網路回應不 ok 時拋出錯誤
  */
 async function fetchAPI(endpoint, options = {}) {
     const token = await getToken();
@@ -31,7 +27,6 @@ async function fetchAPI(endpoint, options = {}) {
         console.error(`API Error: ${response.status} ${response.statusText}`, errorData);
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
-    // 允許沒有回傳內容的 204 No Content 回應
     if (response.status === 204) {
         return {};
     }
@@ -74,106 +69,71 @@ async function recalculatePortfolio() {
     }
 }
 
-// ... [交易, 分割, 股息的 API 函式保持不變] ...
+// ... [交易, 分割, 股息, 群組的 API 函式保持不變] ...
 
 async function addTransaction(transactionData) {
-    await fetchAPI('/transactions', {
-        method: 'POST',
-        body: JSON.stringify(transactionData),
-    });
+    await fetchAPI('/transactions', { method: 'POST', body: JSON.stringify(transactionData) });
     await recalculatePortfolio(); 
 }
-
 async function updateTransaction(id, transactionData) {
-    await fetchAPI(`/transactions/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(transactionData),
-    });
+    await fetchAPI(`/transactions/${id}`, { method: 'PUT', body: JSON.stringify(transactionData) });
     await recalculatePortfolio();
 }
-
 async function deleteTransaction(id) {
     await fetchAPI(`/transactions/${id}`, { method: 'DELETE' });
     await recalculatePortfolio();
 }
-
 async function addSplit(splitData) {
-    await fetchAPI('/splits', {
-        method: 'POST',
-        body: JSON.stringify(splitData),
-    });
+    await fetchAPI('/splits', { method: 'POST', body: JSON.stringify(splitData) });
     await recalculatePortfolio();
 }
-
 async function updateSplit(id, splitData) {
-    await fetchAPI(`/splits/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(splitData),
-    });
+    await fetchAPI(`/splits/${id}`, { method: 'PUT', body: JSON.stringify(splitData) });
     await recalculatePortfolio();
 }
-
 async function deleteSplit(id) {
     await fetchAPI(`/splits/${id}`, { method: 'DELETE' });
     await recalculatePortfolio();
 }
-
 async function addDividend(dividendData) {
-    await fetchAPI('/dividends', {
-        method: 'POST',
-        body: JSON.stringify(dividendData),
-    });
+    await fetchAPI('/dividends', { method: 'POST', body: JSON.stringify(dividendData) });
     await recalculatePortfolio();
 }
-
 async function updateDividend(id, dividendData) {
-    await fetchAPI(`/dividends/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(dividendData),
-    });
+    await fetchAPI(`/dividends/${id}`, { method: 'PUT', body: JSON.stringify(dividendData) });
     await recalculatePortfolio();
 }
-
 async function deleteDividend(id) {
     await fetchAPI(`/dividends/${id}`, { method: 'DELETE' });
     await recalculatePortfolio();
 }
-
-// ========================= 【核心修正 - 開始】 =========================
-/**
- * 新增一個群組
- * @param {object} groupData - { name: string, symbols: string[] }
- */
 async function addGroup(groupData) {
-    await fetchAPI('/groups', {
-        method: 'POST',
-        body: JSON.stringify(groupData),
-    });
-    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+    await fetchAPI('/groups', { method: 'POST', body: JSON.stringify(groupData) });
+    await getPortfolio();
 }
-
-/**
- * 更新一個現有的群組
- * @param {string} id - 群組 ID
- * @param {object} groupData - { name: string, symbols: string[] }
- */
 async function updateGroup(id, groupData) {
-    await fetchAPI(`/groups/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(groupData),
-    });
-    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+    await fetchAPI(`/groups/${id}`, { method: 'PUT', body: JSON.stringify(groupData) });
+    await getPortfolio();
 }
-
-/**
- * 刪除一個群組
- * @param {string} id - 群組 ID
- */
 async function deleteGroup(id) {
     await fetchAPI(`/groups/${id}`, { method: 'DELETE' });
-    await getPortfolio(); // 依後端規範，僅刷新數據，不觸發重算
+    await getPortfolio();
 }
-// ========================= 【核心修正 - 結束】 =========================
+
+// ========================= 【最終架構修正 - 開始】 =========================
+/**
+ * 處理並提交暫存區的交易數據
+ * @param {Array<object>} stagedData - 從暫存區解析出的交易數據陣列
+ */
+async function processStagedTransactions(stagedData) {
+    // 批次新增交易是一項重大操作，完成後必須觸發一次完整的重算。
+    await fetchAPI('/batch/transactions', {
+        method: 'POST',
+        body: JSON.stringify(stagedData),
+    });
+    await recalculatePortfolio();
+}
+// ========================= 【最終架構修正 - 結束】 =========================
 
 async function forceRecalculate() {
     try {
@@ -203,9 +163,10 @@ export {
     addDividend,
     updateDividend,
     deleteDividend,
-    addGroup,      // <-- 導出新函式
-    updateGroup,   // <-- 導出新函式
-    deleteGroup,   // <-- 導出新函式
+    addGroup,
+    updateGroup,
+    deleteGroup,
+    processStagedTransactions, // <-- 導出新函式
     forceRecalculate,
 };
 
