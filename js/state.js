@@ -1,76 +1,101 @@
 // =========================================================================================
-// == 狀態管理模組 (state.js) v4.2.0 - Nested Collapse State
+// == 檔案：js/state.js (v_e2e_fix_2)
+// == 職責：管理前端應用的全域狀態，並確立後端為唯一可信的資料來源 (Single Source of Truth)
 // =========================================================================================
 
-// 應用程式的核心狀態
-let state = {
-    currentUserId: null,
+// 全局狀態物件，儲存從 API 獲取的所有數據
+const state = {
+    isAuthenticated: false,
+    user: null,
+    holdings: [],
+    summary: {},
     transactions: [],
-    userSplits: [],
-    marketDataForFrontend: {},
-    pendingDividends: [],
-    confirmedDividends: [],
-    holdings: {},
-    isAppInitialized: false,
-    chart: null,
-    twrChart: null,
-    netProfitChart: null, 
-    confirmCallback: null,
-
-    isSyncing: false,
-
-    // 用於引導式流程的暫存數據
-    tempTransactionData: null, // 儲存 { isEditing, txId, data: {...} }
-    tempMembershipEdit: null, // 儲存 { txId }
-
-    // 群組相關狀態
+    splits: [],
+    dividends: [],
     groups: [],
-    selectedGroupId: 'all',
-
-    // 平倉紀錄相關狀態
     closedPositions: [],
-    // ========================= 【核心修改 - 開始】 =========================
-    // 升級資料結構以支援巢狀摺疊。
-    // null: 全部收合
-    // { symbol: 'QQQ', expandedSales: new Set() }: QQQ 已展開，但其下的平倉交易全部收合
-    // { symbol: 'QQQ', expandedSales: new Set(['2025-04-23']) }: QQQ 已展開，且 4/23 的平倉交易也已展開
-    activeClosedPosition: null,
-    // ========================= 【核心修改 - 結束】 =========================
-
-
-    // 行動裝置 UI 狀態
-    mobileViewMode: localStorage.getItem('mobileViewMode') || 'list',
-    activeMobileHolding: null,
-
-    // 篩選與排序狀態
-    transactionFilter: 'all',
-    transactionsPerPage: 15, 
-    transactionsCurrentPage: 1, 
-    dividendFilter: 'all',
-    holdingsSort: {
-        key: 'marketValueTWD',
-        order: 'desc'
-    },
-
-    // 圖表相關狀態
-    portfolioHistory: {},
-    twrHistory: {},
-    benchmarkHistory: {},
-    netProfitHistory: {}, 
-    assetDateRange: { type: 'all', start: null, end: null },
-    twrDateRange: { type: 'all', start: null, end: null },
-    netProfitDateRange: { type: 'all', start: null, end: null } 
+    pendingDividends: [], // 【核心修正】: 新增屬性，用於儲存來自後端的待確認配息數據
+    isLoading: true,
+    isRecalculating: false,
+    error: null,
 };
 
-// 提供外部讀取狀態的方法
-export function getState() {
-    return state;
+// =========================================================================================
+// == Getters - 提供對 state 安全的唯讀訪問
+// =========================================================================================
+
+const getHoldings = () => state.holdings || [];
+const getSummary = () => state.summary || {};
+const getTransactions = () => state.transactions || [];
+const getSplits = () => state.splits || [];
+const getDividends = () => state.dividends || [];
+const getGroups = () => state.groups || [];
+const getClosedPositions = () => state.closedPositions || [];
+
+/**
+ * 【核心修正】: 簡化 getPendingDividends 函式
+ * 舊有的前端計算邏輯已被移除。此函式現在直接回傳由後端計算並提供的權威數據。
+ * 這種模式確保了數據的一致性，並降低了前端的複雜度。
+ * @returns {Array} - 待確認配息的陣列
+ */
+const getPendingDividends = () => state.pendingDividends || [];
+
+
+const getUser = () => state.user;
+const getIsLoading = () => state.isLoading;
+const getIsRecalculating = () => state.isRecalculating;
+
+// =========================================================================================
+// == Setters - 更新 state 並觸發 UI 重新渲染
+// =========================================================================================
+
+/**
+ * 設置並更新整個投資組合的數據
+ * @param {object} portfolioData - 從 /api/portfolio 獲取的完整數據包
+ */
+function setPortfolio(portfolioData) {
+    state.holdings = portfolioData.holdings || [];
+    state.summary = portfolioData.summary || {};
+    state.transactions = portfolioData.transactions || [];
+    state.splits = portfolioData.splits || [];
+    state.dividends = portfolioData.dividends || [];
+    state.groups = portfolioData.groups || [];
+    state.closedPositions = portfolioData.closedPositions || [];
+    // 【核心修正】: 將 API 回傳的 pendingDividends 存入 state
+    state.pendingDividends = portfolioData.pendingDividends || [];
 }
 
-// 提供外部更新狀態的方法
-export function setState(newState) {
-    if (newState.mobileViewMode && newState.mobileViewMode !== state.mobileViewMode) {
-        localStorage.setItem('mobileViewMode', newState.mobileViewMode);
-    }
-    state = { ...state, ...newState };
+function setIsLoading(isLoading) {
+    state.isLoading = isLoading;
+    document.dispatchEvent(new CustomEvent('state-updated'));
 }
+
+function setIsRecalculating(isRecalculating) {
+    state.isRecalculating = isRecalculating;
+    document.dispatchEvent(new CustomEvent('state-updated'));
+}
+
+function setAuth({ isAuthenticated, user }) {
+    state.isAuthenticated = isAuthenticated;
+    state.user = user;
+}
+
+// 導出模組
+export {
+    state,
+    getHoldings,
+    getSummary,
+    getTransactions,
+    getSplits,
+    getDividends,
+    getPendingDividends,
+    getGroups,
+    getClosedPositions,
+    getUser,
+    getIsLoading,
+    getIsRecalculating,
+    setPortfolio,
+    setIsLoading,
+    setIsRecalculating,
+    setAuth,
+};
