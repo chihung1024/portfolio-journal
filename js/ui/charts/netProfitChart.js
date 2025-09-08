@@ -1,82 +1,89 @@
 // =========================================================================================
-// == 淨利圖表模組 (netProfitChart.js) v2.1.0 (Accurate Interval Rebasing)
-// == 職責：處理累積淨利圖表的 UI 渲染與區間相對化。
+// == 檔案：js/ui/charts/netProfitChart.js (v_chart_refactor_5_final)
+// == 職責：作為一個純粹的渲染組件，負責接收預處理數據並繪製淨利歷史圖表
 // =========================================================================================
 
-import { getState, setState } from '../../state.js';
-import { formatNumber, filterHistoryByDateRange } from '../utils.js';
-import { baseChartOptions } from './chart.common.js';
+import { chartColors, commonChartOptions, CHART_INSTANCE_MAP } from './chart.common.js';
+import { formatCurrency } from '../utils.js';
 
 /**
- * 初始化淨利圖表
+ * 渲染淨利歷史圖表
+ * @param {object} historyData - 由邏輯協調器 (general.events.js) 傳入的、已過濾的歷史數據
  */
-export function initializeNetProfitChart() {
-    const options = {
-        ...baseChartOptions,
-        series: [{ name: '累積淨利', data: [] }],
-        yaxis: {
-            labels: {
-                formatter: (value) => formatNumber(value, 0)
-            }
-        },
-        fill: {
-            type: 'gradient',
-            gradient: {
-                shadeIntensity: 1,
-                opacityFrom: 0.7,
-                opacityTo: 0.3,
-                stops: [0, 90, 100]
-            }
-        },
-        tooltip: {
-            ...baseChartOptions.tooltip,
-            y: {
-                formatter: (value) => `TWD ${formatNumber(value, 0)}`
-            }
-        },
-        colors: ['#10b981']
-    };
-    const netProfitChart = new ApexCharts(document.querySelector("#net-profit-chart"), options);
-    netProfitChart.render();
-    setState({ netProfitChart });
-}
+function renderNetProfitChart(historyData) {
+    const canvas = document.getElementById('net-profit-chart');
+    if (!canvas) return;
 
-/**
- * 更新淨利圖表的數據
- * @param {string} seriesName - 要顯示在圖例上的系列名稱
- */
-export function updateNetProfitChart(seriesName = '累積淨利') {
-    const { netProfitChart, netProfitHistory, netProfitDateRange } = getState();
-    if (!netProfitChart) return;
-
-    const filteredHistory = filterHistoryByDateRange(netProfitHistory, netProfitDateRange);
-    if (!filteredHistory || Object.keys(filteredHistory).length === 0) {
-        netProfitChart.updateSeries([{ data: [] }]);
-        return;
+    // 【核心重構】: 移除所有內部數據獲取與過濾邏輯。
+    if (CHART_INSTANCE_MAP.netProfitChart) {
+        CHART_INSTANCE_MAP.netProfitChart.destroy();
     }
 
-    const sortedEntries = Object.entries(filteredHistory).sort((a, b) => new Date(a[0]) - new Date(b[0]));
-    
-    // ========================= 【核心修改 - 開始】 =========================
-    // 1. 找到篩選後區間的第一天
-    const firstDateInRangeStr = sortedEntries[0][0];
-    const firstDateInRange = new Date(firstDateInRangeStr);
+    if (!historyData || Object.keys(historyData).length === 0) {
+        canvas.style.display = 'none';
+        return;
+    }
+    canvas.style.display = 'block';
 
-    // 2. 計算出區間前一天的日期
-    const dayBeforeRange = new Date(firstDateInRange);
-    dayBeforeRange.setDate(dayBeforeRange.getDate() - 1);
-    const dayBeforeRangeStr = dayBeforeRange.toISOString().split('T')[0];
+    const labels = Object.keys(historyData);
+    const data = Object.values(historyData);
 
-    // 3. 從【未經篩選的】完整歷史數據中，尋找前一天的值作為基線
-    //    如果找不到 (代表選取區間已包含歷史起點)，則基線為 0。
-    const baseValue = netProfitHistory[dayBeforeRangeStr] || 0;
-    
-    // 4. 所有圖表上的點都減去這個基線值，確保區間第一天的損益能被如實呈現
-    const chartData = sortedEntries.map(([date, value]) => [
-        new Date(date).getTime(),
-        value - baseValue
-    ]);
-    // ========================= 【核心修改 - 結束】 =========================
+    // 根據數據是正或負，決定長條圖的顏色
+    const backgroundColors = data.map(value => value >= 0 ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)');
+    const borderColors = data.map(value => value >= 0 ? 'rgba(75, 192, 192, 1)' : 'rgba(255, 99, 132, 1)');
 
-    netProfitChart.updateSeries([{ name: seriesName, data: chartData }]);
+    const chartData = {
+        labels: labels,
+        datasets: [{
+            label: '淨利 (TWD)',
+            data: data,
+            backgroundColor: backgroundColors,
+            borderColor: borderColors,
+            borderWidth: 1
+        }]
+    };
+
+    const options = {
+        ...commonChartOptions,
+        plugins: {
+            ...commonChartOptions.plugins,
+            tooltip: {
+                ...commonChartOptions.plugins.tooltip,
+                callbacks: {
+                    label: function(context) {
+                        let label = context.dataset.label || '';
+                        if (label) {
+                            label += ': ';
+                        }
+                        if (context.parsed.y !== null) {
+                            label += formatCurrency(context.parsed.y, 'TWD');
+                        }
+                        return label;
+                    }
+                }
+            }
+        },
+        scales: {
+            y: {
+                ...commonChartOptions.scales.y,
+                ticks: {
+                    ...commonChartOptions.scales.y.ticks,
+                    callback: function(value) {
+                        return formatCurrency(value, 'TWD');
+                    }
+                }
+            },
+            x: {
+                ...commonChartOptions.scales.x,
+            }
+        }
+    };
+
+    CHART_INSTANCE_MAP.netProfitChart = new Chart(canvas, {
+        type: 'bar', // 淨利圖表使用長條圖
+        data: chartData,
+        options: options
+    });
 }
+
+export { renderNetProfitChart };
