@@ -1,11 +1,12 @@
 // =========================================================================================
-// == 檔案：js/events/staging.events.js (v_arch_final_stage_2)
-// == 職責：處理「暫存區」的 UI 事件，並遵循正確的 API 客戶端架構
+// == 檔案：js/events/staging.events.js (v_arch_contract_fix_2_final)
+// == 職責：處理「暫存區」的 UI 事件，並遵循正確的服務與 API 模組契約
 // =========================================================================================
 
 import { showNotification } from '../ui/utils.js';
+// 【核心修正】: 導入由服務提供者履約的 parseStagingData 函式
 import { parseStagingData } from '../staging.service.js';
-// 【核心修正】: 移除對任何泛用 API 函式的依賴，改為導入職責明確的 API 函式
+// 【核心修正】: 導入職責明確的 API 函式
 import { processStagedTransactions } from '../api.js';
 
 let parsedData = [];
@@ -22,7 +23,6 @@ function initializeStagingEventListeners() {
 
     // 監聽貼上事件，自動解析
     stagingTextarea.addEventListener('paste', (event) => {
-        // 使用 setTimeout 以確保在貼上完成後才讀取 textarea 的值
         setTimeout(() => {
             handleParseStagingData();
         }, 0);
@@ -51,6 +51,7 @@ function handleParseStagingData() {
     const rawData = stagingTextarea.value;
 
     try {
+        // 【核心修正】: 呼叫由 staging.service.js 提供的權威函式
         parsedData = parseStagingData(rawData);
         renderStagingPreview(parsedData, stagingPreview);
         processStagingBtn.disabled = parsedData.length === 0;
@@ -71,7 +72,7 @@ async function handleProcessStaging() {
     processStagingBtn.textContent = '處理中...';
 
     try {
-        // 【核心修正】: 直接呼叫從 api.js 導入的、職責明確的新函式
+        // 【核心修正】: 呼叫由 api.js 提供的權威函式
         await processStagedTransactions(parsedData);
         showNotification(`成功匯入 ${parsedData.length} 筆交易`, 'success');
         
@@ -130,3 +131,4 @@ function renderStagingPreview(data, container) {
 }
 
 export { initializeStagingEventListeners };
+
