@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.2.3 - Separate Dividend Fetching Fix)
+# == Python 週末完整校驗腳本 (v3.2 - Global Cache Invalidation)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -125,7 +125,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         print("沒有需要刷新的標的。")
         return False # 【修正】回傳狀態
 
-    print("步驟 1/4: 正在一次性查詢所有股票的交易狀態...")
+    print("步驟 1/3: 正在一次性查詢所有股票的交易狀態...")
     all_symbols_info_sql = """
         SELECT
             symbol,
@@ -138,7 +138,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     all_symbols_info = {row['symbol']: row for row in d1_query(all_symbols_info_sql)}
     print("查詢完成。")
 
-    print("\n步驟 2/4: 正在初始化臨時數據表...")
+    print("\n步驟 2/3: 正在初始化臨時數據表...")
     # Cloudflare D1 不支援 `CREATE TABLE LIKE`，所以我們手動定義結構
     # 同時，先清除上一次可能遺留的舊表和臨時表，確保一個乾淨的開始
     init_statements = [
@@ -158,14 +158,14 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     print("臨時表初始化成功。")
 
 
-    print("\n步驟 3/4: 開始分批次抓取 **價格** 數據並寫入臨時表...")
+    print("\n步驟 3/3: 開始分批次抓取並寫入數據到臨時表...")
     today_str = datetime.now().strftime('%Y-%m-%d')
     symbol_batches = [targets[i:i + batch_size] for i in range(0, len(targets), batch_size)]
 
     all_symbols_successfully_processed = []
 
     for i, batch in enumerate(symbol_batches):
-        print(f"\n--- 正在處理價格刷新批次 {i+1}/{len(symbol_batches)}: {batch} ---")
+        print(f"\n--- 正在處理完整刷新批次 {i+1}/{len(symbol_batches)}: {batch} ---")
         
         start_dates, end_dates = {}, {}
         symbols_to_fetch_in_batch = []
@@ -252,64 +252,24 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             
             is_fx = "=" in symbol
             price_table = "exchange_rates_temp" if is_fx else "price_history_temp"
+            dividend_table = "dividend_history_temp"
             
             price_rows = symbol_data[['Close']].reset_index()
             for _, row in price_rows.iterrows():
                 db_ops_to_temp.append({ "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
             
-            # 【核心修改】從這裡移除股利處理邏輯，因為它不可靠
-            # if not is_fx and 'Dividends' in symbol_data.columns:
-            #     ... (舊的程式碼已刪除) ...
+            if not is_fx and 'Dividends' in symbol_data.columns:
+                dividend_rows = symbol_data[symbol_data['Dividends'] > 0][['Dividends']].reset_index()
+                for _, row in dividend_rows.iterrows():
+                    db_ops_to_temp.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
             
             all_symbols_successfully_processed.append(symbol)
 
         if db_ops_to_temp:
-            print(f"正在為批次 {batch} 準備 {len(db_ops_to_temp)} 筆價格數據寫入臨時表...")
+            print(f"正在為批次 {batch} 準備 {len(db_ops_to_temp)} 筆數據寫入臨時表...")
             if not d1_batch(db_ops_to_temp):
                 print(f"FATAL: 將批次 {batch} 數據寫入臨時表失敗！腳本終止。")
                 return False # 【修正】回傳狀態
-
-    # ========================= 【全新增加的獨立股利抓取步驟 - 開始】 =========================
-    print("\n步驟 4/4: 開始獨立、逐一抓取 **股利** 數據並寫入臨時表...")
-    dividend_ops_to_temp = []
-    # 過濾掉匯率代碼，只處理股票
-    stock_targets = [s for s in targets if "=" not in s]
-    
-    for i, symbol in enumerate(stock_targets):
-        print(f"  -> ({i+1}/{len(stock_targets)}) 正在獨立查詢 [{symbol}] 的配息...")
-        try:
-            # 使用更可靠的 yf.Ticker().dividends 方法
-            ticker = yf.Ticker(symbol)
-            dividends = ticker.dividends
-            
-            # 篩選出有配息的紀錄 (dividends > 0)
-            if not dividends.empty:
-                dividend_rows = dividends[dividends > 0].reset_index()
-                if not dividend_rows.empty:
-                    print(f"    [成功] 找到 {symbol} 的 {len(dividend_rows)} 筆配息紀錄。")
-                    for _, row in dividend_rows.iterrows():
-                        # 使用您原始資料庫的欄位名稱 'date' 和 'dividend'
-                        dividend_ops_to_temp.append({
-                            "sql": "INSERT INTO dividend_history_temp (symbol, date, dividend) VALUES (?, ?, ?)",
-                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]
-                        })
-                else:
-                    print(f"    [注意] {symbol} 沒有大於零的配息紀錄。")
-            else:
-                print(f"    [注意] {symbol} 沒有回傳任何配息紀錄。")
-
-        except Exception as e:
-            # 捕捉任何可能的錯誤，印出訊息後繼續處理下一個
-            print(f"    [錯誤] 查詢 {symbol} 配息時發生問題: {e}")
-
-    if dividend_ops_to_temp:
-        print(f"\n正在準備將 {len(dividend_ops_to_temp)} 筆股利數據寫入臨時表...")
-        if not d1_batch(dividend_ops_to_temp):
-            print(f"FATAL: 將股利數據寫入臨時表失敗！腳本終止。")
-            return False
-    else:
-        print("\n未找到任何需要更新的股利數據。")
-    # ========================= 【全新增加的獨立股利抓取步驟 - 結束】 =========================
     
     print("\n所有批次數據已成功寫入臨時表。")
     print("準備執行原子性替換操作...")
@@ -394,7 +354,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.2.3 - Separate Dividend Fetching Fix) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.2 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         # 【核心修正】檢查數據刷新是否成功
