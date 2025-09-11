@@ -352,6 +352,13 @@ def trigger_recalculations(uids):
     else:
         print("觸發重算最終失敗。")
 
+    # 【新增】檢查重算後的待配息狀況
+    for uid in uids:
+        try:
+            pending_check = d1_query("SELECT COUNT(*) as count FROM user_pending_dividends WHERE uid = ?", [uid])
+            print(f"使用者 {uid} 重算後有 {pending_check[0]['count'] if pending_check else 0} 筆待確認配息")
+        except Exception as e:
+            print(f"檢查使用者 {uid} 待配息狀況時發生錯誤: {e}")
 
 if __name__ == "__main__":
     print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.2 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
