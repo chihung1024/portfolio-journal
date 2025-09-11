@@ -38,15 +38,15 @@ function prepareEvents(txs, splits, market, userDividends) {
             Object.entries(market[sym].dividends).forEach(([dateStr, amount]) => {
                 const dividendDate = toDate(dateStr);
                 if (confirmedDividendKeys.has(`${sym.toUpperCase()}_${dateStr}`)) return;
-                if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
-                    const payDate = new Date(dividendDate);
-                    payDate.setMonth(payDate.getMonth() + 1);
-                    evts.push({
-                        eventType: "implicit_dividend",
-                        date: payDate,
-                        ex_date: dividendDate,
-                        symbol: sym.toUpperCase(),
-                        amount_per_share: amount
+                    if (firstBuyDateMap[sym] && dividendDate >= firstBuyDateMap[sym] && amount > 0) {
+                        // const payDate = new Date(dividendDate); // REMOVED
+                        // payDate.setMonth(payDate.getMonth() + 1); // REMOVED
+                        evts.push({
+                            eventType: "implicit_dividend",
+                            date: dividendDate, // <--- 修改點：直接使用 dividendDate
+                            ex_date: dividendDate,
+                            symbol: sym.toUpperCase(),
+                            amount_per_share: amount
                     });
                 }
             });
