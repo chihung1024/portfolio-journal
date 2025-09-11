@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.2 - Global Cache Invalidation)
+# == Python 週末完整校驗腳本 (v3.3 - Hybrid Dividend Fetching)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -201,7 +201,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         latest_end_date_in_batch = max(end_dates.values())
         end_date_for_fetch = (datetime.strptime(latest_end_date_in_batch, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
-        print(f"準備從 yfinance 併發抓取數據 (迄日: {latest_end_date_in_batch})...")
+        print(f"準備從 yfinance 併發抓取 **股價** 數據 (迄日: {latest_end_date_in_batch})...")
         
         def yf_full_historical_func():
             return yf.download(
@@ -216,13 +216,14 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         
         data = robust_request(yf_full_historical_func, name="YFinance Full Historical Download")
         if data is None or data.empty:
-            print(f"警告: yfinance 沒有為批次 {batch} 回傳任何數據。跳過此批次。")
+            print(f"警告: yfinance 沒有為批次 {batch} 回傳任何股價數據。跳過此批次。")
             continue
 
-        print(f"成功抓取到數據，共 {len(data)} 筆時間紀錄。")
+        print(f"成功抓取到股價數據，共 {len(data)} 筆時間紀錄。")
         
         db_ops_to_temp = []
         
+        # --- 【第一部分：處理價格資料】 ---
         for symbol in symbols_to_fetch_in_batch:
             symbol_data = pd.DataFrame() 
 
@@ -231,7 +232,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                     symbol_data = data.loc[:, (slice(None), symbol)]
                     symbol_data.columns = symbol_data.columns.droplevel(1)
                 except KeyError:
-                    print(f"警告: 在 yfinance 回傳的多層級數據中找不到 {symbol} 的資料。")
+                    print(f"警告: 在 yfinance 回傳的多層級股價數據中找不到 {symbol} 的資料。")
                     continue
             elif len(symbols_to_fetch_in_batch) == 1:
                 symbol_data = data
@@ -247,26 +248,57 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(start_dates[symbol])) & (symbol_data.index <= pd.to_datetime(end_dates[symbol]))]
 
             if symbol_data.empty:
-                print(f"警告: {symbol} 在其指定的日期範圍內沒有有效數據。")
+                print(f"警告: {symbol} 在其指定的日期範圍內沒有有效股價數據。")
                 continue
             
             is_fx = "=" in symbol
             price_table = "exchange_rates_temp" if is_fx else "price_history_temp"
-            dividend_table = "dividend_history_temp"
             
             price_rows = symbol_data[['Close']].reset_index()
             for _, row in price_rows.iterrows():
                 db_ops_to_temp.append({ "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
             
-            if not is_fx and 'Dividends' in symbol_data.columns:
-                dividend_rows = symbol_data[symbol_data['Dividends'] > 0][['Dividends']].reset_index()
-                for _, row in dividend_rows.iterrows():
-                    db_ops_to_temp.append({"sql": f"INSERT INTO {dividend_table} (symbol, date, dividend) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Dividends']]})
-            
             all_symbols_successfully_processed.append(symbol)
+        
+        # --- 【第二部分：獨立、可靠地抓取配息資料】 ---
+        print(f"準備為批次中的非外匯標的逐一抓取 **配息** 數據...")
+        dividend_db_ops = []
+        for symbol in symbols_to_fetch_in_batch:
+            if "=" in symbol: # 跳過外匯
+                continue
+
+            print(f"  -> 正在為 {symbol} 抓取配息...")
+            start_date = start_dates[symbol]
+            end_date = end_dates[symbol]
+            
+            def yf_dividend_func():
+                ticker = yf.Ticker(symbol)
+                # yfinance 的 dividends 方法會包含 start 和 end，所以 end_date 不需 +1 天
+                return ticker.dividends(start=start_date, end=end_date)
+
+            dividends = robust_request(yf_dividend_func, name=f"YFinance Dividend for {symbol}")
+
+            if dividends is None or dividends.empty:
+                print(f"  -> {symbol} 在指定交易區間 ({start_date} to {end_date}) 內無配息紀錄。")
+                continue
+            
+            dividends = dividends[dividends > 0] # 確保只處理正數的配息
+            
+            if dividends.empty:
+                print(f"  -> {symbol} 在過濾掉零值後，已無配息紀錄。")
+                continue
+
+            print(f"  -> 成功為 {symbol} 抓取到 {len(dividends)} 筆配息紀錄。")
+            for date, dividend_value in dividends.items():
+                dividend_db_ops.append({
+                    "sql": "INSERT INTO dividend_history_temp (symbol, date, dividend) VALUES (?, ?, ?)",
+                    "params": [symbol, date.strftime('%Y-%m-%d'), dividend_value]
+                })
+
+        db_ops_to_temp.extend(dividend_db_ops)
 
         if db_ops_to_temp:
-            print(f"正在為批次 {batch} 準備 {len(db_ops_to_temp)} 筆數據寫入臨時表...")
+            print(f"正在為批次 {batch} 準備 {len(db_ops_to_temp)} 筆數據 (含價格與配息) 寫入臨時表...")
             if not d1_batch(db_ops_to_temp):
                 print(f"FATAL: 將批次 {batch} 數據寫入臨時表失敗！腳本終止。")
                 return False # 【修正】回傳狀態
@@ -354,7 +386,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.2 - Global Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.3 - Hybrid Dividend Fetching) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         # 【核心修正】檢查數據刷新是否成功
