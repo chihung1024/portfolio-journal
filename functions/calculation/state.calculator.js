@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION
+// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION (Currency Fix)
 // =========================================================================================
 
 const { toDate, findFxRate, getTotalCost, findNearest, isTwStock } = require('./helpers');
@@ -67,7 +67,14 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
         if (!state[sym]) {
             state[sym] = { lots: [], currency: e.currency || "USD" };
         }
-        state[sym].currency = e.currency;
+        
+        // ========================= 【核心修正 - 開始】 =========================
+        // 只有當事件本身帶有 currency 資訊時 (例如交易或手動確認的配息)，才更新狀態中的 currency。
+        // 這可以防止沒有 currency 資訊的事件 (如拆股、系統隱含配息) 意外地將其覆蓋為 null。
+        if (e.currency) {
+            state[sym].currency = e.currency;
+        }
+        // ========================= 【核心修正 - 結束】 =========================
 
         if (e.eventType === 'transaction') {
             const fx = findFxRate(market, e.currency, toDate(e.date));
