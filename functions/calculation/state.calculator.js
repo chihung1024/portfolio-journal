@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION
+// == 投資組合狀態計算模組 (state.calculator.js) - FINAL VERSION (FIXED)
 // =========================================================================================
 
 const { toDate, findFxRate, getTotalCost, findNearest, isTwStock } = require('./helpers');
@@ -22,7 +22,7 @@ function prepareEvents(txs, splits, market, userDividends) {
     ];
 
     const confirmedDividendKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-    
+
     userDividends.forEach(ud => {
         evts.push({
             eventType: 'confirmed_dividend',
@@ -67,7 +67,15 @@ function getPortfolioStateOnDate(allEvts, targetDate, market) {
         if (!state[sym]) {
             state[sym] = { lots: [], currency: e.currency || "USD" };
         }
-        state[sym].currency = e.currency;
+        
+        // ======================= 程式碼修改處 =======================
+        // 只有在事件(e)明確帶有 currency 屬性時，才更新 state 的幣別。
+        // 這可以防止 split (沒有 currency) 或 implicit_dividend (可能沒有 currency)
+        // 等事件錯誤地將已設定的幣別覆寫成 undefined/null。
+        if (e.currency) {
+            state[sym].currency = e.currency;
+        }
+        // ======================= 修改結束 =======================
 
         if (e.eventType === 'transaction') {
             const fx = findFxRate(market, e.currency, toDate(e.date));
