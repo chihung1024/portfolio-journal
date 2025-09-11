@@ -186,9 +186,9 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('dividend-tax-rate').value = record.tax_rate;
             document.getElementById('dividend-notes').value = record.notes || '';
         } else {
-            const payDate = new Date(record.ex_dividend_date);
-            payDate.setMonth(payDate.getMonth() + 1);
-            document.getElementById('dividend-pay-date').value = payDate.toISOString().split('T')[0];
+            // 直接使用除息日作為預設發放日
+            const payDateStr = record.ex_dividend_date.split('T')[0];
+            document.getElementById('dividend-pay-date').value = payDateStr;
             const taxRate = isTwStock(record.symbol) ? 0 : 30;
             document.getElementById('dividend-tax-rate').value = taxRate;
             document.getElementById('dividend-total-amount').value = (record.quantity_at_ex_date * record.amount_per_share * (1 - taxRate / 100)).toFixed(4);
