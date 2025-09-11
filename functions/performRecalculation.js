@@ -62,76 +62,42 @@ async function maintainSnapshots(uid, newFullHistory, evts, market, createSnapsh
 
 async function calculateAndCachePendingDividends(uid, txs, userDividends) {
     console.log(`[${uid}] 開始計算並快取待確認股息...`);
-    
     await d1Client.batch([{ sql: 'DELETE FROM user_pending_dividends WHERE uid = ?', params: [uid] }]);
-    
     if (!txs || txs.length === 0) {
         console.log(`[${uid}] 使用者無交易紀錄，無需快取股息。`);
         return;
     }
-    
     const allMarketDividends = await d1Client.query('SELECT * FROM dividend_history ORDER BY date ASC');
-    
     if (!allMarketDividends || allMarketDividends.length === 0) {
         console.log(`[${uid}] 無市場股息資料，無需快取。`);
         return;
     }
-    
     const confirmedKeys = new Set(userDividends.map(d => `${d.symbol.toUpperCase()}_${d.ex_dividend_date.split('T')[0]}`));
-    
-    // 【修復】預先建立完整的持股歷史記錄
-    const holdingsHistory = {};
-    const sortedTxs = [...txs].sort((a, b) => new Date(a.date) - new Date(b.date));
-    
-    // 【修復】計算每日持股狀況
-    sortedTxs.forEach(tx => {
-        const dateStr = tx.date.split('T')[0];
-        const symbol = tx.symbol.toUpperCase();
-        
-        if (!holdingsHistory[dateStr]) {
-            holdingsHistory[dateStr] = {};
-        }
-        
-        if (!holdingsHistory[dateStr][symbol]) {
-            // 繼承前一日持股
-            const prevDate = getPreviousDate(dateStr, holdingsHistory);
-            holdingsHistory[dateStr][symbol] = prevDate ? (holdingsHistory[prevDate][symbol] || 0) : 0;
-        }
-        
-        // 更新持股
-        const change = tx.type === 'buy' ? tx.quantity : -tx.quantity;
-        holdingsHistory[dateStr][symbol] += change;
-    });
-    
+    const holdings = {};
+    let txIndex = 0;
     const pendingDividends = [];
     const uniqueSymbolsInTxs = [...new Set(txs.map(t => t.symbol.toUpperCase()))];
-    
     allMarketDividends.forEach(histDiv => {
         const divSymbol = histDiv.symbol.toUpperCase();
         if (!uniqueSymbolsInTxs.includes(divSymbol)) return;
-        
         const exDateStr = histDiv.date.split('T')[0];
         if (confirmedKeys.has(`${divSymbol}_${exDateStr}`)) return;
-        
-        // 【修復】正確計算除息日前一天的持股
         const exDateMinusOne = new Date(exDateStr);
         exDateMinusOne.setDate(exDateMinusOne.getDate() - 1);
-        const holdingDateStr = exDateMinusOne.toISOString().split('T')[0];
-        
-        const quantity = getHoldingOnDate(holdingDateStr, divSymbol, holdingsHistory);
-        
+        while (txIndex < txs.length && new Date(txs[txIndex].date) <= exDateMinusOne) {
+            const tx = txs[txIndex];
+            holdings[tx.symbol.toUpperCase()] = (holdings[tx.symbol.toUpperCase()] || 0) + (tx.type === 'buy' ? tx.quantity : -tx.quantity);
+            txIndex++;
+        }
+        const quantity = holdings[divSymbol] || 0;
         if (quantity > 0.00001) {
             const currency = txs.find(t => t.symbol.toUpperCase() === divSymbol)?.currency || (isTwStock(divSymbol) ? 'TWD' : 'USD');
             pendingDividends.push({
-                symbol: divSymbol, 
-                ex_dividend_date: exDateStr, 
-                amount_per_share: histDiv.dividend,
-                quantity_at_ex_date: quantity, 
-                currency: currency
+                symbol: divSymbol, ex_dividend_date: exDateStr, amount_per_share: histDiv.dividend,
+                quantity_at_ex_date: quantity, currency: currency
             });
         }
     });
-    
     if (pendingDividends.length > 0) {
         const dbOps = pendingDividends.map(p => ({
             sql: `INSERT INTO user_pending_dividends (uid, symbol, ex_dividend_date, amount_per_share, quantity_at_ex_date, currency) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -139,28 +105,7 @@ async function calculateAndCachePendingDividends(uid, txs, userDividends) {
         }));
         await d1Client.batch(dbOps);
     }
-    
     console.log(`[${uid}] 成功快取 ${pendingDividends.length} 筆待確認股息。`);
-}
-
-// 輔助函數
-function getPreviousDate(dateStr, holdingsHistory) {
-    const dates = Object.keys(holdingsHistory).sort();
-    const currentIndex = dates.indexOf(dateStr);
-    return currentIndex > 0 ? dates[currentIndex - 1] : null;
-}
-
-function getHoldingOnDate(targetDate, symbol, holdingsHistory) {
-    // 找到目標日期或之前最近的持股記錄
-    const availableDates = Object.keys(holdingsHistory).sort().reverse();
-    
-    for (const dateStr of availableDates) {
-        if (dateStr <= targetDate && holdingsHistory[dateStr][symbol] !== undefined) {
-            return holdingsHistory[dateStr][symbol];
-        }
-    }
-    
-    return 0;
 }
 
 async function performRecalculation(uid, modifiedTxDate = null, createSnapshot = false) {
