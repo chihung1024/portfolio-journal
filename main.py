@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 每日增量更新腳本 (v7.0 - Precision Cache Invalidation)
+# == Python 每日增量更新腳本 (v7.1 - Atomic Intraday Update)
 # =========================================================================================
 
 import os
@@ -99,6 +99,7 @@ def get_current_market_session():
         if is_tpe_weekday and is_tpe_time:
             return 'TPE'
 
+        # 注意：此處判斷美股時間可能需要根據夏令時調整，為簡化暫不處理
         is_us_evening = time(21, 30) <= time_taipei and is_tpe_weekday
         is_us_morning = time_taipei <= time(4, 0) and (0 < weekday_taipei < 6)
         
@@ -118,6 +119,7 @@ def fetch_intraday_prices(symbols):
         return {}
     
     def yf_intraday_func():
+        # 抓取最近兩天的數據以增加獲取有效價格的成功率
         return yf.download(tickers=symbols, period="2d", interval="1m", progress=False, auto_adjust=False, back_adjust=False)
     
     data = robust_request(yf_intraday_func, name="YFinance Intraday Download")
@@ -129,6 +131,7 @@ def fetch_intraday_prices(symbols):
     latest_prices, skipped_symbols = {}, {}
     
     if isinstance(data.columns, pd.MultiIndex):
+        # 將 symbol level 轉為大寫以進行不區分大小寫的匹配
         data.columns = data.columns.set_levels([lvl.upper() for lvl in data.columns.levels[1]], level=1)
         data.columns = data.columns.swaplevel(0, 1)
     
@@ -141,6 +144,7 @@ def fetch_intraday_prices(symbols):
                 skipped_symbols[symbol] = "yfinance 回傳數據無效或為空"
                 continue
 
+            # 找到最後一個非空的收盤價
             last_valid_row = symbol_data.dropna(subset=['Close']).iloc[-1]
             last_price = last_valid_row['Close']
             last_timestamp = last_valid_row.name 
@@ -149,20 +153,23 @@ def fetch_intraday_prices(symbols):
                 skipped_symbols[symbol] = f"最新的價格值為無效數字(NaN)"
                 continue
 
+            # 判斷市場時區
             is_fx = "=" in symbol
             is_tw_stock = '.TW' in symbol or '.TWO' in symbol
             market_tz = tz_taipei if is_tw_stock or is_fx else tz_ny
             
+            # 轉換時間戳到對應的市場時區，並只取日期部分
             price_date_in_market_tz = last_timestamp.tz_convert(market_tz).date()
             today_in_market_tz = datetime.now(market_tz).date()
 
+            # 確保數據是今天的
             if price_date_in_market_tz == today_in_market_tz:
                 print(f"  [成功] {symbol}: 價格 {last_price:.4f} @ {price_date_in_market_tz.strftime('%Y-%m-%d')}")
                 latest_prices[symbol] = {"price": last_price, "date": price_date_in_market_tz.strftime('%Y-%m-%d')}
             else:
                 skipped_symbols[symbol] = f"數據日期過舊 ({price_date_in_market_tz})"
         except KeyError:
-             skipped_symbols[symbol] = "未在 yfinance 回應中找到"
+            skipped_symbols[symbol] = "未在 yfinance 回應中找到"
     
     print("\n--- 即時更新階段總結 ---")
     if latest_prices:
@@ -175,7 +182,6 @@ def fetch_intraday_prices(symbols):
     
     return latest_prices
 
-# ========================= 【核心修改 - 開始】 =========================
 def fetch_and_append_market_data(all_symbols, session, batch_size=10):
     if not all_symbols:
         return set(), set() # 回傳空的集合
@@ -212,6 +218,7 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
             symbol_upper = symbol.upper()
             latest_date_str = latest_dates.get(symbol_upper)
 
+            # 只抓取今天之前的歷史數據
             if not latest_date_str or latest_date_str < today_str:
                 start_date = (datetime.strptime(latest_date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d') if latest_date_str else first_tx_dates.get(symbol_upper, "2000-01-01")
                 
@@ -278,21 +285,24 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
                     coverage_updates.append({"sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)", "params": [symbol, first_tx_dates.get(symbol), today_str]})
             if coverage_updates and not d1_batch(coverage_updates, api_key=D1_API_KEY): print(f"警告: 更新批次 {batch} 的 market_data_coverage 狀態失敗。")
     
-    # --- 即時數據處理邏輯 ---
+    # ========================= 【核心修改 - 開始】 =========================
+    # --- 即時數據處理邏輯 (All-or-Nothing) ---
     if session != 'CLOSED':
         symbols_for_intraday = []
         if session == 'TPE':
-            print("篩選目標：僅處理台股 (.TW, .TWO) 及匯率相關標的。")
+            print("\n篩選目標：僅處理台股 (.TW, .TWO) 及匯率相關標的進行盤中更新。")
             symbols_for_intraday = [s for s in all_symbols if s.upper().endswith(('.TW', '.TWO')) or '=' in s]
         elif session == 'NYSE':
-            print("篩選目標：僅處理非台股的美股及其他國際市場標的。")
+            print("\n篩選目標：僅處理非台股的美股及其他國際市場標的進行盤中更新。")
             symbols_for_intraday = [s for s in all_symbols if not s.upper().endswith(('.TW', '.TWO'))]
         
         if symbols_for_intraday:
             latest_prices_info = fetch_intraday_prices(symbols_for_intraday)
-            if latest_prices_info:
+            
+            # 【修改點】檢查是否所有請求的標的都成功獲取了價格
+            if latest_prices_info and len(latest_prices_info) == len(symbols_for_intraday):
+                print(f"\n[數據完整] 成功獲取所有 {len(symbols_for_intraday)} 筆盤中價格，準備批次寫入資料庫...")
                 intraday_db_ops = []
-                print(f"\n準備將 {len(latest_prices_info)} 筆盤中價格寫入資料庫...")
                 for symbol, info in latest_prices_info.items():
                     symbol_upper = symbol.upper()
                     is_fx = "=" in symbol_upper
@@ -305,18 +315,25 @@ def fetch_and_append_market_data(all_symbols, session, batch_size=10):
                 if intraday_db_ops:
                     if d1_batch(intraday_db_ops, api_key=D1_API_KEY):
                         print("資料庫批次寫入請求已成功發送！")
+                        # 只有在寫入成功後，才將這些標的加入待更新列表
                         for sym in latest_prices_info.keys():
                             if "=" in sym:
                                 updated_fx_symbols.add(sym.upper())
                             else:
                                 updated_stock_symbols.add(sym.upper())
                     else:
-                        print("FATAL: 資料庫批次寫入請求失敗！")
+                        print("FATAL: 資料庫批次寫入請求失敗！(盤中更新)")
+            elif latest_prices_info:
+                 # 【修改點】如果數據不完整，則放棄本次更新
+                 print(f"\n[數據不完整] 警告: 盤中價格獲取不完整 (預期 {len(symbols_for_intraday)}, 實際 {len(latest_prices_info)})。為確保數據一致性，本次將跳過盤中更新。")
+            else:
+                print("\n未獲取到任何可用的盤中價格數據，跳過盤中更新。")
+
     else:
         print("\n--- 【即時更新階段】跳過：市場休市中。 ---")
+    # ========================= 【核心修改 - 結束】 =========================
         
     return updated_stock_symbols, updated_fx_symbols
-
 
 def invalidate_caches_precisely(updated_stocks, updated_fx):
     """根據更新的股票和匯率，精準地將相關的群組標記為 dirty"""
@@ -387,8 +404,6 @@ def invalidate_caches_precisely(updated_stocks, updated_fx):
     else:
         print("沒有找到任何需要標記為 dirty 的群組。")
 
-# ========================= 【核心修改 - 結束】 =========================
-
 def trigger_recalculations(uids):
     if not uids: print("沒有找到需要觸發重算的使用者。"); return
     if not GCP_API_URL or not GCP_API_KEY: print("警告: 缺少 GCP_API_URL 或 GCP_API_KEY，跳過觸發重算。"); return
@@ -408,7 +423,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行每日市場數據增量更新腳本 (v7.0 - Precision Cache Invalidation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行每日市場數據增量更新腳本 (v7.1 - Atomic Intraday Update) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     session = get_current_market_session()
     print(f"偵測到當前市場時段: {session}")
     all_symbols, all_uids = get_update_targets()
@@ -418,11 +433,13 @@ if __name__ == "__main__":
         # 【修改】接收回傳的已更新標的
         updated_stocks, updated_fx = fetch_and_append_market_data(all_symbols, session)
         
-        # 【修改】執行精準快取失效
-        invalidate_caches_precisely(updated_stocks, updated_fx)
-
-        if all_uids: 
-            trigger_recalculations(all_uids)
+        # 只有在真的有數據更新時，才觸發後續操作
+        if updated_stocks or updated_fx:
+            invalidate_caches_precisely(updated_stocks, updated_fx)
+            if all_uids: 
+                trigger_recalculations(all_uids)
+        else:
+            print("\n本次執行未更新任何市場價格數據，無需觸發重算。")
     else:
         print("資料庫中沒有找到任何需要處理的標的。")
     print(f"--- 每日市場數據增量更新腳本執行完畢 --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
