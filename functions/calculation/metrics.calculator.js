@@ -363,7 +363,9 @@ function calculateCoreMetrics(evts, market) {
         if (!pf[sym]) {
             pf[sym] = { lots: [], currency: e.currency || "USD", realizedPLTWD: 0 };
         }
-        pf[sym].currency = e.currency;
+        if (e.currency) {
+            pf[sym].currency = e.currency;
+        }
 
         switch (e.eventType) {
             case "transaction": {
