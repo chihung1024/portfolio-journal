@@ -1,271 +1,294 @@
-const { z } = require("zod");
-const { getDb } = require("../d1.client");
-const { groupSchema, groupIdSchema, updateGroupMembersSchema } = require("../schemas");
-const { runCalculationEngine } = require("../calculation/engine");
+// =========================================================================================
+// == 檔案：functions/api_handlers/group.handler.js (v3.2 - Group Transactions Sync)
+// == 職責：處理所有與群組管理和按需計算相關的 API Action
+// =========================================================================================
+
+const { v4: uuidv4 } = require('uuid');
+const { d1Client } = require('../d1.client');
+const { runCalculationEngine } = require('../calculation/engine');
+
+// ========================= 【核心修改 - 開始】 =========================
+/**
+ * 【新增】按需計算指定群組的核心邏輯函式
+ * @param {string} uid - 使用者 ID
+ * @param {string} groupId - 要計算的群組 ID
+ * @returns {Promise<object|null>} - 計算成功則回傳包含 portfolio 數據的物件，否則回傳 null
+ */
+async function calculateGroupOnDemandCore(uid, groupId) {
+    if (!groupId) {
+        console.error(`[${uid}] calculateGroupOnDemandCore 缺少 groupId。`);
+        return null;
+    }
+    console.log(`--- [${uid}|G:${groupId.substring(0,4)}] 核心計算程序開始 ---`);
+
+    const groupStatusResult = await d1Client.query('SELECT is_dirty FROM groups WHERE id = ? AND uid = ?', [groupId, uid]);
+
+    if (groupStatusResult.length > 0 && groupStatusResult[0].is_dirty === 0) {
+        const cachedResult = await d1Client.query('SELECT cache_data FROM group_cache WHERE group_id = ? AND uid = ?', [groupId, uid]);
+        if (cachedResult.length > 0 && cachedResult[0].cache_data) {
+            console.log(`[Cache HIT] for group ${groupId}. 直接回傳快取結果。`);
+            return JSON.parse(cachedResult[0].cache_data);
+        }
+    }
+
+    console.log(`[Cache MISS or DIRTY] for group ${groupId}. 執行完整計算...`);
+
+    const involvedSymbolsResult = await d1Client.query(
+        'SELECT DISTINCT t.symbol FROM transactions t JOIN group_transaction_inclusions g ON t.id = g.transaction_id WHERE g.uid = ? AND g.group_id = ?',
+        [uid, groupId]
+    );
+    const involvedSymbols = involvedSymbolsResult.map(r => r.symbol);
+
+    if (involvedSymbols.length === 0) {
+        // 【修改】即使群組為空，也要回傳一個結構完整的空物件
+        const emptyData = { 
+            holdings: [], 
+            summary: {}, 
+            history: {}, 
+            twrHistory: {}, 
+            netProfitHistory: {}, 
+            benchmarkHistory: {},
+            transactions: [] // 新增
+        };
+        await d1Client.query('UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?', [groupId, uid]);
+        return emptyData;
+    }
+
+    const placeholders = involvedSymbols.map(() => '?').join(',');
+    const allTxsForInvolvedSymbols = await d1Client.query(
+        `SELECT * FROM transactions WHERE uid = ? AND symbol IN (${placeholders}) ORDER BY date ASC`,
+        [uid, ...involvedSymbols]
+    );
+
+    const inclusionIdsResult = await d1Client.query(
+        'SELECT transaction_id FROM group_transaction_inclusions WHERE uid = ? AND group_id = ?',
+        [uid, groupId]
+    );
+    const inclusionTxIds = new Set(inclusionIdsResult.map(r => r.transaction_id));
+    const txsForEngine = allTxsForInvolvedSymbols.filter(tx => inclusionTxIds.has(tx.id));
+
+    const [allUserSplits, allUserDividends, controlsData] = await Promise.all([
+        d1Client.query('SELECT * FROM splits WHERE uid = ?', [uid]),
+        d1Client.query('SELECT * FROM user_dividends WHERE uid = ?', [uid]),
+        d1Client.query('SELECT value FROM controls WHERE uid = ? AND key = ?', [uid, 'benchmarkSymbol'])
+    ]);
+
+    const benchmarkSymbol = controlsData.length > 0 ? controlsData[0].value : 'SPY';
+
+    const result = await runCalculationEngine(
+        txsForEngine,
+        allUserSplits,
+        allUserDividends,
+        benchmarkSymbol
+    );
+
+    const responseData = {
+        holdings: Object.values(result.holdingsToUpdate),
+        summary: result.summaryData,
+        history: result.fullHistory,
+        twrHistory: result.twrHistory,
+        benchmarkHistory: result.benchmarkHistory,
+        netProfitHistory: result.netProfitHistory,
+        transactions: txsForEngine.sort((a, b) => new Date(b.date) - new Date(a.date)) // 【新增】將用於計算的交易紀錄回傳
+    };
+
+    const cacheOps = [
+        {
+            sql: 'INSERT OR REPLACE INTO group_cache (group_id, uid, cached_at, cache_data) VALUES (?, ?, ?, ?)',
+            params: [groupId, uid, new Date().toISOString(), JSON.stringify(responseData)]
+        },
+        {
+            sql: 'UPDATE groups SET is_dirty = 0 WHERE id = ? AND uid = ?',
+            params: [groupId, uid]
+        }
+    ];
+    await d1Client.batch(cacheOps);
+    console.log(`[Cache WRITE] for group ${groupId}. 快取已更新。`);
+    console.log(`--- [${uid}|G:${groupId.substring(0,4)}] 核心計算程序完成 ---`);
+    return responseData;
+}
+
+// 將核心邏輯導出
+exports.calculateGroupOnDemandCore = calculateGroupOnDemandCore;
+// ========================= 【核心修改 - 結束】 =========================
+
 
 /**
- * 獲取所有群組的基本資訊
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
+ * 獲取使用者建立的所有群組
  */
-exports.getGroups = async (req, res) => {
-    const { uid } = req.user;
-    try {
-        const db = getDb();
-        const { results } = await db
-            .prepare(
-                `
-                SELECT 
-                    g.id, 
-                    g.name, 
-                    g.description, 
-                    g.is_dirty,
-                    COUNT(DISTINCT t.symbol) as unique_symbols_count,
-                    COUNT(tgm.transaction_id) as transactions_count
-                FROM groups g
-                LEFT JOIN transaction_group_memberships tgm ON g.id = tgm.group_id
-                LEFT JOIN transactions t ON tgm.transaction_id = t.id AND t.uid = ?1
-                WHERE g.uid = ?1
-                GROUP BY g.id, g.name, g.description, g.is_dirty
-                ORDER BY g.created_at DESC
-                `
-            )
-            .bind(uid)
-            .all();
-        res.status(200).json(results);
-    } catch (error) {
-        console.error("Error fetching groups:", error);
-        res.status(500).json({
-            message: "無法獲取群組列表",
-            error: error.message,
-        });
-    }
+exports.getGroups = async (uid, res) => {
+    const groupsResult = await d1Client.query('SELECT * FROM groups WHERE uid = ? ORDER BY created_at DESC', [uid]);
+    const inclusionsResult = await d1Client.query('SELECT g.group_id, t.symbol FROM group_transaction_inclusions g JOIN transactions t ON g.transaction_id = t.id WHERE g.uid = ?', [uid]);
+
+    const groupMap = {};
+    groupsResult.forEach(group => {
+        groupMap[group.id] = { ...group, symbols: new Set(), transaction_count: 0 };
+    });
+
+    inclusionsResult.forEach(inc => {
+        if (groupMap[inc.group_id]) {
+            groupMap[inc.group_id].symbols.add(inc.symbol);
+            groupMap[inc.group_id].transaction_count++;
+        }
+    });
+
+    const finalGroups = Object.values(groupMap).map(g => ({
+        ...g,
+        symbols: Array.from(g.symbols)
+    }));
+
+    return res.status(200).send({
+        success: true,
+        data: finalGroups
+    });
 };
 
 /**
- * 儲存（新增或更新）一個群組
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
+ * 獲取單一特定群組的詳細資訊 (包含成員ID)
  */
-exports.saveGroup = async (req, res) => {
-    const { uid } = req.user;
-    const { id, name, description } = groupSchema.parse(req.body);
-
-    try {
-        const db = getDb();
-        if (id) {
-            // 更新現有群組
-            await db
-                .prepare("UPDATE groups SET name = ?, description = ? WHERE id = ? AND uid = ?")
-                .bind(name, description || null, id, uid)
-                .run();
-            res.status(200).json({ message: "群組已更新", id });
-        } else {
-            // 新增群組
-            const { meta } = await db
-                .prepare("INSERT INTO groups (uid, name, description) VALUES (?, ?, ?)")
-                .bind(uid, name, description || null)
-                .run();
-            const lastId = meta.last_row_id;
-            res.status(201).json({ message: "群組已建立", id: lastId });
-        }
-    } catch (error) {
-        console.error("Error saving group:", error);
-        res.status(500).json({ message: "儲存群組失敗", error: error.message });
+exports.getGroupDetails = async (uid, data, res) => {
+    const { groupId } = data;
+    if (!groupId) {
+        return res.status(400).send({ success: false, message: '缺少 groupId。' });
     }
+
+    const [groupInfoResult, inclusionIdsResult] = await Promise.all([
+        d1Client.query('SELECT * FROM groups WHERE id = ? AND uid = ?', [groupId, uid]),
+        d1Client.query('SELECT transaction_id FROM group_transaction_inclusions WHERE group_id = ? AND uid = ?', [groupId, uid])
+    ]);
+
+    if (groupInfoResult.length === 0) {
+        return res.status(404).send({ success: false, message: '找不到指定的群組。' });
+    }
+
+    const groupDetails = {
+        ...groupInfoResult[0],
+        included_transaction_ids: inclusionIdsResult.map(row => row.transaction_id)
+    };
+
+    return res.status(200).send({ success: true, data: groupDetails });
+};
+
+/**
+ * 獲取單一交易紀錄的群組歸屬情況
+ */
+exports.getTransactionMemberships = async (uid, data, res) => {
+    const { transactionId } = data;
+    if (!transactionId) {
+        return res.status(400).send({ success: false, message: '缺少 transactionId。' });
+    }
+    const results = await d1Client.query(
+        'SELECT group_id FROM group_transaction_inclusions WHERE transaction_id = ? AND uid = ?',
+        [transactionId, uid]
+    );
+    const groupIds = results.map(row => row.group_id);
+    return res.status(200).send({ success: true, data: { groupIds } });
+};
+
+
+/**
+ * 儲存一個群組（新增或編輯），採用顯性歸因模型
+ */
+exports.saveGroup = async (uid, data, res) => {
+    const { id, name, description, transactionIds } = data;
+    const groupId = id || uuidv4();
+
+    if (id) {
+        await d1Client.query('UPDATE groups SET name = ?, description = ?, is_dirty = 1 WHERE id = ? AND uid = ?', [name, description, id, uid]);
+    } else {
+        await d1Client.query('INSERT INTO groups (id, uid, name, description, is_dirty) VALUES (?, ?, ?, ?, 1)', [groupId, uid, name, description]);
+    }
+
+    const transactionOps = [];
+    transactionOps.push({
+        sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND group_id = ?',
+        params: [uid, groupId]
+    });
+    if (transactionIds && transactionIds.length > 0) {
+        transactionIds.forEach(txId => {
+            transactionOps.push({
+                sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)',
+                params: [uid, groupId, txId]
+            });
+        });
+    }
+
+    await d1Client.batch(transactionOps);
+
+    return res.status(200).send({ success: true, message: '群組已儲存。', groupId });
 };
 
 /**
  * 刪除一個群組
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
  */
-exports.deleteGroup = async (req, res) => {
-    const { uid } = req.user;
-    const { id } = groupIdSchema.parse(req.body);
+exports.deleteGroup = async (uid, data, res) => {
+    const { groupId } = data;
+    
+    const deleteOps = [
+        {
+            sql: 'DELETE FROM group_cache WHERE group_id = ? AND uid = ?',
+            params: [groupId, uid]
+        },
+        {
+            sql: 'DELETE FROM group_transaction_inclusions WHERE group_id = ? AND uid = ?',
+            params: [groupId, uid]
+        },
+        {
+            sql: 'DELETE FROM groups WHERE id = ? AND uid = ?',
+            params: [groupId, uid]
+        }
+    ];
+    await d1Client.batch(deleteOps);
 
-    try {
-        const db = getDb();
-        // 使用交易來確保資料一致性
-        await db.batch([
-            db.prepare("DELETE FROM transaction_group_memberships WHERE group_id = ? AND EXISTS (SELECT 1 FROM groups WHERE id = ? AND uid = ?)"),
-            db.prepare("DELETE FROM groups WHERE id = ? AND uid = ?"),
-        ]);
+    return res.status(200).send({ success: true, message: '群組已刪除。' });
+};
 
-        // 執行批次操作
-        await db.batch([
-            db.prepare("DELETE FROM transaction_group_memberships WHERE group_id = ?").bind(id),
-            db.prepare("DELETE FROM groups WHERE id = ? AND uid = ?").bind(id, uid),
-        ]);
 
-        res.status(200).json({ message: "群組已刪除" });
-    } catch (error) {
-        console.error("Error deleting group:", error);
-        res.status(500).json({ message: "刪除群組失敗", error: error.message });
+/**
+ * 【API 端點】按需計算指定群組的投資組合狀態
+ */
+exports.calculateGroupOnDemand = async (uid, data, res) => {
+    const { groupId } = data;
+    const resultData = await calculateGroupOnDemandCore(uid, groupId);
+
+    if (resultData) {
+        return res.status(200).send({ success: true, data: resultData });
+    } else {
+        return res.status(400).send({ success: false, message: '計算群組績效失敗。' });
     }
 };
 
 /**
- * 按需計算特定群組的投資組合數據
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
+ * 更新單一交易在所有群組中的成員資格
  */
-exports.calculateGroupOnDemand = async (req, res) => {
-    const { uid } = req.user;
-    const { groupId } = z.object({ groupId: z.number().int() }).parse(req.body);
+exports.updateTransactionGroupMembership = async (uid, data, res) => {
+    const { transactionId, groupIds } = data;
 
-    try {
-        const db = getDb();
-        // 檢查群組是否存在且屬於該使用者
-        const group = await db.prepare("SELECT * FROM groups WHERE id = ? AND uid = ?").bind(groupId, uid).first();
-        if (!group) {
-            return res.status(404).json({ message: "找不到指定的群組" });
-        }
+    const updateOps = [];
+    updateOps.push({
+        sql: 'DELETE FROM group_transaction_inclusions WHERE uid = ? AND transaction_id = ?',
+        params: [uid, transactionId]
+    });
 
-        // 檢查快取
-        if (!group.is_dirty) {
-            const cachedResult = await db.prepare("SELECT result FROM group_cache WHERE group_id = ?").bind(groupId).first("result");
-            if (cachedResult) {
-                return res.status(200).json(JSON.parse(cachedResult));
-            }
-        }
-
-        // 快取未命中或已髒，執行重新計算
-        const transactions = await db
-            .prepare(
-                `
-                SELECT t.* FROM transactions t
-                JOIN transaction_group_memberships tgm ON t.id = tgm.transaction_id
-                WHERE tgm.group_id = ? AND t.uid = ?
-                `
-            )
-            .bind(groupId, uid)
-            .all()
-            .then((res) => res.results);
-
-        // 如果群組內沒有任何交易，回傳一個空的 portfolio 結構
-        if (transactions.length === 0) {
-            const emptyPortfolio = {
-                summary: {},
-                holdings: [],
-                history: [{ date: new Date().toISOString().slice(0, 10), totalValue: 0 }],
-                performance: {},
-                realizedFIFO: [],
-                twr: [],
-                metadata: { calculationDate: new Date().toISOString() },
-            };
-            return res.status(200).json(emptyPortfolio);
-        }
-
-        // 從群組交易中提取所有唯一的股票代碼
-        const symbols = [...new Set(transactions.map((t) => t.symbol))];
-
-        const [dividends, splits] = await Promise.all([
-            db.prepare(`SELECT * FROM dividends WHERE uid = ? AND symbol IN (${symbols.map(() => "?").join(",")})`).bind(uid, ...symbols).all().then((res) => res.results),
-            db.prepare(`SELECT * FROM splits WHERE uid = ? AND symbol IN (${symbols.map(() => "?").join(",")})`).bind(uid, ...symbols).all().then((res) => res.results),
-        ]);
-
-        const portfolio = await runCalculationEngine(uid, transactions, dividends, splits);
-
-        // 更新快取並將 is_dirty 設為 false
-        const resultJson = JSON.stringify(portfolio);
-        await db
-            .prepare("INSERT OR REPLACE INTO group_cache (group_id, result, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)")
-            .bind(groupId, resultJson)
-            .run();
-        await db.prepare("UPDATE groups SET is_dirty = 0 WHERE id = ?").bind(groupId).run();
-
-        res.status(200).json(portfolio);
-    } catch (error) {
-        console.error(`Error calculating group ${groupId} on demand:`, error);
-        res.status(500).json({ message: "計算群組數據失敗", error: error.message });
+    if (groupIds && groupIds.length > 0) {
+        groupIds.forEach(groupId => {
+            updateOps.push({
+                sql: 'INSERT INTO group_transaction_inclusions (uid, group_id, transaction_id) VALUES (?, ?, ?)',
+                params: [uid, groupId, transactionId]
+            });
+        });
     }
-};
 
-/**
- * [新增] 獲取用於成員管理的交易列表（群組內 vs 群組外）
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
- */
-exports.getGroupMembersForEditing = async (req, res) => {
-    const { uid } = req.user;
-    const { groupId } = z.object({ groupId: z.number().int() }).parse(req.body);
+    await d1Client.batch(updateOps);
 
-    try {
-        const db = getDb();
-        // 1. 獲取該使用者所有的交易
-        const allTransactions = await db.prepare("SELECT id, date, symbol, action, quantity, price FROM transactions WHERE uid = ? ORDER BY date DESC").bind(uid).all().then((r) => r.results);
-
-        // 2. 獲取當前群組的所有成員交易ID
-        const memberTransactionIds = await db
-            .prepare("SELECT transaction_id FROM transaction_group_memberships WHERE group_id = ?")
-            .bind(groupId)
-            .all()
-            .then((r) => new Set(r.results.map((row) => row.transaction_id)));
-
-        // 3. 將所有交易分為兩組
-        const members = [];
-        const nonMembers = [];
-        for (const tx of allTransactions) {
-            if (memberTransactionIds.has(tx.id)) {
-                members.push(tx);
-            } else {
-                nonMembers.push(tx);
-            }
-        }
-
-        res.status(200).json({ members, nonMembers });
-    } catch (error) {
-        console.error(`Error fetching group members for editing for group ${groupId}:`, error);
-        res.status(500).json({ message: "獲取群組成員失敗", error: error.message });
+    if (groupIds && groupIds.length > 0) {
+        const placeholders = groupIds.map(() => '?').join(',');
+        await d1Client.query(
+            `UPDATE groups SET is_dirty = 1 WHERE uid = ? AND id IN (${placeholders})`,
+            [uid, ...groupIds]
+        );
     }
-};
 
-/**
- * [新增] 更新群組的成員列表
- * @param {object} req - Express請求物件
- * @param {object} res - Express回應物件
- */
-exports.updateGroupMembers = async (req, res) => {
-    const { uid } = req.user;
-    const { groupId, additions, removals } = updateGroupMembersSchema.parse(req.body);
 
-    try {
-        const db = getDb();
-
-        // 驗證群組是否屬於該使用者
-        const group = await db.prepare("SELECT id FROM groups WHERE id = ? AND uid = ?").bind(groupId, uid).first();
-        if (!group) {
-            return res.status(403).json({ message: "權限不足或群組不存在" });
-        }
-
-        // 使用批次操作確保原子性
-        const statements = [];
-
-        // 1. 建立刪除成員的 statements
-        if (removals && removals.length > 0) {
-            const deleteStmt = db.prepare(`DELETE FROM transaction_group_memberships WHERE group_id = ? AND transaction_id IN (${removals.map(() => "?").join(",")})`);
-            statements.push(deleteStmt.bind(groupId, ...removals));
-        }
-
-        // 2. 建立新增成員的 statements
-        if (additions && additions.length > 0) {
-            const insertStmt = db.prepare(`INSERT OR IGNORE INTO transaction_group_memberships (group_id, transaction_id) VALUES ${additions.map(() => "(?, ?)").join(",")}`);
-            const bindings = additions.flatMap((txId) => [groupId, txId]);
-            statements.push(insertStmt.bind(...bindings));
-        }
-
-        // 3. 將群組標記為 dirty
-        statements.push(db.prepare("UPDATE groups SET is_dirty = 1 WHERE id = ?").bind(groupId));
-
-        // 執行所有資料庫操作
-        if (statements.length > 0) {
-            await db.batch(statements);
-        }
-
-        res.status(200).json({ message: "群組成員已成功更新" });
-    } catch (error) {
-        console.error(`Error updating group members for group ${groupId}:`, error);
-        res.status(500).json({ message: "更新群組成員失敗", error: error.message });
-    }
+    return res.status(200).send({ success: true, message: '交易的群組歸屬已更新。' });
 };
