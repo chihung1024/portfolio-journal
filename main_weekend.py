@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.5 - Robust Data Validation)
+# == Python 週末完整校驗腳本 (v3.5 - Individual Price Fetch)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -9,11 +9,13 @@ from datetime import datetime, timedelta
 import time
 import pandas as pd
 
+
 # --- 從環境變數讀取設定 ---
 D1_WORKER_URL = os.environ.get("D1_WORKER_URL")
 D1_API_KEY = os.environ.get("D1_API_KEY")
 GCP_API_URL = os.environ.get("GCP_API_URL")
 GCP_API_KEY = D1_API_KEY
+
 
 # ========================= 【核心優化 A - 開始】 =========================
 # == 新增：穩健的請求函式，包含錯誤處理與自動重試機制
@@ -39,6 +41,7 @@ def robust_request(func, max_retries=3, delay=5, name="Request"):
             time.sleep(delay)
 # ========================= 【核心優化 A - 結束】 =========================
 
+
 def d1_query(sql, params=None):
     if params is None:
         params = []
@@ -53,6 +56,7 @@ def d1_query(sql, params=None):
     results = robust_request(query_func, name=f"D1 Query ({sql[:20]}...)")
     return results if results is not None else []
 
+
 def d1_batch(statements):
     headers = {'X-API-KEY': D1_API_KEY, 'Content-Type': 'application/json'}
     
@@ -62,8 +66,11 @@ def d1_batch(statements):
         response.raise_for_status()
         return True
 
+
     success = robust_request(batch_func, name=f"D1 Batch ({len(statements)} statements)")
     return success if success is not None else False
+
+
 
 
 def get_full_refresh_targets():
@@ -74,11 +81,13 @@ def get_full_refresh_targets():
     benchmark_symbols = set()
     currency_to_fx = {"USD": "TWD=X", "HKD": "HKDTWD=X", "JPY": "JPYTWD=X"}
 
+
     transactions_sql = "SELECT DISTINCT symbol FROM transactions"
     tx_symbols_results = d1_query(transactions_sql)
     if tx_symbols_results:
         for row in tx_symbols_results:
             all_symbols.add(row['symbol'])
+
 
     currencies_sql = "SELECT DISTINCT currency FROM transactions"
     currencies_results = d1_query(currencies_sql)
@@ -87,6 +96,7 @@ def get_full_refresh_targets():
             currency = row.get('currency')
             if currency and currency in currency_to_fx:
                 all_symbols.add(currency_to_fx[currency])
+
 
     benchmark_sql = "SELECT DISTINCT value AS symbol FROM controls WHERE key = 'benchmarkSymbol'"
     benchmark_results = d1_query(benchmark_sql)
@@ -97,11 +107,13 @@ def get_full_refresh_targets():
                 all_symbols.add(symbol)
                 benchmark_symbols.add(symbol)
 
+
     targets = list(filter(None, all_symbols))
     
     uid_sql = "SELECT DISTINCT uid FROM transactions"
     uid_results = d1_query(uid_sql)
     uids = [row['uid'] for row in uid_results if row.get('uid')] if uid_results else []
+
 
     date_range_result = d1_query("SELECT MIN(date) as earliest_date FROM transactions")
     global_earliest_tx_date = None
@@ -111,19 +123,23 @@ def get_full_refresh_targets():
     else:
         print("警告: 找不到任何交易紀錄。")
 
+
     print(f"找到 {len(targets)} 個需全面刷新的標的: {targets}")
     print(f"找到 {len(uids)} 位活躍使用者: {uids}")
     
     return targets, benchmark_symbols, uids, global_earliest_tx_date
 
 
+
+
 # ========================= 【核心優化 B - 開始】 =========================
-# == 修改：採用「原子性替換」策略，確保數據庫更新的穩定性
+# == 修改：採用「個別抓取」策略取代批次抓取，並保持原子性替換
 # =========================================================================================
 def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date):
     if not targets:
         print("沒有需要刷新的標的。")
-        return False # 【修正】回傳狀態
+        return False
+
 
     print("步驟 1/5: 正在一次性查詢所有股票的交易狀態...")
     all_symbols_info_sql = """
@@ -137,6 +153,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     """
     all_symbols_info = {row['symbol']: row for row in d1_query(all_symbols_info_sql)}
     print("查詢完成。")
+
 
     print("\n步驟 2/5: 正在初始化臨時數據表...")
     # Cloudflare D1 不支援 `CREATE TABLE LIKE`，所以我們手動定義結構
@@ -154,19 +171,19 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     ]
     if not d1_batch(init_statements):
         print("FATAL: 初始化臨時數據表失敗，腳本終止。")
-        return False # 【修正】回傳狀態
+        return False
     print("臨時表初始化成功。")
 
 
-    print("\n步驟 3/5: 開始逐一獨立抓取 **價格** 數據並寫入臨時表...")
+    print("\n步驟 3/5: 開始個別抓取 **價格** 數據並寫入臨時表...")
     today_str = datetime.now().strftime('%Y-%m-%d')
-
+    
     all_symbols_successfully_processed = []
+    # 建立一個字典來儲存每個 symbol 的交易期間，供後續的股利過濾使用
     symbol_date_ranges = {}
-    all_price_db_ops = [] 
 
     for i, symbol in enumerate(targets):
-        print(f"\n--- ({i+1}/{len(targets)}) 正在處理價格刷新: [{symbol}] ---")
+        print(f"\n--- ({i+1}/{len(targets)}) 正在個別處理價格刷新: [{symbol}] ---")
         
         is_fx = "=" in symbol
         is_benchmark = symbol in benchmark_symbols
@@ -181,87 +198,83 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 net_quantity = info.get('net_quantity')
                 if net_quantity is not None and net_quantity <= 1e-9:
                     end_date = info['last_tx_date'].split('T')[0]
-                    print(f"  -> [資訊] {symbol} 已完全出清，數據迄日設為 {end_date}")
+                    print(f"  -> 資訊: {symbol} 已完全出清，數據迄日設為 {end_date}")
         
         if not start_date:
-            print(f"  -> [警告] 找不到 {symbol} 的有效起始日期。跳過此標的。")
+            print(f"  -> 警告: 找不到 {symbol} 的有效起始日期。跳過此標的。")
             continue
-            
+        
+        # 儲存日期範圍
         symbol_date_ranges[symbol] = {'start': start_date, 'end': end_date}
         
-        end_date_for_fetch = (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
-
-        print(f"  -> 準備從 yfinance 抓取數據 (期間: {start_date} to {end_date})...")
-
-        def yf_individual_historical_func():
-            return yf.download(
-                tickers=symbol,
+        print(f"  -> 準備從 yfinance 抓取 {symbol} 數據 ({start_date} to {end_date})...")
+        
+        def yf_individual_price_func():
+            ticker = yf.Ticker(symbol)
+            # 計算結束日期 +1 天，因為 yfinance 的 end 參數是不包含的
+            end_date_for_fetch = (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+            
+            hist_data = ticker.history(
                 start=start_date,
                 end=end_date_for_fetch,
                 interval="1d",
                 auto_adjust=False,
-                back_adjust=False,
-                progress=False
+                back_adjust=False
             )
+            return hist_data
         
-        data = robust_request(yf_individual_historical_func, name=f"YFinance Download for {symbol}")
+        data = robust_request(yf_individual_price_func, name=f"YFinance Individual Price for {symbol}")
         
         if data is None or data.empty:
-            print(f"  -> [警告] yfinance 沒有為 {symbol} 回傳任何數據。")
+            print(f"  -> 警告: yfinance 沒有為 {symbol} 回傳任何數據。跳過此標的。")
             continue
 
-        # ========================= 【錯誤修復 - 開始】 =========================
-        # == 修改：將單一的 if 判斷式改為多步、穩健的數據有效性檢查
-        # =====================================================================
-        # 步驟 1: 檢查 'Close' 欄位是否存在
-        if 'Close' not in data.columns:
-            print(f"  -> [警告] {symbol} 在 yfinance 的回傳數據中缺少 'Close' 欄位。")
+        if 'Close' not in data.columns or data['Close'].isnull().all():
+            print(f"  -> 警告: {symbol} 的收盤價數據無效或全為 NaN。跳過此標的。")
             continue
-
-        # 步驟 2: 檢查 'Close' 是否因欄位重複而成了一個 DataFrame，這是 yfinance 在某些情況下可能發生的異常
-        if isinstance(data['Close'], pd.DataFrame):
-            print(f"  -> [警告] {symbol} 的回傳數據包含重複的 'Close' 欄位，視為無效數據。")
-            continue
-
-        # 步驟 3: 現在可以安全地假設 data['Close'] 是一個 Series，檢查其是否全部為 NaN
-        if data['Close'].isnull().all():
-            print(f"  -> [警告] {symbol} 的 'Close' 欄位數據全部為 NaN。")
-            continue
-        # ========================= 【錯誤修復 - 結束】 =========================
-
-        print(f"  -> 成功抓取到 {len(data)} 筆時間紀錄。正在整理...")
         
-        symbol_data = data.dropna(subset=['Close'])
-        symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(start_date)) & (symbol_data.index <= pd.to_datetime(end_date))]
+        # 清理數據
+        data = data.dropna(subset=['Close'])
+        data = data[(data.index >= pd.to_datetime(start_date)) & (data.index <= pd.to_datetime(end_date))]
 
-        if symbol_data.empty:
-            print(f"  -> [警告] {symbol} 在其指定的日期範圍內沒有有效數據。")
+        if data.empty:
+            print(f"  -> 警告: {symbol} 在指定的日期範圍內沒有有效數據。跳過此標的。")
             continue
-            
+        
+        print(f"  -> 成功抓取到 {symbol} 的 {len(data)} 筆價格數據。")
+        
+        # 準備數據庫操作
+        db_ops_to_temp = []
         price_table = "exchange_rates_temp" if is_fx else "price_history_temp"
         
-        price_rows = symbol_data[['Close']].reset_index()
+        price_rows = data[['Close']].reset_index()
         for _, row in price_rows.iterrows():
-            all_price_db_ops.append({ "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
+            db_ops_to_temp.append({ 
+                "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", 
+                "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]
+            })
         
-        all_symbols_successfully_processed.append(symbol)
+        # 寫入臨時表
+        if db_ops_to_temp:
+            print(f"  -> 正在寫入 {len(db_ops_to_temp)} 筆價格數據到臨時表...")
+            if not d1_batch(db_ops_to_temp):
+                print(f"  -> FATAL: 將 {symbol} 數據寫入臨時表失敗！")
+                continue
+            
+            all_symbols_successfully_processed.append(symbol)
+            print(f"  -> {symbol} 價格數據處理完成。")
 
-    if all_price_db_ops:
-        print(f"\n正在準備將總共 {len(all_price_db_ops)} 筆價格數據寫入臨時表...")
-        if not d1_batch(all_price_db_ops):
-            print(f"FATAL: 將價格數據寫入臨時表失敗！腳本終止。")
-            return False
-    else:
-        print("\n未抓取到任何有效的價格數據。")
 
-    # ========================= 【全新整合的獨立、過濾後股利抓取步驟 - 開始】 =========================
+    # ========================= 【股利抓取步驟 - 維持原有邏輯】 =========================
     print("\n步驟 4/5: 開始獨立、逐一抓取並 **過濾** **股利** 數據...")
     dividend_ops_to_temp = []
+    # 過濾掉匯率代碼，只處理股票
     stock_targets = [s for s in targets if "=" not in s]
     
     for i, symbol in enumerate(stock_targets):
         print(f"  -> ({i+1}/{len(stock_targets)}) 正在獨立查詢 [{symbol}] 的完整配息歷史...")
         
+        # 從先前儲存的字典中獲取此 symbol 的交易起訖日
         date_range = symbol_date_ranges.get(symbol)
         if not date_range:
             print(f"  -> [錯誤] 找不到 {symbol} 的日期範圍資訊，跳過股利查詢。")
@@ -271,6 +284,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         end_date = date_range['end']
 
         try:
+            # 1. 使用最可靠的方法：抓取完整的股利歷史
             ticker = yf.Ticker(symbol)
             dividends = ticker.dividends
             
@@ -278,9 +292,12 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 print(f"  -> [資訊] {symbol} 沒有任何歷史配息紀錄。")
                 continue
 
+            # 2. 根據交易週期進行過濾
+            # 將索引轉為 timezone-naive 以便和字串日期比較
             dividends.index = dividends.index.tz_localize(None)
             filtered_dividends = dividends[(dividends.index >= pd.to_datetime(start_date)) & (dividends.index <= pd.to_datetime(end_date))]
             
+            # 3. 處理過濾後的結果
             if not filtered_dividends.empty:
                 dividend_rows = filtered_dividends[filtered_dividends > 0].reset_index()
                 if not dividend_rows.empty:
@@ -288,7 +305,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                     for _, row in dividend_rows.iterrows():
                         dividend_ops_to_temp.append({
                             "sql": "INSERT INTO dividend_history_temp (symbol, date, dividend) VALUES (?, ?, ?)",
-                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row.iloc[1]] 
+                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row.iloc[1]] # 使用 .iloc[1] 來安全地獲取第二欄 (股利值)
                         })
                 else:
                      print(f"  -> [注意] {symbol} 在交易期間內的配息紀錄值均為零或負數。")
@@ -296,6 +313,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                  print(f"  -> [注意] {symbol} 在其交易期間 ({start_date} to {end_date}) 內無配息。")
 
         except Exception as e:
+            # 捕捉任何可能的錯誤，印出訊息後繼續處理下一個
             print(f"  -> [錯誤] 查詢 {symbol} 配息時發生問題: {e}")
 
     if dividend_ops_to_temp:
@@ -305,7 +323,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             return False
     else:
         print("\n未找到任何需要更新的股利數據。")
-    # ========================= 【全新整合的獨立、過濾後股利抓取步驟 - 結束】 =========================
     
     print("\n步驟 5/5: 所有數據已寫入臨時表，準備執行原子性替換...")
     
@@ -321,27 +338,27 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     if d1_batch(swap_statements):
         print("成功！ 正式表數據已原子性更新。")
         
+        # 更新覆蓋範圍元數據
         coverage_updates = []
         unique_processed_symbols = list(set(all_symbols_successfully_processed))
-        if unique_processed_symbols:
-            placeholders = ','.join('?' for _ in unique_processed_symbols)
-            
-            all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders}) GROUP BY symbol"
-            first_tx_dates_results = d1_query(all_first_tx_sql, unique_processed_symbols)
-            first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
+        placeholders = ','.join('?' for _ in unique_processed_symbols)
+        
+        all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders}) GROUP BY symbol"
+        first_tx_dates_results = d1_query(all_first_tx_sql, unique_processed_symbols)
+        first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
 
-            for symbol in unique_processed_symbols:
-                symbol_start_date = first_tx_dates.get(symbol, "2000-01-01")
-                if symbol_start_date:
-                    coverage_updates.append({
-                        "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
-                        "params": [symbol, symbol_start_date, today_str]
-                    })
-            
-            if coverage_updates:
-                print("正在更新 market_data_coverage 狀態...")
-                if not d1_batch(coverage_updates):
-                    print(f"警告: 更新 market_data_coverage 狀態失敗。")
+        for symbol in unique_processed_symbols:
+            symbol_start_date = first_tx_dates.get(symbol, "2000-01-01")
+            if symbol_start_date:
+                coverage_updates.append({
+                    "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
+                    "params": [symbol, symbol_start_date, today_str]
+                })
+        
+        if coverage_updates:
+            print("正在更新 market_data_coverage 狀態...")
+            if not d1_batch(coverage_updates):
+                print(f"警告: 更新 market_data_coverage 狀態失敗。")
         
         print("正在清理舊的數據表...")
         cleanup_statements = [
@@ -350,12 +367,15 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             {"sql": "DROP TABLE IF EXISTS exchange_rates_old;"}
         ]
         d1_batch(cleanup_statements)
-        return True 
+        return True
     else:
         print(f"FATAL: 原子性替換數據失敗！資料庫可能處於不一致狀態，請手動檢查。")
         return False
 
+
 # ========================= 【核心優化 B - 結束】 =========================
+
+
 
 
 def trigger_recalculations(uids):
@@ -388,10 +408,13 @@ def trigger_recalculations(uids):
         print("觸發重算最終失敗。")
 
 
+
+
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.5 - Robust Data Validation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.5 - Individual Price Fetch) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
+        # 檢查數據刷新是否成功
         success = fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
         
         if success:
