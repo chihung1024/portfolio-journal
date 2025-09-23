@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.4 - Ultimate Integrated)
+# == Python 週末完整校驗腳本 (v3.5 - Resilient Integrated)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -38,6 +38,77 @@ def robust_request(func, max_retries=3, delay=5, name="Request"):
             print(f"將在 {delay} 秒後重試...")
             time.sleep(delay)
 # ========================= 【核心優化 A - 結束】 =========================
+
+
+# ========================= 【核心強化 C - 開始】 =========================
+# == 新增：數據驗證與修復模組，確保數據完整性
+# =========================================================================================
+def verify_and_repair_data(symbol: str, data: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    驗證金融數據的連續性，並對缺失的交易日數據進行單點精準修復。
+
+    :param symbol: 金融商品代碼。
+    :param data: 從 yfinance 初步抓取的數據 DataFrame，索引應為日期。
+    :param start_date: 預期的開始日期字串 ('YYYY-MM-DD')。
+    :param end_date: 預期的結束日期字串 ('YYYY-MM-DD')。
+    :return: 經過驗證與修復後的數據 DataFrame。
+    """
+    if data.empty:
+        return data
+
+    # 1. 產生預期的交易日曆 (使用 pandas 的 business day range)
+    try:
+        expected_dates = pd.bdate_range(start=start_date, end=end_date)
+    except Exception as e:
+        print(f"警告: 為 {symbol} 產生預期日期範圍 ({start_date} to {end_date}) 時出錯: {e}。跳過驗證。")
+        return data
+
+    # 2. 找出實際已有的日期，並確保時區資訊一致 (naive)
+    if not isinstance(data.index, pd.DatetimeIndex):
+        data.index = pd.to_datetime(data.index)
+    existing_dates = data.index.tz_localize(None)
+
+    # 3. 透過集合運算，高效計算出缺失的日期
+    missing_dates = expected_dates.difference(existing_dates)
+
+    if not missing_dates.empty:
+        print(f"[{symbol}] 發現 {len(missing_dates)} 個缺失的交易日。準備進行單點修復...")
+        repaired_data_list = []
+        
+        # 4. 迭代所有缺失日期，進行高精準度的單點數據請求
+        for i, missing_date in enumerate(missing_dates):
+            print(f"  -> 正在修復 {missing_date.strftime('%Y-%m-%d')} ({i+1}/{len(missing_dates)})...")
+            try:
+                # yfinance 抓取單一天數據時，end 日期需設為隔天
+                start_of_day = missing_date.strftime('%Y-%m-%d')
+                end_of_day = (missing_date + timedelta(days=1)).strftime('%Y-%m-%d')
+                
+                def repair_func():
+                    return yf.download(symbol, start=start_of_day, end=end_of_day, progress=False, auto_adjust=False, back_adjust=False)
+                
+                # 使用帶有重試機制的請求，但重試次數和延遲可以更保守
+                repair_df = robust_request(repair_func, max_retries=2, delay=3, name=f"Repair {symbol} on {start_of_day}")
+
+                if repair_df is not None and not repair_df.empty:
+                    repaired_data_list.append(repair_df)
+                
+                # 尊重 API，每次修復請求後都進行短暫延遲，避免觸發速率限制
+                time.sleep(0.5)
+
+            except Exception as e:
+                print(f"  -> 修復 {missing_date.strftime('%Y-%m-%d')} 時發生未預期錯誤: {e}")
+        
+        if repaired_data_list:
+            # 5. 合併原始數據與所有成功修復的數據
+            repaired_df_full = pd.concat(repaired_data_list)
+            data = pd.concat([data, repaired_df_full]).sort_index()
+            # 移除可能因合併操作產生的重複索引，保留第一個
+            data = data[~data.index.duplicated(keep='first')]
+            print(f"[{symbol}] 修復完成！新增 {len(repaired_data_list)} 筆數據。")
+
+    return data
+# ========================= 【核心強化 C - 結束】 =========================
+
 
 def d1_query(sql, params=None):
     if params is None:
@@ -118,9 +189,9 @@ def get_full_refresh_targets():
 
 
 # ========================= 【核心優化 B - 開始】 =========================
-# == 修改：採用「原子性替換」策略，確保數據庫更新的穩定性
+# == 修改：採用「原子性替換」策略，並整合「驗證與修復」機制
 # =========================================================================================
-def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date, batch_size=10):
+def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_tx_date, batch_size=5): # 調降批次大小
     if not targets:
         print("沒有需要刷新的標的。")
         return False # 【修正】回傳狀態
@@ -223,7 +294,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print(f"警告: yfinance 沒有為批次 {batch} 回傳任何數據。跳過此批次。")
             continue
 
-        print(f"成功抓取到數據，共 {len(data)} 筆時間紀錄。")
+        print(f"成功抓取到數據，共 {len(data)} 筆時間紀錄。將開始逐一驗證與處理...")
         
         db_ops_to_temp = []
         
@@ -243,25 +314,31 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 print(f"警告: 為 {len(symbols_to_fetch_in_batch)} 個標的請求數據，但 yfinance 返回了無法識別的單一格式。")
                 continue
 
-            if symbol_data.empty or 'Close' not in symbol_data.columns or symbol_data['Close'].isnull().all():
-                print(f"警告: {symbol} 在 yfinance 的回傳數據中無效或全為 NaN。")
+            if symbol_data.empty or 'Close' not in symbol_data.columns:
+                print(f"警告: {symbol} 在 yfinance 的回傳數據中無效或缺乏 'Close' 欄位。")
                 continue
             
             symbol_data = symbol_data.dropna(subset=['Close'])
-            symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(start_dates[symbol])) & (symbol_data.index <= pd.to_datetime(end_dates[symbol]))]
+            symbol_data_filtered = symbol_data[(symbol_data.index >= pd.to_datetime(start_dates[symbol])) & (symbol_data.index <= pd.to_datetime(end_dates[symbol]))]
 
-            if symbol_data.empty:
-                print(f"警告: {symbol} 在其指定的日期範圍內沒有有效數據。")
+            if symbol_data_filtered.empty:
+                print(f"警告: {symbol} 在其指定的日期範圍內沒有有效數據，跳過驗證步驟。")
+                continue
+            
+            # 【整合驗證與修復】
+            print(f"對 [{symbol}] 執行數據完整性驗證 ({start_dates[symbol]} to {end_dates[symbol]})...")
+            symbol_data_verified = verify_and_repair_data(symbol, symbol_data_filtered, start_dates[symbol], end_dates[symbol])
+
+            if symbol_data_verified.empty:
+                print(f"警告: {symbol} 即使經過修復，在其日期範圍內仍無有效數據。")
                 continue
             
             is_fx = "=" in symbol
             price_table = "exchange_rates_temp" if is_fx else "price_history_temp"
             
-            price_rows = symbol_data[['Close']].reset_index()
+            price_rows = symbol_data_verified[['Close']].reset_index()
             for _, row in price_rows.iterrows():
                 db_ops_to_temp.append({ "sql": f"INSERT INTO {price_table} (symbol, date, price) VALUES (?, ?, ?)", "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row['Close']]})
-            
-            # 從這裡移除不可靠的股利處理邏輯
             
             all_symbols_successfully_processed.append(symbol)
 
@@ -270,6 +347,10 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             if not d1_batch(db_ops_to_temp):
                 print(f"FATAL: 將批次 {batch} 數據寫入臨時表失敗！腳本終止。")
                 return False # 【修正】回傳狀態
+        
+        # 批次處理結束後，增加延遲以尊重API
+        print(f"批次 {i+1} 處理完畢，延遲 2 秒...")
+        time.sleep(2)
 
     # ========================= 【全新整合的獨立、過濾後股利抓取步驟 - 開始】 =========================
     print("\n步驟 4/5: 開始獨立、逐一抓取並 **過濾** **股利** 數據...")
@@ -314,9 +395,11 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                             "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row.iloc[1]] # 使用 .iloc[1] 來安全地獲取第二欄 (股利值)
                         })
                 else:
-                     print(f"  -> [注意] {symbol} 在交易期間內的配息紀錄值均為零或負數。")
+                    print(f"  -> [注意] {symbol} 在交易期間內的配息紀錄值均為零或負數。")
             else:
-                 print(f"  -> [注意] {symbol} 在其交易期間 ({start_date} to {end_date}) 內無配息。")
+                print(f"  -> [注意] {symbol} 在其交易期間 ({start_date} to {end_date}) 內無配息。")
+            
+            time.sleep(1) # 股利查詢也加入延遲
 
         except Exception as e:
             # 捕捉任何可能的錯誤，印出訊息後繼續處理下一個
@@ -413,7 +496,7 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.4 - Ultimate Integrated) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.5 - Resilient Integrated) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
         # 【核心修正】檢查數據刷新是否成功
