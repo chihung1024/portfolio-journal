@@ -1,5 +1,5 @@
 # =========================================================================================
-# == Python 週末完整校驗腳本 (v3.4 - Ultimate Integrated)
+# == Python 週末完整校驗腳本 (v3.5 - Robust Data Validation)
 # =========================================================================================
 import os
 import yfinance as yf
@@ -158,16 +158,12 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     print("臨時表初始化成功。")
 
 
-    # ========================= 【邏輯重構 - 開始】 =========================
-    # == 修改：將批次抓取價格改為獨立、逐一抓取，以提高穩健性
-    # =====================================================================
     print("\n步驟 3/5: 開始逐一獨立抓取 **價格** 數據並寫入臨時表...")
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     all_symbols_successfully_processed = []
-    # 【整合關鍵】建立一個字典來儲存每個 symbol 的交易期間，供後續的股利過濾使用
     symbol_date_ranges = {}
-    all_price_db_ops = [] # 建立一個列表來收集所有標的的價格數據庫操作
+    all_price_db_ops = [] 
 
     for i, symbol in enumerate(targets):
         print(f"\n--- ({i+1}/{len(targets)}) 正在處理價格刷新: [{symbol}] ---")
@@ -191,10 +187,8 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print(f"  -> [警告] 找不到 {symbol} 的有效起始日期。跳過此標的。")
             continue
             
-        # 【整合關鍵】儲存日期範圍供後續股利抓取使用
         symbol_date_ranges[symbol] = {'start': start_date, 'end': end_date}
         
-        # yfinance 的結束日期是 exclusive，所以需要加一天
         end_date_for_fetch = (datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
 
         print(f"  -> 準備從 yfinance 抓取數據 (期間: {start_date} to {end_date})...")
@@ -216,14 +210,28 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             print(f"  -> [警告] yfinance 沒有為 {symbol} 回傳任何數據。")
             continue
 
-        if 'Close' not in data.columns or data['Close'].isnull().all():
-            print(f"  -> [警告] {symbol} 在 yfinance 的回傳數據中無效或收盤價全為 NaN。")
+        # ========================= 【錯誤修復 - 開始】 =========================
+        # == 修改：將單一的 if 判斷式改為多步、穩健的數據有效性檢查
+        # =====================================================================
+        # 步驟 1: 檢查 'Close' 欄位是否存在
+        if 'Close' not in data.columns:
+            print(f"  -> [警告] {symbol} 在 yfinance 的回傳數據中缺少 'Close' 欄位。")
             continue
+
+        # 步驟 2: 檢查 'Close' 是否因欄位重複而成了一個 DataFrame，這是 yfinance 在某些情況下可能發生的異常
+        if isinstance(data['Close'], pd.DataFrame):
+            print(f"  -> [警告] {symbol} 的回傳數據包含重複的 'Close' 欄位，視為無效數據。")
+            continue
+
+        # 步驟 3: 現在可以安全地假設 data['Close'] 是一個 Series，檢查其是否全部為 NaN
+        if data['Close'].isnull().all():
+            print(f"  -> [警告] {symbol} 的 'Close' 欄位數據全部為 NaN。")
+            continue
+        # ========================= 【錯誤修復 - 結束】 =========================
 
         print(f"  -> 成功抓取到 {len(data)} 筆時間紀錄。正在整理...")
         
         symbol_data = data.dropna(subset=['Close'])
-        # 再次過濾以確保數據在嚴格的日期範圍內
         symbol_data = symbol_data[(symbol_data.index >= pd.to_datetime(start_date)) & (symbol_data.index <= pd.to_datetime(end_date))]
 
         if symbol_data.empty:
@@ -238,7 +246,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         
         all_symbols_successfully_processed.append(symbol)
 
-    # 在所有標的處理完畢後，一次性批次寫入所有收集到的價格數據
     if all_price_db_ops:
         print(f"\n正在準備將總共 {len(all_price_db_ops)} 筆價格數據寫入臨時表...")
         if not d1_batch(all_price_db_ops):
@@ -247,18 +254,14 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     else:
         print("\n未抓取到任何有效的價格數據。")
 
-    # ========================= 【邏輯重構 - 結束】 =========================
-
     # ========================= 【全新整合的獨立、過濾後股利抓取步驟 - 開始】 =========================
     print("\n步驟 4/5: 開始獨立、逐一抓取並 **過濾** **股利** 數據...")
     dividend_ops_to_temp = []
-    # 過濾掉匯率代碼，只處理股票
     stock_targets = [s for s in targets if "=" not in s]
     
     for i, symbol in enumerate(stock_targets):
         print(f"  -> ({i+1}/{len(stock_targets)}) 正在獨立查詢 [{symbol}] 的完整配息歷史...")
         
-        # 從先前儲存的字典中獲取此 symbol 的交易起訖日
         date_range = symbol_date_ranges.get(symbol)
         if not date_range:
             print(f"  -> [錯誤] 找不到 {symbol} 的日期範圍資訊，跳過股利查詢。")
@@ -268,7 +271,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
         end_date = date_range['end']
 
         try:
-            # 1. 使用最可靠的方法：抓取完整的股利歷史
             ticker = yf.Ticker(symbol)
             dividends = ticker.dividends
             
@@ -276,12 +278,9 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                 print(f"  -> [資訊] {symbol} 沒有任何歷史配息紀錄。")
                 continue
 
-            # 2. 【整合核心】根據交易週期進行過濾
-            # 將索引轉為 timezone-naive 以便和字串日期比較
             dividends.index = dividends.index.tz_localize(None)
             filtered_dividends = dividends[(dividends.index >= pd.to_datetime(start_date)) & (dividends.index <= pd.to_datetime(end_date))]
             
-            # 3. 處理過濾後的結果
             if not filtered_dividends.empty:
                 dividend_rows = filtered_dividends[filtered_dividends > 0].reset_index()
                 if not dividend_rows.empty:
@@ -289,7 +288,7 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                     for _, row in dividend_rows.iterrows():
                         dividend_ops_to_temp.append({
                             "sql": "INSERT INTO dividend_history_temp (symbol, date, dividend) VALUES (?, ?, ?)",
-                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row.iloc[1]] # 使用 .iloc[1] 來安全地獲取第二欄 (股利值)
+                            "params": [symbol, row['Date'].strftime('%Y-%m-%d'), row.iloc[1]] 
                         })
                 else:
                      print(f"  -> [注意] {symbol} 在交易期間內的配息紀錄值均為零或負數。")
@@ -297,7 +296,6 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
                  print(f"  -> [注意] {symbol} 在其交易期間 ({start_date} to {end_date}) 內無配息。")
 
         except Exception as e:
-            # 捕捉任何可能的錯誤，印出訊息後繼續處理下一個
             print(f"  -> [錯誤] 查詢 {symbol} 配息時發生問題: {e}")
 
     if dividend_ops_to_temp:
@@ -323,27 +321,27 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
     if d1_batch(swap_statements):
         print("成功！ 正式表數據已原子性更新。")
         
-        # 更新覆蓋範圍元數據
         coverage_updates = []
         unique_processed_symbols = list(set(all_symbols_successfully_processed))
-        placeholders = ','.join('?' for _ in unique_processed_symbols)
-        
-        all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders}) GROUP BY symbol"
-        first_tx_dates_results = d1_query(all_first_tx_sql, unique_processed_symbols)
-        first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
+        if unique_processed_symbols:
+            placeholders = ','.join('?' for _ in unique_processed_symbols)
+            
+            all_first_tx_sql = f"SELECT symbol, MIN(date) as first_tx_date FROM transactions WHERE symbol IN ({placeholders}) GROUP BY symbol"
+            first_tx_dates_results = d1_query(all_first_tx_sql, unique_processed_symbols)
+            first_tx_dates = {row['symbol']: row['first_tx_date'].split('T')[0] for row in first_tx_dates_results if row.get('first_tx_date')}
 
-        for symbol in unique_processed_symbols:
-            symbol_start_date = first_tx_dates.get(symbol, "2000-01-01")
-            if symbol_start_date:
-                coverage_updates.append({
-                    "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
-                    "params": [symbol, symbol_start_date, today_str]
-                })
-        
-        if coverage_updates:
-            print("正在更新 market_data_coverage 狀態...")
-            if not d1_batch(coverage_updates):
-                print(f"警告: 更新 market_data_coverage 狀態失敗。")
+            for symbol in unique_processed_symbols:
+                symbol_start_date = first_tx_dates.get(symbol, "2000-01-01")
+                if symbol_start_date:
+                    coverage_updates.append({
+                        "sql": "INSERT OR REPLACE INTO market_data_coverage (symbol, earliest_date, last_updated) VALUES (?, ?, ?)",
+                        "params": [symbol, symbol_start_date, today_str]
+                    })
+            
+            if coverage_updates:
+                print("正在更新 market_data_coverage 狀態...")
+                if not d1_batch(coverage_updates):
+                    print(f"警告: 更新 market_data_coverage 狀態失敗。")
         
         print("正在清理舊的數據表...")
         cleanup_statements = [
@@ -352,10 +350,10 @@ def fetch_and_overwrite_market_data(targets, benchmark_symbols, global_earliest_
             {"sql": "DROP TABLE IF EXISTS exchange_rates_old;"}
         ]
         d1_batch(cleanup_statements)
-        return True # 【修正】回傳狀態
+        return True 
     else:
         print(f"FATAL: 原子性替換數據失敗！資料庫可能處於不一致狀態，請手動檢查。")
-        return False # 【修正】回傳狀態
+        return False
 
 # ========================= 【核心優化 B - 結束】 =========================
 
@@ -391,10 +389,9 @@ def trigger_recalculations(uids):
 
 
 if __name__ == "__main__":
-    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.4 - Ultimate Integrated) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"--- 開始執行週末市場數據完整校驗腳本 (v3.5 - Robust Data Validation) --- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     refresh_targets, benchmark_symbols, all_uids, global_start_date = get_full_refresh_targets()
     if refresh_targets:
-        # 【核心修正】檢查數據刷新是否成功
         success = fetch_and_overwrite_market_data(refresh_targets, benchmark_symbols, global_start_date)
         
         if success:
