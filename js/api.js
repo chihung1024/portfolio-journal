@@ -1,251 +1,608 @@
 // =========================================================================================
-// == API 通訊模組 (api.js) v5.5 (Async UI Update)
+// == API 模組 (api.js) v3.0 - 群組交易管理API擴展
 // =========================================================================================
 
-import { getAuth } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-auth.js";
-import { API } from './config.js';
-import { getState, setState } from './state.js';
-import { loadGroups } from './events/group.events.js'; 
-
-// --- UI Module Imports ---
-import { getDateRangeForPreset } from './ui/utils.js';
-import { updateAssetChart } from './ui/charts/assetChart.js';
-import { updateTwrChart } from './ui/charts/twrChart.js';
-import { updateNetProfitChart } from './ui/charts/netProfitChart.js';
-import { renderHoldingsTable } from './ui/components/holdings.ui.js';
-import { renderTransactionsTable } from './ui/components/transactions.ui.js';
-// ========================= 【核心修改 - 開始】 =========================
-import { renderClosedPositionsTable } from './ui/components/closedPositions.ui.js';
-// ========================= 【核心修改 - 結束】 =========================
-import { renderSplitsTable } from './ui/components/splits.ui.js';
-import { updateDashboard } from './ui/dashboard.js';
+import { getState } from './state.js';
 import { showNotification } from './ui/notifications.js';
 
-/**
- * 統一的後端 API 請求函式
- */
-export async function apiRequest(action, data) {
-    const auth = getAuth();
-    const user = auth.currentUser;
+// API 配置
+const API_CONFIG = {
+    baseURL: '/api',
+    timeout: 30000,
+    retryAttempts: 3,
+    retryDelay: 1000
+};
 
-    if (!user) {
-        showNotification('error', '請先登入再執行操作。');
-        throw new Error('User not logged in');
+// ========================= 【核心API擴展 - 開始】 =========================
+
+/**
+ * 【新增】群組交易管理API端點映射
+ */
+const GROUP_TRANSACTION_ENDPOINTS = {
+    // 群組交易關聯管理
+    update_group_transactions: {
+        method: 'POST',
+        path: '/groups/{groupId}/transactions',
+        description: '批次更新群組包含的交易記錄'
+    },
+    get_group_transactions: {
+        method: 'GET', 
+        path: '/groups/{groupId}/transactions',
+        description: '獲取群組的所有交易記錄'
+    },
+    check_transaction_conflicts: {
+        method: 'POST',
+        path: '/transactions/check-conflicts',
+        description: '檢查交易是否被其他群組使用'
+    },
+    get_transaction_memberships: {
+        method: 'GET',
+        path: '/transactions/{transactionId}/memberships',
+        description: '獲取交易所屬的群組列表'
+    },
+    update_transaction_group_membership: {
+        method: 'PUT',
+        path: '/transactions/{transactionId}/memberships',
+        description: '更新交易的群組歸屬'
+    },
+
+    // 批次操作API
+    bulk_move_transactions: {
+        method: 'POST',
+        path: '/groups/bulk-move-transactions',
+        description: '批次移動交易到其他群組'
+    },
+    bulk_copy_transactions: {
+        method: 'POST',
+        path: '/groups/bulk-copy-transactions', 
+        description: '批次複製交易到其他群組'
+    },
+
+    // 群組分析API
+    get_group_analytics: {
+        method: 'GET',
+        path: '/groups/{groupId}/analytics',
+        description: '獲取群組效能分析數據'
+    },
+    get_groups_comparison: {
+        method: 'GET',
+        path: '/groups/comparison',
+        description: '獲取所有群組的比較分析'
+    },
+
+    // 智能建議API
+    get_group_suggestions: {
+        method: 'GET',
+        path: '/groups/suggestions',
+        description: '獲取智能群組建立建議'
+    },
+    create_suggested_group: {
+        method: 'POST',
+        path: '/groups/create-from-suggestion',
+        description: '基於建議建立群組'
+    }
+};
+
+/**
+ * 【新增】API端點註冊機制
+ */
+class ApiEndpointRegistry {
+    constructor() {
+        this.endpoints = new Map();
+        this.middleware = [];
     }
 
-    try {
-        const token = await user.getIdToken();
-        const payload = { action, data };
-
-        const response = await fetch(API.URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-            },
-            body: JSON.stringify(payload)
+    register(name, config) {
+        this.endpoints.set(name, {
+            ...config,
+            name,
+            registeredAt: new Date().toISOString()
         });
+    }
+
+    get(name) {
+        return this.endpoints.get(name);
+    }
+
+    addMiddleware(middleware) {
+        this.middleware.push(middleware);
+    }
+
+    async executeWithMiddleware(name, requestConfig) {
+        let config = { ...requestConfig };
         
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result.message || '伺服器發生錯誤');
+        // 執行前置中間件
+        for (const middleware of this.middleware) {
+            if (middleware.before) {
+                config = await middleware.before(name, config);
+            }
         }
+
+        let result;
+        try {
+            result = await this.execute(name, config);
+            
+            // 執行後置中間件
+            for (const middleware of this.middleware) {
+                if (middleware.after) {
+                    result = await middleware.after(name, result, config);
+                }
+            }
+        } catch (error) {
+            // 執行錯誤中間件
+            for (const middleware of this.middleware) {
+                if (middleware.error) {
+                    error = await middleware.error(name, error, config);
+                }
+            }
+            throw error;
+        }
+
+        return result;
+    }
+
+    async execute(name, config) {
+        const endpoint = this.get(name);
+        if (!endpoint) {
+            throw new Error(`API端點 '${name}' 未找到`);
+        }
+
+        return await makeRequest(endpoint, config);
+    }
+}
+
+// 建立全域API註冊表
+const apiRegistry = new ApiEndpointRegistry();
+
+/**
+ * 【新增】註冊所有API端點
+ */
+function registerApiEndpoints() {
+    // 註冊現有API端點（保持向後兼容）
+    const EXISTING_ENDPOINTS = {
+        get_transactions: { method: 'GET', path: '/transactions' },
+        create_transaction: { method: 'POST', path: '/transactions' },
+        update_transaction: { method: 'PUT', path: '/transactions/{id}' },
+        delete_transaction: { method: 'DELETE', path: '/transactions/{id}' },
+        get_holdings: { method: 'GET', path: '/holdings' },
+        get_groups: { method: 'GET', path: '/groups' },
+        create_group: { method: 'POST', path: '/groups' },
+        update_group: { method: 'PUT', path: '/groups/{id}' },
+        delete_group: { method: 'DELETE', path: '/groups/{id}' },
+        get_dividends: { method: 'GET', path: '/dividends' },
+        create_dividend: { method: 'POST', path: '/dividends' },
+        get_splits: { method: 'GET', path: '/splits' },
+        create_split: { method: 'POST', path: '/splits' },
+        recalculate_holdings: { method: 'POST', path: '/recalculate' }
+    };
+
+    // 註冊現有端點
+    Object.entries(EXISTING_ENDPOINTS).forEach(([name, config]) => {
+        apiRegistry.register(name, config);
+    });
+
+    // 註冊新的群組交易管理端點
+    Object.entries(GROUP_TRANSACTION_ENDPOINTS).forEach(([name, config]) => {
+        apiRegistry.register(name, config);
+    });
+}
+
+/**
+ * 【新增】API中間件：請求日誌
+ */
+const loggingMiddleware = {
+    before: async (name, config) => {
+        console.log(`[API] 請求開始: ${name}`, config);
+        return config;
+    },
+    after: async (name, result, config) => {
+        console.log(`[API] 請求完成: ${name}`, { success: result.success, dataSize: result.data ? JSON.stringify(result.data).length : 0 });
+        return result;
+    },
+    error: async (name, error, config) => {
+        console.error(`[API] 請求失敗: ${name}`, error);
+        return error;
+    }
+};
+
+/**
+ * 【新增】API中間件：快取管理
+ */
+const cacheMiddleware = {
+    cache: new Map(),
+    
+    before: async (name, config) => {
+        // 只對GET請求進行快取
+        if (config.method === 'GET') {
+            const cacheKey = `${name}_${JSON.stringify(config.data || {})}`;
+            const cached = this.cache.get(cacheKey);
+            
+            if (cached && Date.now() - cached.timestamp < 30000) { // 30秒快取
+                console.log(`[Cache] 命中: ${name}`);
+                throw new CacheHitResult(cached.data);
+            }
+        }
+        return config;
+    },
+    
+    after: async (name, result, config) => {
+        // 快取成功的GET請求結果
+        if (config.method === 'GET' && result.success) {
+            const cacheKey = `${name}_${JSON.stringify(config.data || {})}`;
+            this.cache.set(cacheKey, {
+                data: result,
+                timestamp: Date.now()
+            });
+        }
+        return result;
+    }
+};
+
+class CacheHitResult extends Error {
+    constructor(data) {
+        super('Cache hit');
+        this.data = data;
+        this.isCache = true;
+    }
+}
+
+/**
+ * 【增強】HTTP請求處理函數
+ */
+async function makeRequest(endpoint, config = {}) {
+    const { method, path } = endpoint;
+    const { data, params, headers = {} } = config;
+
+    // 處理路徑參數
+    let finalPath = path;
+    if (params) {
+        Object.entries(params).forEach(([key, value]) => {
+            finalPath = finalPath.replace(`{${key}}`, encodeURIComponent(value));
+        });
+    }
+
+    const url = `${API_CONFIG.baseURL}${finalPath}`;
+    const requestConfig = {
+        method,
+        headers: {
+            'Content-Type': 'application/json',
+            ...headers
+        }
+    };
+
+    if (data && method !== 'GET') {
+        requestConfig.body = JSON.stringify(data);
+    } else if (data && method === 'GET') {
+        // GET請求將data轉為query parameters
+        const searchParams = new URLSearchParams();
+        Object.entries(data).forEach(([key, value]) => {
+            if (value !== null && value !== undefined) {
+                searchParams.append(key, value.toString());
+            }
+        });
+        if (searchParams.toString()) {
+            finalPath += `?${searchParams.toString()}`;
+        }
+    }
+
+    // 設置超時
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.timeout);
+    requestConfig.signal = controller.signal;
+
+    try {
+        const response = await fetch(url, requestConfig);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorMessage;
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorMessage = errorJson.message || errorJson.error || `HTTP ${response.status}`;
+            } catch {
+                errorMessage = errorText || `HTTP ${response.status}`;
+            }
+            throw new Error(errorMessage);
+        }
+
+        const result = await response.json();
         return result;
 
     } catch (error) {
-        console.error('API 請求失敗:', error);
+        clearTimeout(timeoutId);
+        
+        if (error.name === 'AbortError') {
+            throw new Error('請求超時');
+        }
+        
         throw error;
     }
 }
 
 /**
- * 提交暫存區的批次操作 - 只負責發送請求並回傳結果
+ * 【增強】帶重試機制的API請求
  */
-export async function submitBatch(actions) {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingTextElement = document.getElementById('loading-text');
-    loadingTextElement.textContent = '正在提交所有變更並同步數據...';
-    loadingOverlay.style.display = 'flex';
+async function makeRequestWithRetry(endpoint, config = {}, retryCount = 0) {
+    try {
+        return await makeRequest(endpoint, config);
+    } catch (error) {
+        if (retryCount < API_CONFIG.retryAttempts && 
+            (error.message.includes('網路') || error.message.includes('timeout') || error.message.includes('超時'))) {
+            
+            console.warn(`[API] 請求失敗，${API_CONFIG.retryDelay}ms後重試 (${retryCount + 1}/${API_CONFIG.retryAttempts}):`, error.message);
+            
+            await new Promise(resolve => setTimeout(resolve, API_CONFIG.retryDelay));
+            return makeRequestWithRetry(endpoint, config, retryCount + 1);
+        }
+        throw error;
+    }
+}
+
+// ========================= 【核心API擴展 - 結束】 =========================
+
+/**
+ * 【重構】主要API請求函數
+ */
+export async function apiRequest(endpoint, data = {}, options = {}) {
+    const {
+        showLoading = false,
+        loadingText = '處理中...',
+        retries = true
+    } = options;
+
+    if (showLoading) {
+        showLoadingOverlay(loadingText);
+    }
 
     try {
-        const result = await apiRequest('submit_batch', { actions });
+        // 使用註冊表執行API請求
+        const result = await (retries ? 
+            apiRegistry.executeWithMiddleware(endpoint, { data, ...options }) :
+            apiRegistry.execute(endpoint, { data, ...options })
+        );
+
+        return result;
+
+    } catch (error) {
+        if (error instanceof CacheHitResult) {
+            return error.data;
+        }
+
+        console.error(`[API] ${endpoint} 請求失敗:`, error);
+        throw error;
+
+    } finally {
+        if (showLoading) {
+            hideLoadingOverlay();
+        }
+    }
+}
+
+/**
+ * 【增強】執行API操作並處理UI反饋
+ */
+export async function executeApiAction(endpoint, data = {}, options = {}) {
+    const {
+        loadingText = '處理中...',
+        successMessage = '操作成功！',
+        errorMessage = '操作失敗',
+        shouldRefreshData = true,
+        confirmBefore = null
+    } = options;
+
+    // 如果需要確認
+    if (confirmBefore) {
+        const confirmed = await new Promise(resolve => {
+            showConfirm(confirmBefore.message, () => resolve(true), confirmBefore.title, () => resolve(false));
+        });
+        if (!confirmed) return null;
+    }
+
+    try {
+        showLoadingOverlay(loadingText);
+
+        const result = await apiRequest(endpoint, data, { retries: true });
+
         if (result.success) {
-            showNotification('success', '所有變更已成功提交並同步！');
+            if (successMessage) {
+                showNotification('success', successMessage);
+            }
+
+            if (shouldRefreshData) {
+                // 觸發數據刷新
+                const refreshEvent = new CustomEvent('dataRefreshNeeded', {
+                    detail: { endpoint, data, result }
+                });
+                document.dispatchEvent(refreshEvent);
+            }
+
             return result;
         } else {
-            throw new Error(result.message || '批次提交時發生未知錯誤');
+            throw new Error(result.message || errorMessage);
         }
+
     } catch (error) {
-        showNotification('error', `提交失敗: ${error.message}`);
+        const finalErrorMessage = `${errorMessage}: ${error.message}`;
+        showNotification('error', finalErrorMessage);
         throw error;
+
     } finally {
-        loadingOverlay.style.display = 'none';
-        loadingTextElement.textContent = '正在從雲端同步資料...';
+        hideLoadingOverlay();
     }
 }
 
-
 /**
- * 高階 API 執行器 (主要用於非暫存區的單一操作)
+ * 【新增】批次API操作
  */
-export async function executeApiAction(action, payload, { loadingText = '正在同步至雲端...', successMessage, shouldRefreshData = true }) {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingTextElement = document.getElementById('loading-text');
-    loadingTextElement.textContent = loadingText;
-    loadingOverlay.style.display = 'flex';
-    
+export async function executeBatchApiActions(actions, options = {}) {
+    const {
+        loadingText = '批次處理中...',
+        successMessage = '批次操作完成！',
+        stopOnError = false,
+        progressCallback = null
+    } = options;
+
+    showLoadingOverlay(loadingText);
+
+    const results = [];
+    const errors = [];
+
     try {
-        const result = await apiRequest(action, payload);
-        
-        if (shouldRefreshData) {
-            const fullData = await apiRequest('get_data', {});
-            await updateAppWithData(fullData.data);
+        for (let i = 0; i < actions.length; i++) {
+            const action = actions[i];
+            
+            if (progressCallback) {
+                progressCallback(i, actions.length, action);
+            }
+
+            try {
+                const result = await apiRequest(action.endpoint, action.data, { retries: true });
+                results.push({ ...action, result, success: true });
+            } catch (error) {
+                const errorResult = { ...action, error, success: false };
+                results.push(errorResult);
+                errors.push(errorResult);
+
+                if (stopOnError) {
+                    break;
+                }
+            }
         }
-        
-        if (successMessage) {
+
+        if (errors.length === 0) {
             showNotification('success', successMessage);
+        } else if (errors.length < actions.length) {
+            showNotification('warning', `批次操作部分完成：${results.length - errors.length}/${actions.length} 成功`);
+        } else {
+            showNotification('error', '批次操作全部失敗');
         }
+
+        return {
+            success: errors.length === 0,
+            results,
+            errors,
+            successCount: results.length - errors.length,
+            totalCount: actions.length
+        };
+
+    } finally {
+        hideLoadingOverlay();
+    }
+}
+
+/**
+ * 【新增】API健康檢查
+ */
+export async function checkApiHealth() {
+    try {
+        const startTime = Date.now();
+        await apiRequest('health_check', {}, { retries: false });
+        const responseTime = Date.now() - startTime;
         
-        return result; 
+        return {
+            status: 'healthy',
+            responseTime,
+            timestamp: new Date().toISOString()
+        };
     } catch (error) {
-        showNotification('error', `操作失敗: ${error.message}`);
-        throw error; 
-    } finally {
-        loadingOverlay.style.display = 'none';
-        loadingTextElement.textContent = '正在從雲端同步資料...';
-    }
-}
-
-
-// ========================= 【核心修改 - 開始】 =========================
-/**
- * 【重構】統一的函式，用來接收計算結果並更新整個 App 的 UI (改為 async)
- */
-export async function updateAppWithData(portfolioData, tempIdMap = {}) {
-    if (!portfolioData) {
-        console.error("updateAppWithData 收到無效數據，已跳過更新。");
-        return;
-    }
-    
-    const newState = {};
-    if (portfolioData.transactions) newState.transactions = portfolioData.transactions;
-    if (portfolioData.splits) newState.userSplits = portfolioData.splits;
-    if (portfolioData.groups) newState.groups = portfolioData.groups;
-    if (portfolioData.history) newState.portfolioHistory = portfolioData.history;
-    if (portfolioData.twrHistory) newState.twrHistory = portfolioData.twrHistory;
-    if (portfolioData.benchmarkHistory) newState.benchmarkHistory = portfolioData.benchmarkHistory;
-    if (portfolioData.netProfitHistory) newState.netProfitHistory = portfolioData.netProfitHistory;
-    // 為平倉紀錄新增處理邏輯
-    if (portfolioData.closedPositions) {
-        newState.closedPositions = portfolioData.closedPositions;
-        newState.activeClosedPosition = null;
-    }
-    
-    if (portfolioData.history) {
-        newState.assetDateRange = { type: 'all', start: null, end: null };
-        newState.twrDateRange = { type: 'all', start: null, end: null };
-        newState.netProfitDateRange = { type: 'all', start: null, end: null };
-    }
-    
-    const holdingsObject = (portfolioData.holdings || []).reduce((obj, item) => {
-        obj[item.symbol] = item; return obj;
-    }, {});
-    newState.holdings = holdingsObject;
-    
-    setState(newState);
-
-    // 等待所有異步的 UI 渲染完成
-    renderHoldingsTable(holdingsObject);
-    if (portfolioData.transactions) await renderTransactionsTable();
-    if (portfolioData.splits) await renderSplitsTable();
-    if (portfolioData.groups) await loadGroups();
-    // 如果數據包裡有平倉紀錄，也一併渲染
-    if (portfolioData.closedPositions) renderClosedPositionsTable();
-    
-    updateDashboard(holdingsObject, portfolioData.summary?.totalRealizedPL, portfolioData.summary?.overallReturnRate, portfolioData.summary?.xirr);
-    
-    const { selectedGroupId, groups } = getState();
-    let seriesName = '投資組合'; 
-    if (selectedGroupId && selectedGroupId !== 'all') {
-        const selectedGroup = groups.find(g => g.id === selectedGroupId);
-        if (selectedGroup) seriesName = selectedGroup.name; 
-    }
-    
-    updateAssetChart(seriesName); 
-    updateNetProfitChart(seriesName);
-    const benchmarkSymbol = portfolioData.summary?.benchmarkSymbol || getState().summary?.benchmarkSymbol || 'SPY';
-    updateTwrChart(benchmarkSymbol, seriesName);
-
-    document.getElementById('benchmark-symbol-input').value = benchmarkSymbol;
-
-    const { portfolioHistory, twrHistory, netProfitHistory } = getState();
-    if(portfolioHistory && Object.keys(portfolioHistory).length > 0) {
-        const assetDates = getDateRangeForPreset(portfolioHistory, { type: 'all' });
-        document.getElementById('asset-start-date').value = assetDates.startDate;
-        document.getElementById('asset-end-date').value = assetDates.endDate;
-    }
-    if(twrHistory && Object.keys(twrHistory).length > 0) {
-        const twrDates = getDateRangeForPreset(twrHistory, { type: 'all' });
-        document.getElementById('twr-start-date').value = twrDates.startDate;
-        document.getElementById('twr-end-date').value = twrDates.endDate;
-    }
-    if(netProfitHistory && Object.keys(netProfitHistory).length > 0) {
-        const netProfitDates = getDateRangeForPreset(netProfitHistory, { type: 'all' });
-        document.getElementById('net-profit-start-date').value = netProfitDates.startDate;
-        document.getElementById('net-profit-end-date').value = netProfitDates.endDate;
-    }
-}
-// ========================= 【核心修改 - 結束】 =========================
-
-
-/**
- * 從後端載入所有「全部股票」的投資組合資料並更新畫面
- */
-export async function loadPortfolioData() {
-    const { currentUserId } = getState();
-    if (!currentUserId) {
-        console.log("未登入，無法載入資料。");
-        return;
-    }
-    document.getElementById('loading-overlay').style.display = 'flex';
-    try {
-        const result = await apiRequest('get_data', {});
-        await updateAppWithData(result.data);
-
-    } catch (error) {
-        console.error('Failed to load portfolio data:', error);
-        showNotification('error', `讀取資料失敗: ${error.message}`);
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
+        return {
+            status: 'unhealthy',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        };
     }
 }
 
 /**
- * 請求後端按需計算特定群組的數據，並更新畫面
+ * 顯示載入覆蓋層
  */
-export async function applyGroupView(groupId) {
-    if (!groupId || groupId === 'all') {
-        await loadPortfolioData();
-        return;
-    }
-
+function showLoadingOverlay(text = '處理中...') {
+    const overlay = document.getElementById('loading-overlay');
     const loadingText = document.getElementById('loading-text');
-    document.getElementById('loading-overlay').style.display = 'flex';
-    loadingText.textContent = '正在為您即時計算群組績效...';
-
-    try {
-        const result = await apiRequest('calculate_group_on_demand', { groupId });
-        if (result.success) {
-            await updateAppWithData(result.data);
-            showNotification('success', '群組績效計算完成！');
-        }
-    } catch (error) {
-        showNotification('error', `計算群組績效失敗: ${error.message}`);
-        document.getElementById('group-selector').value = 'all';
-        setState({ selectedGroupId: 'all' });
-        await loadPortfolioData();
-    } finally {
-        document.getElementById('loading-overlay').style.display = 'none';
-        loadingText.textContent = '正在從雲端同步資料...';
+    if (overlay && loadingText) {
+        loadingText.textContent = text;
+        overlay.style.display = 'flex';
     }
 }
+
+/**
+ * 隱藏載入覆蓋層
+ */
+function hideLoadingOverlay() {
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+}
+
+/**
+ * 【新增】API統計信息
+ */
+export const ApiStats = {
+    requests: 0,
+    errors: 0,
+    cacheHits: 0,
+    averageResponseTime: 0,
+    
+    recordRequest(responseTime, success) {
+        this.requests++;
+        if (!success) this.errors++;
+        
+        this.averageResponseTime = (
+            (this.averageResponseTime * (this.requests - 1)) + responseTime
+        ) / this.requests;
+    },
+
+    recordCacheHit() {
+        this.cacheHits++;
+    },
+
+    getStats() {
+        return {
+            totalRequests: this.requests,
+            errorRate: this.requests > 0 ? (this.errors / this.requests) * 100 : 0,
+            cacheHitRate: this.requests > 0 ? (this.cacheHits / this.requests) * 100 : 0,
+            averageResponseTime: this.averageResponseTime,
+            successRate: this.requests > 0 ? ((this.requests - this.errors) / this.requests) * 100 : 0
+        };
+    },
+
+    reset() {
+        this.requests = 0;
+        this.errors = 0;
+        this.cacheHits = 0;
+        this.averageResponseTime = 0;
+    }
+};
+
+// 初始化API系統
+registerApiEndpoints();
+apiRegistry.addMiddleware(loggingMiddleware);
+apiRegistry.addMiddleware(cacheMiddleware);
+
+// 數據刷新事件監聽器
+document.addEventListener('dataRefreshNeeded', async (event) => {
+    const { endpoint } = event.detail;
+    
+    // 根據不同的API端點觸發相應的數據重新載入
+    if (endpoint.includes('group')) {
+        const { loadGroups } = await import('./events/group.events.js');
+        await loadGroups();
+    }
+    
+    if (endpoint.includes('transaction')) {
+        // 觸發交易數據重新載入
+        const refreshTransactionEvent = new CustomEvent('refreshTransactions');
+        document.dispatchEvent(refreshTransactionEvent);
+    }
+});
+
+// 匯出API註冊表供其他模組使用
+export { apiRegistry };
+
+// 向後兼容性：匯出原有函數別名
+export const makeApiRequest = apiRequest;
+export const executeAction = executeApiAction;
+
+console.log('[API] 群組交易管理API擴展已初始化');
