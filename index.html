@@ -11,6 +11,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
+        /* ========================= 【基礎樣式保持不變】 ========================= */
         body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f0f2f5; }
         .card { background-color: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); }
         .btn { transition: all 0.2s ease-in-out; }
@@ -18,10 +19,643 @@
         .chart-range-btn.active { background-color: #4f46e5; color: white; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        /* 【新增】暫存區狀態顏色 */
-        .bg-staging-create { background-color: #e6fffa; } /* 淺綠 */
-        .bg-staging-update { background-color: #feffeb; } /* 淺黃 */
-        .bg-staging-delete { background-color: #fff5f5; text-decoration: line-through; } /* 淺紅 + 刪除線 */
+        
+        /* 暫存區狀態顏色 */
+        .bg-staging-create { background-color: #e6fffa; }
+        .bg-staging-update { background-color: #feffeb; }
+        .bg-staging-delete { background-color: #fff5f5; text-decoration: line-through; }
+
+        /* ========================= 【交易選擇器樣式增強 - 開始】 ========================= */
+        
+        /* 交易選擇器容器 */
+        .transaction-selector-container {
+            max-height: 32rem; /* 512px */
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background: white;
+        }
+
+        /* 交易選擇器表格樣式 */
+        .transaction-selector-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .transaction-selector-table th {
+            position: sticky;
+            top: 0;
+            background: #f9fafb;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 0.75rem;
+            text-align: left;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+            z-index: 10;
+        }
+
+        .transaction-selector-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 0.875rem;
+            color: #1f2937;
+        }
+
+        /* 交易行懸停效果 */
+        .transaction-row {
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+
+        .transaction-row:hover {
+            background-color: #f9fafb;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        /* 選中狀態樣式 */
+        .transaction-row.selected {
+            background-color: #eef2ff;
+            border-left: 3px solid #4f46e5;
+        }
+
+        .transaction-row.selected:hover {
+            background-color: #e0e7ff;
+        }
+
+        /* 衝突狀態樣式 */
+        .transaction-row.conflict {
+            background-color: #fffbeb;
+            border-left: 3px solid #f59e0b;
+        }
+
+        .transaction-row.conflict:hover {
+            background-color: #fef3c7;
+        }
+
+        /* 複選框樣式增強 */
+        .transaction-checkbox {
+            width: 1rem;
+            height: 1rem;
+            border: 1.5px solid #d1d5db;
+            border-radius: 0.25rem;
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+
+        .transaction-checkbox:checked {
+            background-color: #4f46e5;
+            border-color: #4f46e5;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m13.854 3.646-7.5 7.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6 10.293l7.146-7.147a.5.5 0 0 1 .708.708z'/%3E%3C/svg%3E");
+        }
+
+        .transaction-checkbox:focus {
+            ring: 2px solid #4f46e5;
+            ring-opacity: 0.5;
+            ring-offset: 2px;
+        }
+
+        .transaction-checkbox:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 篩選控制區域樣式 */
+        .filter-controls {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (min-width: 768px) {
+            .filter-controls {
+                grid-template-columns: 2fr 1fr 1fr;
+            }
+        }
+
+        .filter-input {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            background: white;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            ring: 2px solid #4f46e5;
+            ring-opacity: 0.5;
+            border-color: #4f46e5;
+        }
+
+        .filter-input::placeholder {
+            color: #9ca3af;
+        }
+
+        /* 批次操作按鈕樣式 */
+        .batch-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            padding: 0 0.25rem;
+        }
+
+        .batch-action-btn {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #4f46e5;
+            background: none;
+            border: none;
+            cursor: pointer;
+            transition: color 0.15s ease;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+        }
+
+        .batch-action-btn:hover {
+            color: #3730a3;
+            background-color: #eef2ff;
+        }
+
+        .batch-action-btn.secondary {
+            color: #6b7280;
+        }
+
+        .batch-action-btn.secondary:hover {
+            color: #374151;
+            background-color: #f3f4f6;
+        }
+
+        /* 選擇統計樣式 */
+        .selection-stats {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #6b7280;
+            transition: color 0.15s ease;
+        }
+
+        .selection-stats.has-selection {
+            color: #4f46e5;
+        }
+
+        /* 交易類型標籤樣式 */
+        .transaction-type-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+
+        .transaction-type-badge.buy {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .transaction-type-badge.sell {
+            background-color: #fee2e2;
+            color: #991b1b;
+        }
+
+        /* 衝突提示標籤 */
+        .conflict-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            background-color: #fef3c7;
+            color: #92400e;
+            border-radius: 9999px;
+            margin-left: 0.5rem;
+        }
+
+        /* 空狀態樣式 */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: #6b7280;
+        }
+
+        .empty-state-icon {
+            width: 3rem;
+            height: 3rem;
+            color: #d1d5db;
+            margin: 0 auto 1rem;
+        }
+
+        .empty-state-text {
+            font-size: 1rem;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 0.5rem;
+        }
+
+        .empty-state-description {
+            font-size: 0.875rem;
+            color: #6b7280;
+        }
+
+        /* 載入狀態樣式 */
+        .loading-state {
+            text-align: center;
+            padding: 2rem 1rem;
+        }
+
+        .loading-spinner {
+            width: 2rem;
+            height: 2rem;
+            border: 2px solid #e5e7eb;
+            border-top: 2px solid #4f46e5;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 群組模態窗增強樣式 */
+        .group-modal-enhanced {
+            max-width: 64rem; /* 1024px */
+            width: 95vw;
+        }
+
+        .group-modal-content {
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        /* 統計信息區域樣式 */
+        .stats-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #e5e7eb;
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        /* 響應式調整 */
+        @media (max-width: 768px) {
+            .transaction-selector-container {
+                max-height: 24rem; /* 384px on mobile */
+            }
+
+            .transaction-selector-table th,
+            .transaction-selector-table td {
+                padding: 0.5rem 0.375rem;
+                font-size: 0.75rem;
+            }
+
+            .batch-controls {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.5rem;
+            }
+
+            .batch-controls > div:first-child {
+                display: flex;
+                justify-content: space-around;
+            }
+
+            .group-modal-enhanced {
+                width: 95vw;
+                margin: 1rem;
+            }
+
+            .stats-section {
+                flex-direction: column;
+                gap: 0.5rem;
+                text-align: center;
+            }
+        }
+
+        /* 高對比模式支援 */
+        @media (prefers-contrast: high) {
+            .transaction-row:hover {
+                background-color: #e5e7eb;
+            }
+
+            .transaction-row.selected {
+                background-color: #dbeafe;
+                border-left-color: #1e40af;
+            }
+
+            .transaction-row.conflict {
+                background-color: #fef3c7;
+                border-left-color: #d97706;
+            }
+        }
+
+        /* 焦點可見性增強 */
+        .filter-input:focus-visible,
+        .batch-action-btn:focus-visible,
+        .transaction-checkbox:focus-visible {
+            outline: 2px solid #4f46e5;
+            outline-offset: 2px;
+        }
+
+        /* 打印樣式 */
+        @media print {
+            .transaction-selector-container,
+            .filter-controls,
+            .batch-controls {
+                display: none !important;
+            }
+        }
+
+        /* 動畫效果 */
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .scale-in {
+            animation: scaleIn 0.2s ease-out;
+        }
+
+        @keyframes scaleIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        /* 滾動條美化 */
+        .transaction-selector-container::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .transaction-selector-container::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+
+        .transaction-selector-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .transaction-selector-container::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        /* ========================= 【交易選擇器樣式增強 - 結束】 ========================= */
+
+        /* ========================= 【群組管理界面優化 - 開始】 ========================= */
+
+        /* 群組卡片樣式增強 */
+        .group-card {
+            background: white;
+            border-radius: 0.75rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+            transition: all 0.2s ease;
+            border: 1px solid #e5e7eb;
+        }
+
+        .group-card:hover {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transform: translateY(-1px);
+        }
+
+        .group-card-header {
+            padding: 1.25rem 1.5rem 1rem;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .group-card-body {
+            padding: 1rem 1.5rem 1.25rem;
+        }
+
+        .group-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+
+        .group-description {
+            font-size: 0.875rem;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+
+        .group-stats {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .group-stat-item {
+            text-align: center;
+        }
+
+        .group-stat-value {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #1f2937;
+            display: block;
+        }
+
+        .group-stat-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .group-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #f3f4f6;
+        }
+
+        /* 群組操作按鈕 */
+        .group-action-btn {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-radius: 0.375rem;
+            transition: all 0.15s ease;
+            border: 1px solid transparent;
+            cursor: pointer;
+        }
+
+        .group-action-btn.primary {
+            background-color: #4f46e5;
+            color: white;
+        }
+
+        .group-action-btn.primary:hover {
+            background-color: #4338ca;
+        }
+
+        .group-action-btn.secondary {
+            background-color: white;
+            color: #6b7280;
+            border-color: #d1d5db;
+        }
+
+        .group-action-btn.secondary:hover {
+            background-color: #f9fafb;
+            color: #374151;
+        }
+
+        .group-action-btn.danger {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .group-action-btn.danger:hover {
+            background-color: #dc2626;
+        }
+
+        /* ========================= 【群組管理界面優化 - 結束】 ========================= */
+
+        /* ========================= 【無障礙支援增強】 ========================= */
+
+        /* 高對比模式 */
+        @media (prefers-contrast: high) {
+            .card {
+                border: 2px solid #000;
+            }
+
+            .btn {
+                border: 2px solid currentColor;
+            }
+
+            .transaction-checkbox {
+                border-width: 2px;
+            }
+        }
+
+        /* 減少動畫偏好 */
+        @media (prefers-reduced-motion: reduce) {
+            .transaction-row,
+            .btn,
+            .filter-input,
+            .transaction-checkbox,
+            .group-card {
+                transition: none;
+            }
+
+            .loading-spinner {
+                animation: none;
+            }
+
+            .fade-in,
+            .scale-in {
+                animation: none;
+            }
+        }
+
+        /* 螢幕閱讀器專用樣式 */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ========================= 【主題切換支援準備】 ========================= */
+
+        :root {
+            --primary-color: #4f46e5;
+            --primary-hover: #4338ca;
+            --background-color: #f0f2f5;
+            --card-background: #ffffff;
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --border-color: #e5e7eb;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+        }
+
+        /* 未來深色主題支援 */
+        [data-theme="dark"] {
+            --background-color: #1f2937;
+            --card-background: #374151;
+            --text-primary: #f9fafb;
+            --text-secondary: #d1d5db;
+            --border-color: #4b5563;
+        }
+        
+        /* ========================= 【效能優化相關樣式】 ========================= */
+
+        /* GPU 加速 */
+        .transaction-row,
+        .group-card {
+            transform: translateZ(0);
+            will-change: transform;
+        }
+
+        /* 防止重排重繪 */
+        .transaction-selector-table {
+            table-layout: fixed;
+        }
+
+        .transaction-selector-table th:first-child,
+        .transaction-selector-table td:first-child {
+            width: 3rem;
+        }
+
+        .transaction-selector-table th:nth-child(2),
+        .transaction-selector-table td:nth-child(2) {
+            width: 7rem;
+        }
+
+        .transaction-selector-table th:nth-child(3),
+        .transaction-selector-table td:nth-child(3) {
+            width: 8rem;
+        }
+
+        .transaction-selector-table th:nth-child(4),
+        .transaction-selector-table td:nth-child(4) {
+            width: 5rem;
+        }
+
+        /* ========================= 【浏览器兼容性修復】 ========================= */
+
+        /* Safari 兼容性 */
+        @supports (-webkit-appearance: none) {
+            .transaction-checkbox {
+                -webkit-appearance: none;
+                appearance: none;
+            }
+        }
+
+        /* Firefox 兼容性 */
+        @-moz-document url-prefix() {
+            .transaction-checkbox {
+                -moz-appearance: none;
+                appearance: none;
+            }
+        }
     </style>
 </head>
 <body class="text-gray-800">
@@ -292,7 +926,46 @@
         
         <div id="dividend-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="dividend-modal-title" class="text-2xl font-bold mb-6">確認配息入帳</h3><form id="dividend-form"><input type="hidden" id="dividend-id"><input type="hidden" id="dividend-symbol"><input type="hidden" id="dividend-ex-date"><input type="hidden" id="dividend-currency"><input type="hidden" id="dividend-quantity"><input type="hidden" id="dividend-original-amount-ps"><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4 p-4 bg-gray-50 rounded-lg"><div><p class="text-sm text-gray-500">股票代碼</p><p id="dividend-info-symbol" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日</p><p id="dividend-info-ex-date" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">除息日持股</p><p id="dividend-info-quantity" class="font-semibold"></p></div><div><p class="text-sm text-gray-500">每股配息(原幣)</p><p id="dividend-info-amount-ps" class="font-semibold"></p></div></div><div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 mb-4"><div><label for="dividend-pay-date" class="block text-sm font-medium mb-1">實際發放日</label><input type="date" id="dividend-pay-date" class="w-full px-3 py-2 border rounded-md" required></div><div><label for="dividend-tax-rate" class="block text-sm font-medium mb-1">稅率 (%)</label><input type="number" step="any" id="dividend-tax-rate" placeholder="例如: 30" class="w-full px-3 py-2 border rounded-md"></div></div><div class="mb-4"><label for="dividend-total-amount" class="block text-sm font-medium mb-1">稅後實收總額 (原幣)</label><input type="number" step="any" id="dividend-total-amount" class="w-full px-3 py-2 border rounded-md" required><p class="text-xs text-gray-500 mt-1">此為計算已實現損益的最終依據。</p></div><div class="mb-4"><label for="dividend-notes" class="block text-sm font-medium mb-1">備註 (選填)</label><textarea id="dividend-notes" rows="3" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-dividend-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-dividend-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存紀錄</button></div></form></div></div></div>
         <div id="dividend-history-modal" class="fixed inset-0 z-40 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div id="dividend-history-content" class="bg-white rounded-lg shadow-xl p-8 z-50 w-full max-w-2xl mx-4"></div></div></div>
-        <div id="group-modal" class="fixed inset-0 z-30 overflow-y-auto hidden"><div class="flex items-center justify-center min-h-screen"><div class="fixed inset-0 modal-backdrop"></div><div class="bg-white rounded-lg shadow-xl p-8 z-40 w-full max-w-lg mx-4"><h3 id="group-modal-title" class="text-2xl font-bold mb-6">新增/編輯群組</h3><form id="group-form"><input type="hidden" id="group-id"><div class="mb-4"><label for="group-name" class="block text-sm font-medium">群組名稱</label><input type="text" id="group-name" class="w-full px-3 py-2 border rounded-md" required></div><div class="mb-4"><label for="group-description" class="block text-sm font-medium">描述 (選填)</label><textarea id="group-description" rows="2" class="w-full px-3 py-2 border rounded-md"></textarea></div><div class="mb-4"><label class="block text-sm font-medium">包含股票與交易紀錄</label><div id="group-symbols-container" class="mt-2 p-2 border rounded-md max-h-60 overflow-y-auto space-y-2"></div></div><div class="flex justify-end space-x-4 mt-6"><button type="button" id="cancel-group-btn" class="btn bg-gray-200 py-2 px-4 rounded-lg">取消</button><button type="submit" id="save-group-btn" class="btn bg-indigo-600 text-white py-2 px-4 rounded-lg">儲存群組</button></div></form></div></div></div>
+
+        <!-- ========================= 【群組模態窗增強版】 ========================= -->
+        <div id="group-modal" class="fixed inset-0 z-30 overflow-y-auto hidden">
+            <div class="flex items-center justify-center min-h-screen p-4">
+                <div class="fixed inset-0 modal-backdrop"></div>
+                <div class="bg-white rounded-lg shadow-xl z-40 group-modal-enhanced">
+                    <div class="group-modal-content p-6">
+                        <h3 class="text-2xl font-bold mb-6 text-gray-800">新增/編輯群組</h3>
+                        <form id="group-form">
+                            <input type="hidden" id="group-id">
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                <!-- 基本資訊區域 -->
+                                <div class="lg:col-span-1 space-y-4">
+                                    <div>
+                                        <label for="group-name" class="block text-sm font-medium text-gray-700 mb-1">群組名稱 *</label>
+                                        <input type="text" id="group-name" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" required>
+                                    </div>
+                                    <div>
+                                        <label for="group-description" class="block text-sm font-medium text-gray-700 mb-1">描述 (選填)</label>
+                                        <textarea id="group-description" rows="4" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="描述此群組的投資策略或用途..."></textarea>
+                                    </div>
+                                </div>
+                                
+                                <!-- 交易選擇區域 -->
+                                <div class="lg:col-span-2">
+                                    <div id="group-symbols-container">
+                                        <!-- 交易選擇器界面將在這裡動態插入 -->
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex justify-end space-x-4 mt-6 pt-4 border-t border-gray-200">
+                                <button type="button" id="cancel-group-btn" class="btn bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-300">取消</button>
+                                <button type="button" id="save-group-btn" class="btn bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-indigo-700">儲存群組</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div id="group-attribution-modal" class="fixed inset-0 z-40 overflow-y-auto hidden">
             <div class="flex items-center justify-center min-h-screen">
