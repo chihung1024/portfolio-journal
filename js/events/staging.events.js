@@ -1,202 +1,343 @@
 // =========================================================================================
-// == 暫存區事件處理模組 (staging.events.js) - v2.4 (Async UI Update Fix)
+// == 暫存區事件處理模組 (staging.events.js) v2.1 - API匯入修復
 // =========================================================================================
 
 import { stagingService } from '../staging.service.js';
-// 【核心修改】引入 submitBatch 和 updateAppWithData
-import { submitBatch, updateAppWithData } from '../api.js';
 import { showNotification } from '../ui/notifications.js';
+import { openModal, closeModal } from '../ui/modals.js';
 import { renderTransactionsTable } from '../ui/components/transactions.ui.js';
-import { renderDividendsManagementTab } from '../ui/components/dividends.ui.js';
+import { renderDividendsTable } from '../ui/components/dividends.ui.js';
 import { renderSplitsTable } from '../ui/components/splits.ui.js';
-import { renderGroupsTab } from '../ui/components/groups.ui.js';
+import { loadGroups } from './group.events.js';
 import { getState } from '../state.js';
 
-/**
- * 輔助函式，用於刷新當前可見的分頁視圖
- */
-async function refreshCurrentView() {
-    const activeTab = document.querySelector('.tab-content:not(.hidden)');
-    if (!activeTab) return;
-
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    switch (activeTab.id) {
-        case 'transactions-tab':
-            await renderTransactionsTable();
-            break;
-        case 'dividends-tab':
-            const { pendingDividends, confirmedDividends } = getState();
-            await renderDividendsManagementTab(pendingDividends, confirmedDividends);
-            break;
-        case 'splits-tab':
-            await renderSplitsTable();
-            break;
-        case 'groups-tab':
-            await renderGroupsTab();
-            break;
-    }
-}
-
+// ========================= 【修復：API匯入】 =========================
+// 修正：使用正確的API函數名稱
+import { executeBatchApiActions, executeApiAction } from '../api.js';
+// ========================= 【修復完成】 =========================
 
 /**
- * 格式化單個暫存操作，以便在 UI 中顯示
+ * 提交所有暫存的操作
  */
-function formatActionForDisplay(action) {
-    const { type, entity, payload } = action;
-    let title = '未知操作';
-    let details = '';
-
-    const typeMap = {
-        'CREATE': { text: '新增', color: 'green', icon: 'plus-circle' },
-        'UPDATE': { text: '更新', color: 'yellow', icon: 'edit-3' },
-        'DELETE': { text: '刪除', color: 'red', icon: 'trash-2' }
-    };
-    const { text, color, icon } = typeMap[type] || { text: '未知', color: 'gray', icon: 'help-circle' };
-
-    switch (entity) {
-        case 'transaction':
-            title = `${text}交易紀錄`;
-            details = `[${payload.symbol}] ${payload.type === 'buy' ? '買入' : '賣出'} ${payload.quantity} 股 @ ${payload.price}`;
-            break;
-        case 'split':
-            title = `${text}拆股事件`;
-            details = `[${payload.symbol}] 比例: 1 變 ${payload.ratio}`;
-            break;
-        case 'dividend':
-            title = `${text}配息紀錄`;
-            details = `[${payload.symbol}] 發放日: ${payload.pay_date}, 實收: ${payload.total_amount}`;
-            break;
-        case 'group':
-            title = `${text}群組`;
-            details = `名稱: ${payload.name}`;
-            break;
-    }
-
-    return `
-        <div class="p-3 rounded-md border border-gray-200 flex items-center justify-between bg-${color}-50">
-            <div class="flex items-center space-x-3">
-                <i data-lucide="${icon}" class="w-5 h-5 text-${color}-600"></i>
-                <div>
-                    <p class="font-semibold text-sm text-gray-800">${title}</p>
-                    <p class="text-xs text-gray-600">${details}</p>
-                </div>
-            </div>
-            <button data-action-id="${action.id}" class="remove-staged-action-btn btn p-2 text-gray-400 hover:text-red-600">
-                <i data-lucide="x-circle" class="w-5 h-5"></i>
-            </button>
-        </div>
-    `;
-}
-
-/**
- * 渲染暫存區彈出視窗的內容
- */
-async function renderStagingModal() {
-    const container = document.getElementById('staging-list-container');
-    const actions = await stagingService.getStagedActions();
-
-    if (actions.length === 0) {
-        container.innerHTML = `<p class="text-center py-10 text-gray-500">暫存區是空的。</p>`;
-    } else {
-        container.innerHTML = actions.map(formatActionForDisplay).join('');
-    }
-    lucide.createIcons();
-}
-
-/**
- * 處理提交所有暫存操作的完整流程
- */
-async function submitAllActions() {
-    const { closeModal } = await import('../ui/modals.js');
-    closeModal('staging-modal');
-
+export async function submitAllStagedActions() {
     try {
-        const netActions = await stagingService.getNetActions();
-        if (netActions.length === 0) {
-            showNotification('info', '沒有需要提交的操作。');
+        const actions = await stagingService.getStagedActions();
+        if (actions.length === 0) {
+            showNotification('info', '沒有待提交的暫存操作');
             return;
         }
-        
-        const result = await submitBatch(netActions);
-        
+
+        showNotification('info', `開始提交 ${actions.length} 筆暫存操作...`);
+
+        // ========================= 【修復：使用正確的批次函數】 =========================
+        // 將暫存操作轉換為API批次操作格式
+        const batchActions = actions.map(action => ({
+            endpoint: getEndpointForAction(action),
+            data: prepareDataForAction(action),
+            actionId: action.id
+        }));
+
+        // 使用正確的批次執行函數
+        const result = await executeBatchApiActions(batchActions, {
+            loadingText: '正在批次提交暫存操作...',
+            successMessage: '所有暫存操作已成功提交！',
+            stopOnError: false,
+            progressCallback: (current, total, action) => {
+                console.log(`提交進度: ${current + 1}/${total} - ${action.endpoint}`);
+            }
+        });
+        // ========================= 【修復完成】 =========================
+
         if (result.success) {
-            await stagingService.clearActions();
+            // 清空暫存區
+            await stagingService.clear();
             
-            // ========================= 【核心修改 - 開始】 =========================
-            // 嚴格等待 UI 更新完成後，才結束整個函式
-            await updateAppWithData(result.data, result.data.tempIdMap);
-            // ========================= 【核心修改 - 結束】 =========================
+            // 刷新相關數據
+            await refreshAllData();
+            
+            showNotification('success', `成功提交 ${result.successCount}/${result.totalCount} 筆操作`);
+        } else {
+            const failedCount = result.errors.length;
+            showNotification('warning', `部分操作失敗：${result.successCount}/${result.totalCount} 成功，${failedCount} 失敗`);
+            
+            // 只保留失敗的操作在暫存區
+            const failedActionIds = result.errors.map(error => error.actionId);
+            await stagingService.removeSuccessfulActions(failedActionIds);
         }
 
     } catch (error) {
-        console.error("提交暫存區時發生最終錯誤:", error);
+        console.error('批次提交失敗:', error);
+        showNotification('error', `批次提交失敗: ${error.message}`);
     }
 }
-
 
 /**
- * 初始化所有與暫存區相關的事件監聽器
+ * 根據暫存操作類型獲取對應的API端點
  */
-export function initializeStagingEventListeners() {
-    const editBtn = document.getElementById('edit-staging-btn');
-    const submitAllBtn = document.getElementById('submit-all-btn');
-    const stagingModal = document.getElementById('staging-modal');
+function getEndpointForAction(action) {
+    const { type, entity } = action;
+    
+    switch (entity) {
+        case 'transaction':
+            if (type === 'CREATE') return 'create_transaction';
+            if (type === 'UPDATE') return 'update_transaction';
+            if (type === 'DELETE') return 'delete_transaction';
+            break;
+            
+        case 'group':
+            if (type === 'CREATE') return 'create_group';
+            if (type === 'UPDATE') return 'update_group';
+            if (type === 'DELETE') return 'delete_group';
+            break;
+            
+        case 'dividend':
+            if (type === 'CREATE') return 'create_dividend';
+            if (type === 'UPDATE') return 'update_dividend';
+            if (type === 'DELETE') return 'delete_dividend';
+            break;
+            
+        case 'split':
+            if (type === 'CREATE') return 'create_split';
+            if (type === 'UPDATE') return 'update_split';
+            if (type === 'DELETE') return 'delete_split';
+            break;
+    }
+    
+    throw new Error(`未知的操作類型: ${entity}.${type}`);
+}
 
-    document.addEventListener('staging-area-updated', (e) => {
-        const count = e.detail.count;
-        const badge = document.getElementById('staging-count-badge');
-        const controls = document.getElementById('staging-controls');
+/**
+ * 為API操作準備數據
+ */
+function prepareDataForAction(action) {
+    const { payload, entity, type } = action;
+    
+    // 處理特殊操作
+    if (payload._special_action === 'CREATE_TX_WITH_ATTRIBUTION') {
+        return {
+            ...payload,
+            // 移除特殊標記
+            _special_action: undefined
+        };
+    }
+    
+    // 為更新和刪除操作添加ID
+    if ((type === 'UPDATE' || type === 'DELETE') && payload.id) {
+        return {
+            ...payload,
+            [`${entity}Id`]: payload.id
+        };
+    }
+    
+    return payload;
+}
+
+/**
+ * 刷新所有相關數據
+ */
+async function refreshAllData() {
+    try {
+        // 觸發數據重新載入事件
+        const refreshEvent = new CustomEvent('refreshAllData');
+        document.dispatchEvent(refreshEvent);
         
-        badge.textContent = count;
-        if (count > 0) {
-            controls.classList.remove('hidden');
-            controls.classList.add('flex');
-        } else {
-            controls.classList.add('hidden');
-            controls.classList.remove('flex');
-        }
-    });
-
-    editBtn.addEventListener('click', async () => {
-        const { openModal } = await import('../ui/modals.js');
-        await renderStagingModal();
-        openModal('staging-modal');
-    });
-
-    submitAllBtn.addEventListener('click', submitAllActions);
-
-    if (stagingModal) {
-        stagingModal.addEventListener('click', async (e) => {
-            const { closeModal, showConfirm } = await import('../ui/modals.js');
-            if (e.target.closest('#close-staging-modal-btn')) {
-                closeModal('staging-modal');
-                return;
-            }
-
-            const removeBtn = e.target.closest('.remove-staged-action-btn');
-            if (removeBtn) {
-                const actionId = parseInt(removeBtn.dataset.actionId, 10);
-                await stagingService.removeAction(actionId);
-                await renderStagingModal();
-                await refreshCurrentView();
-                return;
-            }
-
-            if (e.target.closest('#submit-from-staging-btn')) {
-                submitAllActions();
-                return;
-            }
-
-            if (e.target.closest('#clear-staging-btn')) {
-                showConfirm('您確定要清空所有暫存的操作嗎？此操作無法復原。', async () => {
-                    await stagingService.clearActions();
-                    await renderStagingModal();
-                    await refreshCurrentView(); 
-                    showNotification('info', '暫存區已清空。');
-                });
-                return;
-            }
-        });
+        // 重新載入特定數據
+        await Promise.all([
+            renderTransactionsTable(),
+            renderDividendsTable?.(),
+            renderSplitsTable?.(),
+            loadGroups()
+        ]);
+        
+    } catch (error) {
+        console.warn('刷新數據時發生錯誤:', error);
     }
 }
+
+/**
+ * 清空所有暫存操作
+ */
+export async function clearAllStagedActions() {
+    try {
+        const actions = await stagingService.getStagedActions();
+        if (actions.length === 0) {
+            showNotification('info', '暫存區已經是空的');
+            return;
+        }
+
+        // 顯示確認對話框
+        const confirmed = await new Promise(resolve => {
+            const confirmMessage = `確定要清空所有 ${actions.length} 筆暫存操作嗎？此操作無法復原。`;
+            showConfirm(confirmMessage, () => resolve(true), '確認清空暫存區', () => resolve(false));
+        });
+
+        if (confirmed) {
+            await stagingService.clear();
+            showNotification('success', '已清空所有暫存操作');
+            
+            // 刷新界面
+            await refreshAllData();
+        }
+        
+    } catch (error) {
+        console.error('清空暫存區失敗:', error);
+        showNotification('error', `清空暫存區失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 移除特定的暫存操作
+ */
+export async function removeStagedAction(actionId) {
+    try {
+        await stagingService.removeAction(actionId);
+        showNotification('success', '已移除暫存操作');
+        
+        // 刷新界面
+        await refreshAllData();
+        
+    } catch (error) {
+        console.error('移除暫存操作失敗:', error);
+        showNotification('error', `移除操作失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 編輯暫存操作
+ */
+export async function editStagedAction(actionId) {
+    try {
+        const action = await stagingService.getAction(actionId);
+        if (!action) {
+            showNotification('error', '找不到指定的暫存操作');
+            return;
+        }
+
+        // 根據操作類型開啟對應的編輯界面
+        switch (action.entity) {
+            case 'transaction':
+                openModal('transaction-modal', true, action.payload);
+                break;
+            case 'group':
+                openModal('group-modal', true, action.payload);
+                break;
+            case 'dividend':
+                openModal('dividend-modal', true, action.payload);
+                break;
+            case 'split':
+                openModal('split-modal', true, action.payload);
+                break;
+            default:
+                showNotification('error', '不支援編輯此類型的暫存操作');
+        }
+        
+    } catch (error) {
+        console.error('編輯暫存操作失敗:', error);
+        showNotification('error', `編輯操作失敗: ${error.message}`);
+    }
+}
+
+/**
+ * 獲取暫存操作統計信息
+ */
+export async function getStagingStats() {
+    try {
+        const actions = await stagingService.getStagedActions();
+        
+        const stats = {
+            total: actions.length,
+            byEntity: {},
+            byType: {},
+            oldestTimestamp: null,
+            newestTimestamp: null
+        };
+
+        actions.forEach(action => {
+            // 按實體類型統計
+            stats.byEntity[action.entity] = (stats.byEntity[action.entity] || 0) + 1;
+            
+            // 按操作類型統計
+            stats.byType[action.type] = (stats.byType[action.type] || 0) + 1;
+            
+            // 時間統計
+            const timestamp = new Date(action.timestamp);
+            if (!stats.oldestTimestamp || timestamp < stats.oldestTimestamp) {
+                stats.oldestTimestamp = timestamp;
+            }
+            if (!stats.newestTimestamp || timestamp > stats.newestTimestamp) {
+                stats.newestTimestamp = timestamp;
+            }
+        });
+
+        return stats;
+        
+    } catch (error) {
+        console.error('獲取暫存統計失敗:', error);
+        return null;
+    }
+}
+
+/**
+ * 匯出暫存操作（用於備份或調試）
+ */
+export async function exportStagedActions() {
+    try {
+        const actions = await stagingService.getStagedActions();
+        const exportData = {
+            version: '1.0',
+            exportedAt: new Date().toISOString(),
+            actionsCount: actions.length,
+            actions: actions
+        };
+
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+            type: 'application/json'
+        });
+        
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `staging-backup-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showNotification('success', `已匯出 ${actions.length} 筆暫存操作`);
+        
+    } catch (error) {
+        console.error('匯出暫存操作失敗:', error);
+        showNotification('error', `匯出失敗: ${error.message}`);
+    }
+}
+
+// ========================= 【修復：確認對話框函數】 =========================
+/**
+ * 顯示確認對話框
+ */
+function showConfirm(message, confirmCallback, title = '確認操作', cancelCallback = null) {
+    // 如果沒有全域的 showConfirm 函數，則創建一個簡單的實現
+    if (typeof window.showConfirm === 'function') {
+        window.showConfirm(message, confirmCallback, title, cancelCallback);
+    } else {
+        // 回退到原生確認對話框
+        const confirmed = confirm(`${title}\n\n${message}`);
+        if (confirmed) {
+            confirmCallback();
+        } else if (cancelCallback) {
+            cancelCallback();
+        }
+    }
+}
+// ========================= 【修復完成】 =========================
+
+// 初始化暫存區事件監聽器
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[Staging Events] 暫存區事件處理器已初始化');
+});
+
+// 監聽全域數據刷新事件
+document.addEventListener('refreshAllData', async () => {
+    console.log('[Staging Events] 收到數據刷新事件');
+    await refreshAllData();
+});
