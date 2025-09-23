@@ -1,5 +1,5 @@
 // =========================================================================================
-// == 彈出視窗模組 (modals.js) v5.0 - 群組管理交易選擇器整合
+// == 彈出視窗模組 (modals.js) v4.3 - Staging-Aware Group Selection
 // =========================================================================================
 
 import { getState, setState } from '../state.js';
@@ -10,14 +10,6 @@ import { apiRequest, executeApiAction } from '../api.js';
 import { loadGroups } from '../events/group.events.js';
 import { showNotification } from './notifications.js';
 import { renderTransactionsTable } from './components/transactions.ui.js';
-import { 
-    initializeTransactionSelector, 
-    bindTransactionSelectorEvents, 
-    getSelectedTransactionIds,
-    setSelectedTransactionIds,
-    clearAllSelections,
-    destroyTransactionSelector
-} from './components/transactionSelector.ui.js';
 
 // --- Helper Functions ---
 
@@ -79,154 +71,6 @@ async function renderGroupAttributionContent(includedGroupIds = new Set()) {
         }
     });
 }
-
-/**
- * 【新增】渲染群組模態窗的交易選擇器界面
- */
-function renderGroupTransactionSelector() {
-    return `
-        <div class="mb-6">
-            <div class="flex justify-between items-center mb-3">
-                <h4 class="text-lg font-semibold text-gray-800">交易紀錄管理</h4>
-                <span class="text-sm text-gray-500">選擇此群組包含的交易</span>
-            </div>
-            
-            <!-- 搜尋與篩選區域 -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                <input type="text" id="transaction-search" 
-                       placeholder="搜尋股票代碼、日期..." 
-                       class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-                
-                <select id="symbol-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-                    <option value="">所有股票</option>
-                    <!-- 動態填入股票選項 -->
-                </select>
-                
-                <select id="date-range-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-                    <option value="">所有時間</option>
-                    <option value="1m">近一個月</option>
-                    <option value="3m">近三個月</option>
-                    <option value="6m">近六個月</option>
-                    <option value="1y">近一年</option>
-                </select>
-            </div>
-
-            <!-- 批次操作區域 -->
-            <div class="flex justify-between items-center mb-3 px-1">
-                <div class="flex items-center space-x-4">
-                    <button type="button" id="select-all-visible" 
-                            class="text-sm text-indigo-600 hover:text-indigo-800 font-medium transition-colors">
-                        全選可見
-                    </button>
-                    <button type="button" id="deselect-all-visible" 
-                            class="text-sm text-gray-600 hover:text-gray-800 font-medium transition-colors">
-                        全部取消
-                    </button>
-                </div>
-                <span id="selection-count" class="text-sm text-gray-500 font-medium">
-                    未選擇任何交易
-                </span>
-            </div>
-
-            <!-- 交易紀錄列表 -->
-            <div class="border border-gray-200 rounded-lg overflow-hidden">
-                <div class="max-h-80 overflow-y-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50 sticky top-0 z-10">
-                            <tr>
-                                <th class="w-12 px-3 py-3">
-                                    <input type="checkbox" id="select-all-header" 
-                                           class="h-4 w-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500">
-                                </th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">日期</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">代碼</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">類型</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">數量</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">價格</th>
-                                <th class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">金額</th>
-                            </tr>
-                        </thead>
-                        <tbody id="transaction-selection-list" class="bg-white divide-y divide-gray-200">
-                            <!-- 動態填入交易紀錄 -->
-                            <tr>
-                                <td colspan="7" class="px-3 py-8 text-center text-sm text-gray-500">
-                                    正在載入交易記錄...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- 統計信息 -->
-            <div class="mt-3 flex justify-between text-xs text-gray-500">
-                <span>選中的交易將用於計算此群組的投資績效</span>
-                <span>已在其他群組的交易將標示為黃色</span>
-            </div>
-        </div>
-    `;
-}
-
-/**
- * 【新增】處理群組模態窗的儲存操作
- */
-async function handleGroupSave(isEditing = false) {
-    const groupId = document.getElementById('group-id').value;
-    const groupName = document.getElementById('group-name').value.trim();
-    const description = document.getElementById('group-description').value.trim();
-
-    if (!groupName) {
-        showNotification('error', '請輸入群組名稱');
-        return;
-    }
-
-    // 檢查名稱重複
-    const { groups } = getState();
-    const existingGroup = groups.find(g => g.name === groupName && g.id !== groupId);
-    if (existingGroup) {
-        showNotification('error', '群組名稱已存在');
-        return;
-    }
-
-    // 獲取選中的交易ID
-    const selectedTransactionIds = getSelectedTransactionIds();
-
-    try {
-        const groupData = {
-            name: groupName,
-            description: description || '',
-            transactionIds: selectedTransactionIds
-        };
-
-        let result;
-        if (isEditing) {
-            result = await executeApiAction('update_group', {
-                groupId: groupId,
-                ...groupData
-            }, {
-                loadingText: '正在更新群組...',
-                successMessage: '群組已成功更新！',
-                shouldRefreshData: false
-            });
-        } else {
-            result = await executeApiAction('create_group', groupData, {
-                loadingText: '正在建立群組...',
-                successMessage: '群組已成功建立！',
-                shouldRefreshData: false
-            });
-        }
-
-        if (result) {
-            closeModal('group-modal');
-            destroyTransactionSelector();
-            await loadGroups();
-        }
-
-    } catch (error) {
-        console.error('儲存群組失敗:', error);
-        showNotification('error', `${isEditing ? '更新' : '建立'}群組失敗: ${error.message}`);
-    }
-}
 // ========================= 【核心修改 - 結束】 =========================
 
 /**
@@ -266,6 +110,7 @@ async function submitAttributionAndSaveTransaction() {
         setState({ tempTransactionData: null });
     }
 }
+
 
 async function handleMembershipSave() {
     const { tempMembershipEdit } = getState();
@@ -318,63 +163,10 @@ export async function openModal(modalId, isEdit = false, data = null) {
             document.getElementById('transaction-date').value = new Date().toISOString().split('T')[0];
         }
         toggleOptionalFields();
-
     } else if (modalId === 'split-modal') {
         document.getElementById('split-date').value = new Date().toISOString().split('T')[0];
-
-    } else if (modalId === 'group-modal') {
-        // ========================= 【核心修改 - 群組模態窗增強】 =========================
-        
-        // 設置模態窗標題和按鈕文字
-        const modalTitle = document.querySelector('#group-modal h3');
-        const saveBtn = document.getElementById('save-group-btn');
-        
-        if (isEdit && data) {
-            modalTitle.textContent = '編輯群組';
-            saveBtn.textContent = '儲存變更';
-            
-            // 填入現有群組資料
-            document.getElementById('group-id').value = data.id;
-            document.getElementById('group-name').value = data.name;
-            document.getElementById('group-description').value = data.description || '';
-        } else {
-            modalTitle.textContent = '新增群組';
-            saveBtn.textContent = '建立群組';
-            document.getElementById('group-id').value = '';
-        }
-
-        // 動態插入交易選擇器界面到群組符號容器
-        const symbolsContainer = document.getElementById('group-symbols-container');
-        symbolsContainer.innerHTML = renderGroupTransactionSelector();
-
-        // 初始化交易選擇器
-        let preSelectedIds = new Set();
-        if (isEdit && data) {
-            try {
-                // 載入現有群組的交易
-                const result = await apiRequest('get_group_transactions', { groupId: data.id });
-                if (result.success) {
-                    preSelectedIds = new Set(result.data.transactionIds);
-                }
-            } catch (error) {
-                console.warn('載入群組交易失敗:', error);
-                showNotification('warning', '載入現有交易記錄失敗，請手動選擇');
-            }
-        }
-
-        await initializeTransactionSelector(data?.id, preSelectedIds);
-        bindTransactionSelectorEvents();
-
-        // 綁定儲存按鈕事件
-        saveBtn.onclick = () => handleGroupSave(isEdit);
-        document.getElementById('cancel-group-btn').onclick = () => {
-            closeModal('group-modal');
-            destroyTransactionSelector();
-        };
-
-        // ========================= 【群組模態窗增強結束】 =========================
-
-    } else if (modalId === 'dividend-modal') {
+    } 
+    else if (modalId === 'dividend-modal') {
         const record = isEdit
             ? confirmedDividends.find(d => d.id === data.id)
             : pendingDividends[data.index];
@@ -457,13 +249,13 @@ export async function openModal(modalId, isEdit = false, data = null) {
     }
 
     document.getElementById(modalId).classList.remove('hidden');
-    
     if (modalId === 'membership-editor-modal') {
         document.getElementById('save-membership-btn').onclick = handleMembershipSave;
         document.getElementById('cancel-membership-btn').onclick = () => closeModal('membership-editor-modal');
     }
 }
 
+// ========================= 【核心修改 - 開始】 =========================
 /**
  * 【重構】開啟群組歸因視窗 (改為 async)
  */
@@ -500,14 +292,11 @@ export async function openGroupAttributionModal() {
     document.getElementById('confirm-attribution-btn').onclick = submitAttributionAndSaveTransaction;
     document.getElementById('cancel-attribution-btn').onclick = () => closeModal('group-attribution-modal');
 }
+// ========================= 【核心修改 - 結束】 =========================
+
 
 export function closeModal(modalId) {
     document.getElementById(modalId).classList.add('hidden');
-    
-    // 如果關閉的是群組模態窗，清理交易選擇器資源
-    if (modalId === 'group-modal') {
-        destroyTransactionSelector();
-    }
 }
 
 export function showConfirm(message, callback, title = '確認操作', cancelCallback = null) {
@@ -534,20 +323,8 @@ export function toggleOptionalFields() {
     }
 }
 
-// ========================= 【鍵盤事件處理增強】 =========================
 document.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-
-    const groupModal = document.getElementById('group-modal');
-    if (!groupModal.classList.contains('hidden')) {
-        e.preventDefault();
-        // 如果焦點在搜尋框或其他輸入框，不觸發儲存
-        if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
-            return;
-        }
-        document.getElementById('save-group-btn').click();
-        return;
-    }
 
     const attributionModal = document.getElementById('group-attribution-modal');
     if (!attributionModal.classList.contains('hidden')) {
@@ -567,4 +344,3 @@ document.addEventListener('keydown', (e) => {
         return;
     }
 });
-// ========================= 【鍵盤事件處理增強結束】 =========================
